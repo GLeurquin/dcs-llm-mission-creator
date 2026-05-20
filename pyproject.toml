@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dcs-mission-creator"
+version = "0.1.0"
+description = "Create DCS missions with pydcs"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "pydcs @ git+https://github.com/pydcs/dcs.git",
+]
+
+[project.scripts]
+dcs-mission-creator = "dcs_mission_creator.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
