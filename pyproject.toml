@@ -10,13 +10,42 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "pydcs @ git+https://github.com/pydcs/dcs.git",
+  "argcomplete>=3.1",
+  "numpy>=1.26",
+  "scipy>=1.11",
+  "zarr>=3.0",
+  "numcodecs>=0.13",
+  "rasterio>=1.3",
+  "shapely>=2.0",
+  "requests>=2.31",
+  "tenacity>=8.2",
+  "elevation>=1.1",
+  "matplotlib>=3.8",
+  "structlog>=24.1",
+  "piper-tts>=1.4.2",
 ]
 
 [project.scripts]
-dcs-mission-creator = "dcs_mission_creator.cli:main"
+dcs-mission-creator = "dcs_mission_creator.__main__:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.13",
+    "ty>=0.0.38",
+    "pytest>=8.0",
+]
+
+[tool.ruff.lint]
+extend-select = ["I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["dcs_mission_creator"]
+combine-as-imports = true
+split-on-trailing-comma = true
+

@@ -25,10 +25,17 @@ Skip if the user is asking about DCS Lua, the in-game ME, or a non-pydcs tool.
 Confirm the eight scenario knobs. If the user didn't specify, **pick sensible
 defaults and state them in one line** — and ask the user for tweaks if they want:
 
-1. **Theater** — Caucasus, Persian Gulf, Syria, Marianas. Other maps are not available to the players.
-   (method names are lowercase: `m.terrain.caucasus()`, `m.terrain.persiangulf()`, ...) (default: Caucasus).
+1. **Theater** — pass a terrain instance to `Mission(terrain=...)`. Available
+   classes in `dcs.terrain`: `Caucasus`, `PersianGulf`, `Syria`, `Nevada`,
+   `Normandy`, `TheChannel`, `Sinai`, `Falklands`, `MarianaIslands` (note the
+   class is `MarianaIslands`, not `Marianas`). Default: `Caucasus`. See
+   [CLAUDE.md](../../../CLAUDE.md) for the full verified list.
 2. **Mission type** — mix / CAP / strike / SEAD / CAS / anti-ship / escort / training. (default: mix)
-3. **Player coalition** — blue (default) or red.
+3. **Player faction** — name the side by faction (USA, USAF, Russia, Ukraine,
+   Germany, ...), not by `red` / `blue`. Default: USA. Coalition (blue/red)
+   is a pydcs implementation detail: assign each faction's country to a
+   coalition with `airport.set_blue()` / `set_red()`, but never use the
+   words *red* or *blue* in scenario narrative, briefings, or task text.
 4. **Player airframe** — default: `dcs.planes.F_16C_50`. See
    [Player airframe knob](#player-airframe-knob) for the supported map and
    role-compatibility rules.
@@ -43,17 +50,34 @@ defaults and state them in one line** — and ask the user for tweaks if they wa
    (transit + on-station + RTB). See [Mission pacing](#mission-pacing) for how
    this constrains distances, fuel, and threat staging.
 
+## Faction naming (never "red"/"blue" in narrative)
+
+Scenarios must talk about **factions** (USA, USAF, Russia, Russian, Ukraine,
+Ukrainian, Germany, ...), not pydcs coalitions. The split:
+
+| Where                                       | Wording                       |
+|---------------------------------------------|-------------------------------|
+| pydcs API: `set_blue` / `set_red` / `Coalition.Blue` | Keep `blue` / `red`. |
+| Code comments inside `build_miz` helpers    | `blue side` / `red side` OK   |
+| `readme()` markdown briefing                | "Russian convoy", "USAF A-10s"|
+| `_in_game_briefing()` plain text            | "Russian MiG-29S", "USAF AWACS" |
+| `set_description_text` / `*task_text` body  | Faction names only            |
+| Trigger `MessageToAll` / `MessageToCoalition` text | Faction names only      |
+
+In-game text the player reads must not contain the words *red* or *blue*.
+The pydcs method names (`bluetask` / `redtask`) and the underlying coalition
+keys are an implementation detail of the engine.
+
 ## Project conventions
 
-- Mission scripts go in `src/dcs_mission_creator/missions/<scenario_slug>.py`.
-- Each script exposes `def build(output: Path) -> None` that constructs and saves the
-  mission. This keeps scripts importable and testable.
-- Generated `.miz` files land in `out/` at the repo root (gitignored). Never commit
-  `.miz` files.
-- Run with `uv run python -m dcs_mission_creator.missions.<scenario_slug>
-  --output out/<scenario_slug>.miz`.
-- If the `missions` package or `out/` dir doesn't exist yet, create them and add
-  `out/` to [.gitignore](.gitignore).
+Lives in [CLAUDE.md](../../../CLAUDE.md) — see *Package layout*, *Script
+structure: small named functions*, and *Lint and type-check*. That file is
+the source of truth for the `MissionBuilder` contract, `build_miz` /
+`readme()` signatures, argparse `main()` pattern, auto-discovery in
+[__main__.py](../../../src/dcs_mission_creator/__main__.py), output folder defaults,
+and the helper-method orchestration rules. The skill focuses on the
+*design* knobs below; the project conventions live in CLAUDE.md so they
+don't drift between this skill and the codebase.
 
 ## Realism checklist
 
@@ -64,8 +88,10 @@ A "realistic" mission is more than spawning aircraft. Hit these before declaring
 - **Weather is plausible for the theater + season.** Persian Gulf in July: 40°C,
   haze, light NW wind. Caucasus in January: -5°C, low overcast, snow on the deck.
   Set `season_temperature`, cloud base/thickness, and wind at all three altitudes.
-- **Airbases are friendly to the coalition.** Don't spawn blue flights from a
-  red-coalition airfield — call `airport.set_blue()` / `set_red()` explicitly.
+- **Airbases are friendly to the assigned faction.** Don't spawn USA flights
+  from a Russian-coalition airfield — call `airport.set_blue()` /
+  `set_red()` explicitly. (Coalition assignment is the only place `blue` /
+  `red` appears; briefings still name the faction.)
 - **Package composition makes sense.** A strike needs escort + SEAD + tanker +
   AWACS, not a lone F-16 with bombs. Even small missions get an AWACS or GCI.
 - **Loadouts match the task.** Don't send Mavericks against an SA-10 — use HARMs.
@@ -75,12 +101,68 @@ A "realistic" mission is more than spawning aircraft. Hit these before declaring
   reason about the threat picture.
 - **Briefing text exists.** Use `set_description_text`,
   `set_description_bluetask_text`, `set_description_redtask_text`. Include
-  bullseye, AO coordinates, ROE, package callsigns, and bingo fuel.
+  bullseye, AO coordinates, ROE, package callsigns, and bingo fuel. The
+  text inside refers to factions (USA, Russia, Ukraine, ...) — `bluetask` /
+  `redtask` is only the API method name, not how you describe the side
+  to the player.
 - **Frequencies and TACAN.** AWACS and tankers get a frequency + TACAN channel
   in the briefing so the player can actually use them.
 - **AI skill is varied.** Don't set everything to Excellent — mix High / Average
   for ground units, Excellent only for the boss threat.
 - **Create a scenario** Give a mission context, a scenario and a purpose. Use in-game text to set the scene, and react to player actions with text and actions.
+- **Immersive missions** Make the player feel like they're in a real operation, not a training exercise. Use narrative, varied threats, and dynamic events to create tension and engagement. Use the text fields and voice to tell a story, not just list objectives.
+
+## Ground unit formations
+
+`m.vehicle_group(...)` and `m.vehicle_group_platoon(...)` default to
+`formation=VehicleGroup.Formation.Line` — units placed perpendicular to
+`heading` at fixed 20 m spacing. That straight-line look is obvious from the
+air and unrealistic for anything that isn't a column on a road.
+
+`dcs.unitgroup.VehicleGroup.Formation` values (set via the `formation=` kwarg
+on spawn, or by calling `group.formation_<name>(heading, ...)` after):
+
+| Formation   | Layout                                         | Use for                                 |
+|-------------|------------------------------------------------|-----------------------------------------|
+| `Line`      | Row perpendicular to heading, 20 m spacing     | Convoy column on a road (`OnRoad` snaps it once moving) |
+| `Vee`       | V shape around the lead unit                   | Advancing armor, hasty defense          |
+| `Rectangle` | `ceil(sqrt(N))` grid                           | Motor-pool / staging area, parade ground|
+| `Star`      | Clustered blocks of 8 around the centre        | Dense cluster, rare                     |
+| `Scattered` | Random positions within a radius, collision-checked | **Default for static defenses**: SAM sites, AAA on a hilltop, FOB garrisons, dispersed infantry |
+
+Rules:
+
+- **Static ground clusters (SAM sites, AAA, FOB garrisons, dispersed
+  defenders) use `Scattered`.** Line is the giveaway "spawned by a script"
+  look. Scattered with a sensible `max_radius` (40–120 m) reads as a real
+  emplacement.
+- **Convoys on roads keep `Line`** with `move_formation=PointAction.OnRoad`.
+  Once the first `OnRoad` waypoint fires, road-snap controls spacing.
+- **Armor pushes use `Vee` or `Rectangle`** when the platoon is supposed to
+  look like a moving combat formation, not a parked motor pool.
+- **Single-unit groups (`group_size=1`)** — formation kwarg is a no-op; skip
+  it. Spread is achieved by picking different `position` per group, not by
+  formation.
+- For finer control, override after spawn:
+  ```python
+  grp = m.vehicle_group_platoon(...)
+  grp.formation_scattered(heading=180, max_radius=80)   # custom radius
+  grp.formation_vee(heading=90, distance=40)            # wider Vee
+  ```
+  Or post-process individual units (`u.position`, `u.heading`) for
+  hand-tuned placement.
+
+Apply in code:
+
+```python
+from dcs.unitgroup import VehicleGroup
+
+sa6 = m.vehicle_group_platoon(
+    russia, "SAM Kodori-6", sa6_types,
+    position=sa6_pos, heading=180,
+    formation=VehicleGroup.Formation.Scattered,
+)
+```
 
 ## Mission pacing
 
@@ -199,6 +281,93 @@ Let it end naturally — when bandits are killed and the flight is bingo,
    players will RTB. This is what most missions should do.
    It should print a message to let the player know the mission ends (either success or failure depending on objectives)
 
+## Trigger announcements
+
+**Every gameplay-affecting trigger must announce itself to the player —
+with both a text message AND a synthesized voice-over.** If the trigger
+fires silently, the player sees an effect (a new threat appears, a group
+activates, an objective changes) without knowing *why* — it reads as a
+bug or as the mission cheating. Text alone is easy to miss while the
+player is heads-down in the cockpit; the WAV from `VoiceSynth` is what
+actually catches their attention.
+
+Rule: any `TriggerOnce` / `TriggerContinious` whose action changes the world
+(`ActivateGroup`, `AITaskPush`, `AITaskSet`, `Destroy`, `FlagSet` that gates
+other logic, success/failure) must include a `MessageToAll` or
+`MessageToCoalition` action **and** a `VoiceSynth.attach_to_*` call that
+renders the same text to audio and pushes a `SoundTo*` action onto the rule.
+
+### Voice-overs are the default
+
+Every mission builder must instantiate `VoiceSynth` in `__init__` and call
+`self._voice.attach_to_all(m, rule, text)` (or `attach_to_coalition` /
+`attach_to_group`) on **every** gameplay-affecting trigger. This includes:
+
+- Mission start (`TriggerStart`) — AWACS/Magic check-in with the picture.
+- Support package check-ins — tanker on station, TARCAP on station,
+  strike holding for SAM-safe call. Use `TimeAfter` triggers staged
+  across the early sortie.
+- Objective gates — SAM down, depot down, MiGs scrambling, reserve
+  pushing, etc.
+- Success and failure.
+
+The text passed to `attach_to_*` should be **what the player would hear
+on the radio** — short, callsigns up front, no narration prose ("Magic,
+Hawg holding west of AO, ready for SAM safe call." not "The A-10s are
+waiting"). Re-use the exact message string already passed to
+`MessageToAll` / `MessageToCoalition` so the on-screen text and the audio
+match word-for-word.
+
+Patterns:
+
+| Trigger type                  | What the message should say                                |
+|-------------------------------|------------------------------------------------------------|
+| Reinforcement / reserve push  | "Russian armor reserve activated, pushing toward Senaki."  |
+| Bandit late-activation        | "MiG-29S airborne out of Sukhumi-Babushara, bearing 270."  |
+| SAM activation / radar lit    | "SA-6 radar emissions detected south of the AO."           |
+| Friendly support inbound      | "Hawg 1-2 checking in, IP in 8 minutes."                   |
+| Objective change              | "New tasking: convoy reached Senaki — withdraw to Batumi." |
+| Success / failure             | "Strike package destroyed the convoy. RTB Batumi."         |
+
+Apply in code:
+
+```python
+call = "Russian armor reserve activated, pushing south toward Senaki."
+rule = triggers.TriggerOnce(comment="Reserve counterattack")
+rule.add_condition(condition.GroupLifeLess(convoy.id, 50))
+rule.add_action(action.ActivateGroup(reserve.id))
+rule.add_action(action.MessageToAll(m.string(call), seconds=15))
+self._voice.attach_to_all(m, rule, call)        # default: voice + text
+m.triggerrules.triggers.append(rule)
+```
+
+For the mission-start picture call:
+
+```python
+intro = triggers.TriggerStart(comment="Magic check-in")
+call = (
+    "Springfield, Magic on station. Picture: 2 contacts cold east, "
+    "MiG-29S Bassel Al-Assad. Texaco on tap, 270.0, TACAN 10X."
+)
+intro.add_action(action.MessageToCoalition(
+    action.Coalition.Blue, m.string(call), seconds=20,
+))
+self._voice.attach_to_coalition(m, intro, call, coalition="blue")
+m.triggerrules.triggers.append(intro)
+```
+
+Guidelines:
+
+- Wrap text with `m.string("…")` so it lands in the translation table.
+- Use faction names ("Russian", "USAF"), never `red` / `blue`.
+- Keep messages short (one line, ≤ 15 s on screen). Long walls of text the
+  player can't read while flying.
+- Coalition-scoped messages (`MessageToCoalition`) when the info is
+  side-specific (e.g. friendly AWACS calls go to blue only).
+- Silent triggers are fine for **bookkeeping** that the player doesn't need
+  to know about (flag plumbing, internal mission state). The rule is about
+  triggers whose *effect* is visible.
+
 ## Player airframe knob
 
 Default to `dcs.planes.F_16C_50` whenever the user doesn't name an airframe.
@@ -218,9 +387,10 @@ Role-compatibility rules — enforce these before writing the script:
 - If the user asks for **CAS** with an F-15C or Mirage 2000C, swap to F-16C and
   state the swap in one line ("F-15C is air-to-air only; using F-16C for CAS").
 - If the user asks for **CAP** with an A-10C, same — swap to F-16C or F-15C.
-- Coalition must match the airframe's nation: red coalition with F-16C is wrong;
-  use Su-27 / MiG-29S / Su-25T instead. If the user gives an inconsistent pair,
-  state the conflict and follow the *coalition* (it's the louder signal).
+- Faction must match the airframe's nation: a Russian-coalition flight in an
+  F-16C is wrong; use Su-27 / MiG-29S / Su-25T instead. If the user gives an
+  inconsistent pair, state the conflict and follow the *faction* (it's the
+  louder signal).
 - Helicopter airframes use `dcs.helicopters.*`, not `dcs.planes.*`. The
   `flight_group_from_airport` call works the same way; pass it under
   `aircraft_type`.
@@ -250,8 +420,8 @@ Rules:
   the flight up with `flight_group_inflight` instead.
 - One player flight per group. If the user asks for two distinct human flights
   (e.g., two F-16s + two A-10s), build two groups, each with its own clients.
-- Callsign convention: `Dodge` / `Springfield` / `Uzi` for blue, `Boris` /
-  `Ivan` for red. Avoid reusing AI flight callsigns.
+- Callsign convention: `Dodge` / `Springfield` / `Uzi` for USA/NATO faction,
+  `Boris` / `Ivan` for Russian faction. Avoid reusing AI flight callsigns.
 
 ```python
 from dcs.unit import Skill
@@ -287,6 +457,8 @@ count and type, support package, weather, egress complexity.
 Two missions with the same label should be allowed to feel different — one
 heavy on SAMs with clear weather, another light on SAMs with night IMC —
 because varied texture beats a single fingerprint.
+
+Do not place targets inside deep forests.
 
 ### What each label should feel like
 
@@ -360,8 +532,10 @@ flight, AIM-120/R-77 class, AWACS only, broken cloud layer.
 
 ## After generating
 
-1. Run the script (`uv run python -m dcs_mission_creator.missions.<slug>`).
-2. Confirm the `.miz` was written and report its path.
+1. Run the script (`uv run python -m dcs_mission_creator.missions.<slug>` or
+   `uv run dcs-mission-creator generate <slug>`).
+2. Confirm both the `.miz` and `README.md` were written, and report the
+   output folder.
 3. **Do not** try to "validate" by opening the file — there's no DCS install on
    this box. Sanity-check by re-loading with `Mission().load_file(path)` if the
    user wants verification.
@@ -373,7 +547,9 @@ flight, AIM-120/R-77 class, AWACS only, broken cloud layer.
 ## Gotchas
 
 - `cap_flight` does not exist in pydcs. Use `patrol_flight` with `patrol_type`.
-- Terrain methods are **lowercase** (`m.terrain.batumi()`, not `Batumi()`).
+- Airports are **dict-indexed**: `m.terrain.airports["Batumi"]` — there is no
+  `m.terrain.batumi()` method. Names use the display form
+  ("Sukhumi-Babushara", "Senaki-Kolkhi", …).
 - `Point(x, y)` uses DCS world coords (meters), not lat/lon. Anchor on
   `airport.position` and add offsets.
 - `m.country(name)` takes a *string* — pass `countries.USA.name`, not `USA`.
