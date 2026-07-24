@@ -23,3 +23,5 @@ src/dcs_mission_creator/resources/_build_cache/
 # TTS voice render cache (see src/dcs_mission_creator/tts.py)
 cache/
 *.png
+!images/
+!images/*.png

@@ -185,6 +185,14 @@ uv run dcs-mission-creator map-overlay inspect caucasus --out /tmp/caucasus_laye
 
 Emits a 6-panel composite (one panel per zarr layer) downsampled to ~4000 px on the long edge. Use this for sanity-checking new builds and for tuning OSM class filters in `manifest.json`.
 
+**Caucasus:**
+
+![Caucasus overlay layers](images/caucasus_layers.png)
+
+**Syria:**
+
+![Syria overlay layers](images/syria_layers.png)
+
 ## Querying the overlay at runtime
 
 Missions open the overlay once and query it with point or window APIs:
