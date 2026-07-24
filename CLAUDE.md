@@ -121,6 +121,64 @@ triggers, before `_add_briefing`). Spawn helpers that own friendly geometry
 (the ingress corridor, AWACS/tanker/CAP tracks) return their `Point`s so
 `_draw_plan` can annotate them.
 
+## Air-defense builder (project-owned)
+
+[`air_defense`](src/dcs_mission_creator/core/air_defense.py) builds a **whole
+SAM site** — search radar + track/fire-control radar + command post +
+launchers, wired into one `VehicleGroup` — from a single call, so spawn
+helpers stop copy-pasting component type lists and offset math. It fills only
+the sites pydcs's `dcs.templates.VehicleTemplate` lacks; for
+`sa6/sa10/sa11/sa15` + `patriot/hawk` call `VehicleTemplate` directly.
+
+```python
+from dcs_mission_creator.core import air_defense as ad
+
+sa3 = ad.build_sa3_site(m, russia, ridge, heading=270, launchers=4,
+                        skill=Skill.High)
+# rough terrain: pass the overlay + terrain to snap units off canopy/water
+sa5 = ad.build_sa5_site(m, russia, hill, heading=180,
+                        overlay=scene.overlay.overlay, terrain=self._terrain)
+```
+
+Builders: `build_sa2/sa3/sa5/sa8/sa13/sa15/sa19_site`,
+`build_nasams/irist/roland/rapier/hq7_site`
+`(m, country, position, heading, *, launchers=…, prefix="", skill=Skill.Average,
+overlay=None, terrain=None) -> VehicleGroup`. Like the other core helpers:
+absolute world `Point` in, raw pydcs `Country` in (no faction abstraction), a
+built group out. `set_skill(group, skill)` is exported too (replaces the
+per-mission `_set_skill`). Get the `position` from the `core/placement.py`
+helpers (`sam_site_on_ridge`, etc.) as usual. Design rules (what threat where,
+per difficulty) live in the `dcs-mission` skill; unit-type catalog and the
+pydcs `VehicleTemplate` split in PYDCS_REFERENCE.md §5.
+
+## AI-tasking helpers (project-owned)
+
+[`tasking`](src/dcs_mission_creator/core/tasking.py) holds the three AI-verbs
+that carry real project policy — not 1:1 pydcs passthroughs (carrier/nav
+beacons stay raw pydcs; see PYDCS_REFERENCE.md §6.5):
+
+```python
+from dcs_mission_creator.core import tasking
+
+tasking.apply_ai_difficulty(cap, self._difficulty)   # ROE/react/radar/ECM/bingo
+tasking.fac_attack_group(jtac, convoy, frequency=133) # JTAC lases target group
+tasking.scramble_on_trigger(m, reserve,               # cold-ramp alert-5
+                            condition.PartOfCoalitionInZone("blue", zone.id))
+```
+
+- `apply_ai_difficulty(group, difficulty)` — maps the mission's recruit→ace
+  label onto `OptROE`/`OptReactOnThreat`/`OptRadarUsing`/`OptECMUsing`/
+  `OptRTBOnBingoFuel`/`OptRestrictAfterburner`. A behaviour dial distinct from
+  raw `Skill`. Takes `Difficulty` or a str label; reuses the `map_draw.py`
+  enum.
+- `fac_attack_group(fac_group, target_group, *, designation=Laser,
+  frequency=…)` — turns a ground JTAC or airborne FAC(A) into a controller
+  that lases `target_group`; derives both the id **and** name pydcs needs
+  (mismatch = silent no-op).
+- `scramble_on_trigger(m, group, *conditions)` — sets the flight uncontrolled
+  with a queued `StartCommand` and pushes it on the condition(s); generalizes
+  pydcs `FlyingGroup.delay_start` (time-only) to any condition.
+
 ## Script structure: small named functions
 
 `build_miz` is the orchestrator, not the implementation. Each block of the

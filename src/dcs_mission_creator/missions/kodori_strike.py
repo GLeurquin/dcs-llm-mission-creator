@@ -54,6 +54,7 @@ from dcs_mission_creator.core.placement import (
     load_scene,
     snap_units_clear,
 )
+from dcs_mission_creator.core.tasking import apply_ai_difficulty
 from dcs_mission_creator.core.tts import VoiceSynth
 from dcs_mission_creator.map_overlay.placement import Placement
 from dcs_mission_creator.map_overlay.scene import TacticalScene
@@ -93,6 +94,7 @@ class _Scene:
 class KodoriStrike(MissionBuilder):
     name = "kodori_strike"
     title = "Kodori Strike"
+    difficulty = "trained"
 
     def __init__(self, *, players: int = 1) -> None:
         super().__init__(players=players)
@@ -610,6 +612,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             group_size=2,
         )
         _set_skill(boris, Skill.High)
+        apply_ai_difficulty(boris, self.difficulty)
         announce = triggers.TriggerOnce(comment="Su-27 launch announcement")
         announce.add_condition(
             condition.PartOfCoalitionInZone("blue", intrusion_zone.id)
@@ -787,7 +790,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         tanker_track: tuple[Point, Point],
     ) -> None:
         """Paint the plan on the F10 map (trained: coarse, estimated threats)."""
-        plan = PlanOverlay(m, "trained")
+        plan = PlanOverlay(m, self.difficulty)
         plan.objective(scene.ao_center, "AO — FOB Kodori", radius=6_000.0)
         plan.route(corridor, "Dodge ingress")
         plan.orbit(*escort_track, "Eagle CAP")

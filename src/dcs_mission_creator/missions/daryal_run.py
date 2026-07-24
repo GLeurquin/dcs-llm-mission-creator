@@ -37,10 +37,12 @@ from dcs.mission import Mission, StartType
 from dcs.terrain.caucasus.caucasus import Caucasus
 from dcs.terrain.terrain import Airport
 from dcs.unit import Skill
+from dcs.unitgroup import VehicleGroup
 from dcs.unittype import VehicleType
 
 from dcs_mission_creator.core.map_draw import PlanOverlay
 from dcs_mission_creator.core.mission_builder import MissionBuilder
+from dcs_mission_creator.core.tasking import apply_ai_difficulty
 from dcs_mission_creator.core.tts import VoiceSynth
 
 
@@ -71,7 +73,6 @@ class _Scene:
     mozdok: Airport
     beslan: Airport
     sa10_site: Point
-    sa10_launchers: Point
     shorad: Point
     ewr_pos: Point
     valley_entry: Point
@@ -85,6 +86,7 @@ class _Scene:
 class DaryalRun(MissionBuilder):
     name = "daryal_run"
     title = "Daryal Run"
+    difficulty = "ace"
 
     def __init__(self, *, players: int = 1) -> None:
         super().__init__(players=players)
@@ -278,14 +280,12 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self._scene = scene
         usa, russia = m.country("USA"), m.country("Russia")
 
-        sa10_radars, _sa10_launchers, _tor, _shilkas, _ewr = self._spawn_red_ground(
-            m, russia, scene
-        )
+        sa10, _tor, _shilkas, _ewr = self._spawn_red_ground(m, russia, scene)
         self._spawn_awacs(m, usa, scene)
         self._spawn_red_intercept(m, russia, scene)
         player, route = self._spawn_player(m, usa, scene)
 
-        self._add_end_triggers(m, sa10_radars=sa10_radars, player=player)
+        self._add_end_triggers(m, sa10=sa10, player=player)
         self._draw_plan(m, scene, route=route)
         self._add_briefing(m)
 
@@ -328,7 +328,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         # SA-10 cluster sits ~12 km south of Beslan, in the open ground east
         # of Vladikavkaz where the SR has a clear horizon to the south.
         sa10_site = _offset(beslan.position, t, east_m=2_000, north_m=-12_000)
-        sa10_launchers = _offset(sa10_site, t, east_m=1_500, north_m=800)
         shorad = _offset(sa10_site, t, east_m=-1_200, north_m=-600)
         ewr_pos = _offset(mozdok.position, t, east_m=-8_000, north_m=-6_000)
 
@@ -348,7 +347,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             mozdok=mozdok,
             beslan=beslan,
             sa10_site=sa10_site,
-            sa10_launchers=sa10_launchers,
             shorad=shorad,
             ewr_pos=ewr_pos,
             valley_entry=valley_entry,
@@ -363,47 +361,39 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     def _spawn_red_ground(self, m: Mission, russia: Country, scene: _Scene):
         """SA-10 radars + launchers, SA-15 SHORAD, ZSU-23-4 AAA, 1L13 EWR."""
-        sa10_radars = self._spawn_sa10_radars(m, russia, scene.sa10_site)
-        sa10_launchers = self._spawn_sa10_launchers(m, russia, scene.sa10_launchers)
+        sa10 = self._spawn_sa10_site(m, russia, scene.sa10_site)
         tor = self._spawn_shorad(m, russia, scene.shorad)
         shilkas = self._spawn_shilkas(m, russia, scene.sa10_site)
         ewr = self._spawn_ewr(m, russia, scene.ewr_pos)
-        return sa10_radars, sa10_launchers, tor, shilkas, ewr
+        return sa10, tor, shilkas, ewr
 
-    def _spawn_sa10_radars(self, m: Mission, russia: Country, pos: Point):
-        """64H6E (Big Bird) SR + 30H6 Flap Lid TR + 54K6 CP — kill these to win."""
-        radar_types = [
+    def _spawn_sa10_site(self, m: Mission, russia: Country, pos: Point):
+        """Full SA-10 site in one group: 64H6E SR + 30H6 TR + 54K6 CP + 4 LNs.
+
+        Radar and launchers must share the group — an S-300 launcher only
+        engages while its Flap Lid TR is in-group. `units[0]` is the Big Bird
+        SR and `units[1]` the Flap Lid TR; the win condition kills those two
+        (see `_add_end_triggers`), the launchers now actually shoot back.
+        """
+        sa10_types = [
             vehicles.AirDefence.S_300PS_64H6E_sr,
             vehicles.AirDefence.S_300PS_5H63C_30H6_tr,
             vehicles.AirDefence.S_300PS_54K6_cp,
-        ]
-        radars = m.vehicle_group_platoon(
-            russia,
-            "SAM Grumble Radars",
-            cast(list[type[VehicleType]], radar_types),
-            position=pos,
-            heading=180,
-        )
-        _set_skill(radars, Skill.Excellent)
-        return radars
-
-    def _spawn_sa10_launchers(self, m: Mission, russia: Country, pos: Point):
-        """4x 5P85C/D launchers — bonus targets; radars are the kill."""
-        launcher_types = [
             vehicles.AirDefence.S_300PS_5P85C_ln,
             vehicles.AirDefence.S_300PS_5P85C_ln,
             vehicles.AirDefence.S_300PS_5P85D_ln,
             vehicles.AirDefence.S_300PS_5P85D_ln,
         ]
-        launchers = m.vehicle_group_platoon(
+        sa10 = m.vehicle_group_platoon(
             russia,
-            "SAM Grumble Launchers",
-            cast(list[type[VehicleType]], launcher_types),
+            "SAM Grumble",
+            cast(list[type[VehicleType]], sa10_types),
             position=pos,
             heading=180,
+            formation=VehicleGroup.Formation.Scattered,
         )
-        _set_skill(launchers, Skill.Excellent)
-        return launchers
+        _set_skill(sa10, Skill.Excellent)
+        return sa10
 
     def _spawn_shorad(self, m: Mission, russia: Country, pos: Point):
         """SA-15 Tor adjacent to the SAM site — terminal SHORAD vs HARM and bombs."""
@@ -465,6 +455,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             group_size=2,
         )
         _set_skill(boris, Skill.Excellent)
+        apply_ai_difficulty(boris, self.difficulty)
         announce = triggers.TriggerOnce(comment="MiG launch announcement")
         announce.add_condition(
             condition.PartOfCoalitionInZone("blue", intrusion_zone.id)
@@ -561,7 +552,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         point of the plan, so the route is drawn precisely; the SA-10 shows
         only as a vague target area and the MiG CAP as a coarse zone.
         """
-        plan = PlanOverlay(m, "ace")
+        plan = PlanOverlay(m, self.difficulty)
         plan.objective(scene.sa10_site, "TARGET — SA-10", radius=8_000.0)
         plan.route(route, "Dodge ingress (Daryal)")
         plan.waypoint_label(scene.awacs_anchor, "Magic AWACS")
@@ -569,10 +560,18 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     # -- triggers and briefing ----------------------------------------------
 
-    def _add_end_triggers(self, m: Mission, *, sa10_radars, player) -> None:
-        """Success when SA-10 radars dead; failure when Dodge dies first."""
+    def _add_end_triggers(self, m: Mission, *, sa10, player) -> None:
+        """Success when both SA-10 radars dead; failure when Dodge dies first.
+
+        `sa10.units[0]` is the Big Bird SR, `units[1]` the Flap Lid TR — gate
+        on those two units dying so the shot-capable launchers can stay in the
+        same group (an S-300 launcher only fires with its TR in-group).
+        """
+        big_bird = sa10.units[0].id
+        flap_lid = sa10.units[1].id
         success = triggers.TriggerOnce(comment="SA-10 radars destroyed")
-        success.add_condition(condition.GroupDead(sa10_radars.id))
+        success.add_condition(condition.UnitDead(big_bird))
+        success.add_condition(condition.UnitDead(flap_lid))
         success_call = (
             "Big Bird and Flap Lid are off the air. Mission successful. "
             "Dodge, egress west and return to base, Vaziani. Do not re-cross Daryal."
@@ -583,7 +582,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
         failure = triggers.TriggerOnce(comment="Dodge lost before kill")
         failure.add_condition(condition.GroupDead(player.id))
-        failure.add_condition(condition.GroupAlive(sa10_radars.id))
+        failure.add_condition(condition.UnitAlive(flap_lid))
         failure_call = "Dodge is down and the S-300 is still tracking. Mission failed."
         failure.add_action(action.MessageToAll(m.string(failure_call), seconds=25))
         self._voice.attach_to_all(m, failure, failure_call)

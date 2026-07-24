@@ -47,6 +47,7 @@ from dcs.unittype import VehicleType
 from dcs_mission_creator.core.map_draw import PlanOverlay
 from dcs_mission_creator.core.mission_builder import MissionBuilder
 from dcs_mission_creator.core.placement import load_scene, sam_site_on_ridge
+from dcs_mission_creator.core.tasking import apply_ai_difficulty
 from dcs_mission_creator.core.tts import VoiceSynth
 from dcs_mission_creator.map_overlay.scene import TacticalScene
 
@@ -87,6 +88,7 @@ class _Scene:
 class EasternShield(MissionBuilder):
     name = "eastern_shield"
     title = "Eastern Shield"
+    difficulty = "trained"
 
     def __init__(self, *, players: int = 1) -> None:
         super().__init__(players=players)
@@ -269,9 +271,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self._scene = scene
         usa, russia = m.country("USA"), m.country("Russia")
 
-        sa6_radar, sa6_tels, ewr_positions = self._spawn_red_air_defence(
-            m, russia, scene
-        )
+        sa6, ewr_positions = self._spawn_red_air_defence(m, russia, scene)
         depot, shorad_pos = self._spawn_red_depot(m, russia, scene)
         reserve = self._spawn_red_reserve(m, russia, scene)
         migs = self._spawn_red_intercept(m, russia, scene)
@@ -303,8 +303,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self._add_support_checkins(m)
         self._add_layered_triggers(
             m,
-            sa6_radar=sa6_radar,
-            sa6_tels=sa6_tels,
+            sa6=sa6,
             depot=depot,
             hog=hog,
             migs=migs,
@@ -367,16 +366,18 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     def _spawn_red_air_defence(self, m: Mission, russia: Country, scene: _Scene):
         """SA-6 site on a ridge + 55G6 EWR chain along the frontier."""
-        sa6_radar, sa6_tels = self._spawn_sa6_site(m, russia, scene)
+        sa6 = self._spawn_sa6_site(m, russia, scene)
         ewr_positions = self._spawn_red_ewr_chain(m, russia, scene)
-        return sa6_radar, sa6_tels, ewr_positions
+        return sa6, ewr_positions
 
     def _spawn_sa6_site(self, m: Mission, russia: Country, scene: _Scene):
         """SA-6 'Gainful' on the ridge north of Kuweires (1S91 + 3x 2P25 + AAA).
 
-        Layered priority target: the 1S91 search radar gates whether Hawg can
-        push; the TELs become safe ground kills once it dies. Threat axis
-        comes from the northwest (Incirlik bearing).
+        The 1S91 (`units[0]`) and its TELs sit in **one** group — a Kub
+        launcher only engages when its Straight Flush radar shares the group.
+        The 1S91 is still the priority kill: gate objectives on
+        `UnitDead(units[0].id)`, not on splitting the site into two groups.
+        Threat axis comes from the northwest (Incirlik bearing).
         """
         try:
             ridge = sam_site_on_ridge(
@@ -394,25 +395,21 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                 envelope_radius_m=22_000.0,
                 min_prominence_m=5.0,
             )
-        radar = m.vehicle_group(
-            russia,
-            "SAM Kobra Search",
+        sa6_types = [
             vehicles.AirDefence.Kub_1S91_str,
+            vehicles.AirDefence.Kub_2P25_ln,
+            vehicles.AirDefence.Kub_2P25_ln,
+            vehicles.AirDefence.Kub_2P25_ln,
+        ]
+        sa6 = m.vehicle_group_platoon(
+            russia,
+            "SAM Kobra",
+            cast(list[type[VehicleType]], sa6_types),
             position=ridge,
             heading=315,
-        )
-        _set_skill(radar, Skill.High)
-        tel_offset = Point(ridge.x - 200, ridge.y + 300, self._terrain)
-        tels = m.vehicle_group(
-            russia,
-            "SAM Kobra TELs",
-            vehicles.AirDefence.Kub_2P25_ln,
-            position=tel_offset,
-            heading=315,
-            group_size=3,
             formation=VehicleGroup.Formation.Scattered,
         )
-        _set_skill(tels, Skill.High)
+        _set_skill(sa6, Skill.High)
         aaa_offset = Point(ridge.x + 250, ridge.y - 150, self._terrain)
         aaa = m.vehicle_group(
             russia,
@@ -424,7 +421,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             formation=VehicleGroup.Formation.Scattered,
         )
         _set_skill(aaa, Skill.Average)
-        return radar, tels
+        return sa6
 
     def _spawn_red_ewr_chain(
         self, m: Mission, russia: Country, scene: _Scene
@@ -578,6 +575,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             group_size=2,
         )
         _set_skill(migs, Skill.High)
+        apply_ai_difficulty(migs, self.difficulty)
         return migs
 
     # -- blue side ----------------------------------------------------------
@@ -747,7 +745,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         tanker_track: tuple[Point, Point],
     ) -> None:
         """Paint the plan on the F10 map (trained: coarse, estimated threats)."""
-        plan = PlanOverlay(m, "trained")
+        plan = PlanOverlay(m, self.difficulty)
         plan.objective(scene.depot_anchor, "Depot — Kuweires", radius=5_000.0)
         plan.route(corridor, "Springfield ingress")
         plan.orbit(*tarcap_track, "Eagle TARCAP")
@@ -828,8 +826,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self,
         m: Mission,
         *,
-        sa6_radar,
-        sa6_tels,
+        sa6,
         depot,
         hog,
         migs,
@@ -838,7 +835,9 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         """Wire the four-phase objective chain with announce-on-fire messages.
 
         Phase gates (objective layering):
-          1. SA-6 1S91 radar dead → "SAM safe, Hawg cleared to push".
+          1. SA-6 1S91 radar dead → "SAM safe, Hawg cleared to push". The 1S91
+             is `sa6.units[0]`; gate on `UnitDead` so the shot-capable TELs can
+             stay in the same group (Kub only fires with its radar in-group).
           2. Depot dead → activate MiG-29S scramble + reserve convoy, both
              announce themselves.
           3. Mission success when SA-6 radar + depot + MiGs are all down.
@@ -846,21 +845,20 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
              the depot anchor (handled implicitly: reserve OnRoad waypoint
              ends at Kuweires).
         """
-        self._add_sa6_radar_down_trigger(m, sa6_radar=sa6_radar)
+        self._add_sa6_radar_down_trigger(m, sa6=sa6)
         self._add_depot_killed_triggers(m, depot=depot, migs=migs, reserve=reserve)
         self._add_end_triggers(
             m,
-            sa6_radar=sa6_radar,
-            sa6_tels=sa6_tels,
+            sa6=sa6,
             depot=depot,
             hog=hog,
             migs=migs,
         )
 
-    def _add_sa6_radar_down_trigger(self, m: Mission, *, sa6_radar) -> None:
+    def _add_sa6_radar_down_trigger(self, m: Mission, *, sa6) -> None:
         """Announce SAM-safe and effectively clear Hawg's run."""
         rule = triggers.TriggerOnce(comment="SA-6 search radar destroyed")
-        rule.add_condition(condition.GroupDead(sa6_radar.id))
+        rule.add_condition(condition.UnitDead(sa6.units[0].id))
         call = "Magic: SA-6 search radar is down. Hawg, cleared to push on the depot."
         rule.add_action(
             action.MessageToCoalition(
@@ -907,12 +905,10 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self._voice.attach_to_all(m, reserve_rule, reserve_call)
         m.triggerrules.triggers.append(reserve_rule)
 
-    def _add_end_triggers(
-        self, m: Mission, *, sa6_radar, sa6_tels, depot, hog, migs
-    ) -> None:
+    def _add_end_triggers(self, m: Mission, *, sa6, depot, hog, migs) -> None:
         """Success when primary + secondary objectives complete; failure on Hawg loss."""
         success = triggers.TriggerOnce(comment="All objectives met")
-        success.add_condition(condition.GroupDead(sa6_radar.id))
+        success.add_condition(condition.UnitDead(sa6.units[0].id))
         success.add_condition(condition.GroupDead(depot.id))
         success.add_condition(condition.GroupDead(migs.id))
         success_call = (
@@ -924,9 +920,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         m.triggerrules.triggers.append(success)
 
         partial = triggers.TriggerOnce(comment="Primary objectives met")
-        partial.add_condition(condition.GroupDead(sa6_radar.id))
+        partial.add_condition(condition.GroupDead(sa6.id))
         partial.add_condition(condition.GroupDead(depot.id))
-        partial.add_condition(condition.GroupDead(sa6_tels.id))
         partial_call = (
             "Magic: primary targets struck. Mop up the MiGs and the reserve, then RTB."
         )

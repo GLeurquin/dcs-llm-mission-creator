@@ -50,6 +50,7 @@ from dcs.unittype import VehicleType
 
 from dcs_mission_creator.core.map_draw import PlanOverlay
 from dcs_mission_creator.core.mission_builder import MissionBuilder
+from dcs_mission_creator.core.tasking import apply_ai_difficulty
 from dcs_mission_creator.core.tts import VoiceSynth
 
 
@@ -81,7 +82,6 @@ class _Scene:
     gudauta: Airport
     sukhumi: Airport
     sa6_site: Point
-    sa6_launchers: Point
     shilka_pos: Point
     ewr_su27: Point
     ewr_mig29: Point
@@ -97,6 +97,7 @@ class _Scene:
 class AbkhazSweep(MissionBuilder):
     name = "abkhaz_sweep"
     title = "Abkhaz Sweep"
+    difficulty = "ace"
 
     def __init__(self, *, players: int = 1) -> None:
         super().__init__(players=players)
@@ -296,9 +297,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self._scene = scene
         usa, russia = m.country("USA"), m.country("Russia")
 
-        sa6_radar, _sa6_lns, _shilkas, _ewr_su, _ewr_mig = self._spawn_red_ground(
-            m, russia, scene
-        )
+        _sa6, _shilkas, _ewr_su, _ewr_mig = self._spawn_red_ground(m, russia, scene)
         self._spawn_awacs(m, usa, scene)
         su27 = self._spawn_red_su27(m, russia, scene)
         mig29 = self._spawn_red_mig29(m, russia, scene)
@@ -348,7 +347,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         # SA-6 on a coastal ridge ~10 km north of Sukhumi, with LOS over the
         # AO offshore. Launchers a few hundred metres south of the radar.
         sa6_site = _offset(sukhumi.position, t, east_m=-2_000, north_m=10_000)
-        sa6_launchers = _offset(sa6_site, t, east_m=-400, north_m=-600)
         shilka_pos = _offset(sa6_site, t, east_m=300, north_m=300)
         # EWR sites inland of each bandit base.
         ewr_su27 = _offset(sochi.position, t, east_m=12_000, north_m=4_000)
@@ -368,7 +366,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             gudauta=gudauta,
             sukhumi=sukhumi,
             sa6_site=sa6_site,
-            sa6_launchers=sa6_launchers,
             shilka_pos=shilka_pos,
             ewr_su27=ewr_su27,
             ewr_mig29=ewr_mig29,
@@ -385,8 +382,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     def _spawn_red_ground(self, m: Mission, russia: Country, scene: _Scene):
         """SA-6 radar + launchers on coastal ridge, Shilka SHORAD, EWR chain."""
-        sa6_radar = self._spawn_sa6_radar(m, russia, scene.sa6_site)
-        sa6_launchers = self._spawn_sa6_launchers(m, russia, scene.sa6_launchers)
+        sa6 = self._spawn_sa6_site(m, russia, scene.sa6_site)
         shilkas = self._spawn_shilkas(m, russia, scene.shilka_pos)
         ewr_su27 = self._spawn_ewr(
             m, russia, scene.ewr_su27, "Box Spring 1", vehicles.AirDefence.X_55G6_EWR
@@ -394,36 +390,30 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         ewr_mig29 = self._spawn_ewr(
             m, russia, scene.ewr_mig29, "Box Spring 2", vehicles.AirDefence.X_1L13_EWR
         )
-        return sa6_radar, sa6_launchers, shilkas, ewr_su27, ewr_mig29
+        return sa6, shilkas, ewr_su27, ewr_mig29
 
-    def _spawn_sa6_radar(self, m: Mission, russia: Country, pos: Point):
-        """Kub 1S91 (Snow Drum) SR/TR — kill this and the SA-6 is blind."""
-        radar = m.vehicle_group(
-            russia,
-            "SAM Snow Drum",
+    def _spawn_sa6_site(self, m: Mission, russia: Country, pos: Point):
+        """SA-6 site: 1S91 (Snow Drum) + 2x 2P25 launchers in one group.
+
+        The Kub launchers only engage while the 1S91 (`units[0]`) shares their
+        group, so radar and TELs must not be split — kill the 1S91 and the
+        whole site goes blind.
+        """
+        sa6_types = [
             vehicles.AirDefence.Kub_1S91_str,
-            position=pos,
-            heading=180,
-        )
-        _set_skill(radar, Skill.Excellent)
-        return radar
-
-    def _spawn_sa6_launchers(self, m: Mission, russia: Country, pos: Point):
-        """2x Kub 2P25 launchers — the shooters, slaved to Snow Drum."""
-        launcher_types = [
             vehicles.AirDefence.Kub_2P25_ln,
             vehicles.AirDefence.Kub_2P25_ln,
         ]
-        launchers = m.vehicle_group_platoon(
+        sa6 = m.vehicle_group_platoon(
             russia,
-            "SAM Gainful",
-            cast(list[type[VehicleType]], launcher_types),
+            "SAM Snow Drum",
+            cast(list[type[VehicleType]], sa6_types),
             position=pos,
             heading=180,
             formation=VehicleGroup.Formation.Scattered,
         )
-        _set_skill(launchers, Skill.Excellent)
-        return launchers
+        _set_skill(sa6, Skill.Excellent)
+        return sa6
 
     def _spawn_shilkas(self, m: Mission, russia: Country, pos: Point):
         """2x ZSU-23-4 inside the SAM perimeter — terminal AAA coverage."""
@@ -473,6 +463,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             group_size=4,
         )
         _set_skill(ivan, Skill.Excellent)
+        apply_ai_difficulty(ivan, self.difficulty)
         announce = triggers.TriggerOnce(comment="Su-27 launch announcement")
         announce.add_condition(condition.PartOfCoalitionInZone("blue", zone.id))
         su27_call = (
@@ -510,6 +501,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             group_size=2,
         )
         _set_skill(boris, Skill.Excellent)
+        apply_ai_difficulty(boris, self.difficulty)
         announce = triggers.TriggerOnce(comment="MiG-29 launch announcement")
         announce.add_condition(condition.PartOfCoalitionInZone("blue", zone.id))
         mig_call = (
@@ -578,7 +570,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         Magic, and the tally. Only the sweep geometry and one coarse threat
         area (the SA-6 ridge / bandit CAP off Sukhumi) are drawn.
         """
-        plan = PlanOverlay(m, "ace")
+        plan = PlanOverlay(m, self.difficulty)
         ao = scene.station_south.midpoint(scene.station_north)
         plan.objective(ao, "Sweep AO", radius=8_000.0)
         plan.route(

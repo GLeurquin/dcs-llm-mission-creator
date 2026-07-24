@@ -185,6 +185,18 @@ st = m.static_group(country, name, _type, position, heading=0, hidden=False, dea
 ### Ships (`dcs.ships`)
 Carriers: `Stennis`, `CVN_71`/`72`/`73`/`75`, `KUZNECOW`. Grep for the rest.
 
+### SAM / air-defense site builders
+Don't hand-place radar + TR + launchers unit-by-unit; build a whole site in
+one call.
+- **pydcs** `dcs.templates.VehicleTemplate` — canned sites for the systems it
+  covers: `sa6_site`, `sa11_site`, `sa15_site`, `Russia.sa10_site`,
+  `USA.patriot_site`, `USA.hawk_site`, signature
+  `(mission, [country,] position, heading, prefix="", skill=Skill.Average)`.
+- **project** [core/air_defense.py](../../../src/dcs_mission_creator/core/air_defense.py)
+  fills the gaps pydcs has no template for:
+  `build_sa2/sa3/sa5/sa8/sa13/sa15/sa19_site`,
+  `build_nasams/irist/roland/rapier/hq7_site`. See §12 / CLAUDE.md.
+
 ---
 
 ## 6. Tasks (`dcs.task`)
@@ -198,6 +210,76 @@ Carriers: `Stennis`, `CVN_71`/`72`/`73`/`75`, `KUZNECOW`. Grep for the rest.
 what `patrol_flight` uses internally — reach for them only when hand-rolling
 tasking. `task.Targets` is a metaclass tree (`Targets.All.Air`,
 `Targets.All.GroundUnits`, …).
+
+Enroute tasks and **options** are appended to a group's spawn-waypoint
+ComboTask: `group.points[0].tasks.append(<task>)` (this is how pydcs's own
+flight helpers do it). Group-level init tasks use
+`group.add_trigger_action(<task>)`.
+
+### 6.1 JTAC / FAC (talk-ons & lasing)
+```python
+group.points[0].tasks.append(task.FACAttackGroup(
+    target_group.id, target_group.name,           # BOTH must match — mismatch = silent no-op
+    designation=task.Designation.Laser,           # lases the target for LGBs
+    frequency=133, modulation=task.Modulation.AM)) # MHz the JTAC talks on
+```
+- `task.Designation`: `Auto`, `No`, `WP` (white-phos mark), `IR_Pointer`,
+  `Laser`. `task.WeaponType` picks what the FAC clears you to use.
+- `FACAttackGroup` works on a **ground JTAC vehicle group** or an airborne
+  **FAC(A)** flight (give the flight `maintask=task.AFAC`). `FACEngageGroup`
+  is the fire-and-forget variant.
+- **Project wrapper:** `tasking.fac_attack_group(fac_group, target_group,
+  frequency=…)` derives both id+name from one group and defaults to Laser.
+
+### 6.2 AI behaviour options — the difficulty dial
+Each is a `task.Opt*` appended to `points[0].tasks`:
+- `OptROE(OptROE.Values.X)` — `WeaponFree` / `OpenFireWeaponFree` / `OpenFire`
+  / `ReturnFire` / `WeaponHold`. Whether/when the AI shoots.
+- `OptReactOnThreat(Values.X)` — `NoReaction` / `PassiveDefense` (CM only) /
+  `EvadeFire` / `ByPassAndEscape` / `AllowAbortMission`.
+- `OptRadarUsing(Values.X)` — EMCON: `NeverUse` … `UseForContinuousSearch`.
+- `OptECMUsing(Values.X)` — `NeverUse` … `AlwaysUse`.
+- `OptAlarmState(value)` — ground/SAM readiness (0 auto / 1 green-radars-off /
+  2 red-hot). Green = radars dark until threatened → ambush.
+- Booleans: `OptRTBOnBingoFuel(bool)`, `OptRTBOnOutOfAmmo(...)`,
+  `OptRestrictAfterburner(bool)`, `OptRestrictJettison(bool)`.
+- **Project wrapper:** `tasking.apply_ai_difficulty(group, difficulty)` sets
+  ROE/react/radar/ECM/bingo/afterburner from a recruit→ace label in one call.
+
+### 6.3 Cold-ramp scramble (uncontrolled + `StartCommand`)
+Aircraft sit shut down on the ramp until a trigger starts them — an alert-5,
+distinct from `late_activation` (pops fully airborne).
+```python
+group.add_trigger_action(task.StartCommand()); group.uncontrolled = True
+t = TriggerOnce(comment="scramble"); t.rules.append(<condition>)
+t.actions.append(action.AITaskPush(group.id, 1))
+m.triggerrules.triggers.append(t)
+```
+- pydcs `FlyingGroup.delay_start(m, seconds)` does this for a **time** trigger.
+- **Project wrapper:** `tasking.scramble_on_trigger(m, group, *conditions)`
+  generalizes it to any condition(s).
+
+### 6.4 Controlled tasks (start/stop conditions)
+`task.ControlledTask(inner_task)` gates any task on conditions:
+`.start_after_time(t)`, `.stop_after_time(t)`, `.stop_after_duration(t)`,
+condition variants. Generalizes the `AITaskPush` intercept trick.
+
+### 6.5 Unit `WrappedAction` commands (`points[0].tasks.append(...)`)
+- **TACAN/beacon:** `task.ActivateBeaconCommand(channel=10, modechannel="X",
+  callsign="TKR", bearing=True, unit_id=0, aa=True)` — DCS frequency computed
+  internally (`aa=True` yardstick, `aa=False` ground). `refuel_flight` already
+  adds one; use this for AWACS/FARP/ship beacons. `DeActivateBeaconCommand`.
+- **Carrier recovery:** `task.ActivateICLSCommand(channel, unit_id)`,
+  `ActivateLink4Command`, `ActivateACLSCommand` (+ their `DeActivate*`).
+- **Radio:** `task.TransmitMessage(soundfile_reskey, subtitle_resstring,
+  loop=False, subtitle_duration=5)` broadcasts a sound on the current freq;
+  `StopTransmission`; `SetFrequencyCommand(freq)`. Pairs with `VoiceSynth`.
+- **FX/state:** `task.SmokeCommand(bool)` (colored marker smoke),
+  `SetInvisibleCommand`, `SetImmortalCommand`, `SetCallsignCommand`, `EPLRS`.
+
+### 6.6 Carrier recovery tanker
+`task.RecoveryTanker(groupId, speed, altitude, lastWaypoint)` on the tanker's
+`points[0].tasks` — `groupId` is the carrier group it recovers to.
 
 ---
 
@@ -234,6 +316,12 @@ m.triggerrules.triggers.append(t)
 ### Briefing setters (on `Mission`)
 `set_description_text`, `set_description_bluetask_text`,
 `set_description_redtask_text`, `set_sortie_text`. Plain text.
+
+- **Briefing pictures:** `m.add_picture_blue(filepath)` /
+  `add_picture_red` / `add_picture_neutral` — image slides on the briefing
+  screen (target photo, map snapshot). Returns a `ResourceKey`.
+- **Kneeboard:** `m.add_aircraft_kneeboard(aircraft_type, page_path)` — an
+  in-cockpit kneeboard page (freqs, laser codes, target photo) per airframe.
 
 ---
 
@@ -348,6 +436,16 @@ calling §11 / triggers directly. Their contracts live in
   — wraps §11 with blue-layer placement + difficulty-scaled enemy reveal.
 - **`VoiceSynth`** ([core/tts/synth.py](../../../src/dcs_mission_creator/core/tts/synth.py))
   — TTS → cached WAV → `SoundTo*` action on a trigger rule.
+- **air-defense builders** ([core/air_defense.py](../../../src/dcs_mission_creator/core/air_defense.py))
+  — `build_sa2/sa3/sa5/sa8/sa13/sa15/sa19_site`,
+  `build_nasams/irist/roland/rapier/hq7_site` `(m, country, position, heading,
+  *, launchers=…, skill=…, overlay=…, terrain=…)`. Fills the SAM sites pydcs's
+  `VehicleTemplate` lacks (§5). Absolute `Point` in, `VehicleGroup` out.
+- **AI-tasking wrappers** ([core/tasking.py](../../../src/dcs_mission_creator/core/tasking.py))
+  — `apply_ai_difficulty(group, difficulty)` (§6.2 dial),
+  `fac_attack_group(fac, target, …)` (§6.1), `scramble_on_trigger(m, group,
+  *conditions)` (§6.3). Only the ones with real project policy — carrier/nav
+  beacons stay raw pydcs (§6.5).
 
 ---
 

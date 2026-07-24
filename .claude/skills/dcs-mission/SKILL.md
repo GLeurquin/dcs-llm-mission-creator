@@ -70,9 +70,28 @@ A "realistic" mission is more than spawning aircraft. Hit these before done:
   with bombs.
 - **Threats layered, not stacked.** One SA-6 + a few Shilkas reads harder
   than five SA-10s on one hill.
+- **Build whole SAM sites, not lone launchers.** A real site is search radar
+  + track/fire-control radar + command post + launchers. Use the site
+  builders — pydcs `VehicleTemplate` for SA-6/10/11/15 + Patriot/Hawk, project
+  `air_defense.build_*` for SA-2/3/5/8/13/19, NASAMS, IRIS-T, Roland, Rapier,
+  HQ-7 (CLAUDE.md) — not a bare TEL that can't track.
+- **Radar + launchers must share one `VehicleGroup`.** In DCS a launcher
+  only engages if its tracking/fire-control radar is in the **same** group —
+  split the 1S91 (SA-6) or 30H6/64H6E (SA-10) into a separate group from the
+  TELs and the launchers get no fire-control and **never shoot**. The site
+  builders keep everything in one group; if you hand-build, use one
+  `vehicle_group_platoon([radar, launcher, launcher, …])`. Exception:
+  self-contained SHORAD (SA-8/13/15/19, each TELAR has its own tracker) is
+  fine as one type. To make "kill the radar = suppressed" a win condition
+  **without** splitting the group, gate on `condition.UnitDead(radar_unit.id)`
+  (the radar is `group.units[0]`), not `GroupDead`.
+- **JTAC for CAS.** A CAS or CAP-over-ground mission gets a ground or
+  airborne FAC that lases targets and talks the player on
+  (`tasking.fac_attack_group`). Brief its frequency + designation.
 - **Briefing exists.** `set_description_text`, `*_bluetask_text`,
   `*_redtask_text` with bullseye, AO coords, ROE, callsigns, bingo fuel.
-- **Frequencies + TACAN** for AWACS and tankers in the briefing.
+- **Frequencies + nav aids** in the briefing — AWACS/tanker freqs + TACAN;
+  for carrier ops, the boat's TACAN + ICLS and a recovery tanker overhead.
 - **AI skill varied.** Don't set everything Excellent. Mix High / Average
   for ground; Excellent only for boss threats.
 - **Tell a story.** Mission context, scene-setting intro, dynamic reactions
@@ -134,6 +153,12 @@ Spread enemy contact across the on-station window. Multiple waves, spaced
 ~14 km of standoff per extra minute before merge. For deterministic timing,
 fall back to `triggerrules` activation.
 
+Reinforcement waves can **scramble cold off the ramp** (alert-5) instead of
+appearing airborne: `tasking.scramble_on_trigger(m, flight, <condition>)`
+keeps the flight shut down until the player trips a zone/flag, so the reaction
+reads as *caused*, not scripted. Contrast `late_activation`, which pops a
+flight straight into the air. If the scenario fits, announce the scramble by voice (below).
+
 ### Patrol legs
 
 Size race-track legs so the flight makes **3–5 passes during on-station**:
@@ -181,9 +206,10 @@ texture beats a fingerprint.
 | Dial               | Range                                                          |
 |--------------------|----------------------------------------------------------------|
 | Enemy AI skill     | Average / Good / High / Excellent (mix freely)                 |
+| AI ROE / reaction  | weapon-hold + no-reaction → weapons-free + evade + ECM (recruit→ace) |
 | Numeric balance    | bandits outnumbered → 3× player flight                         |
 | Enemy missile gen  | gen-3 (R-27 / AIM-7) vs gen-4 (R-77 / AIM-120)                 |
-| SAM threats        | none → MANPADS → SHORAD → SA-6 → SA-10                         |
+| SAM threats        | none → MANPADS → SHORAD (SA-8/13/15/19, HQ-7) → SA-2/3/6 → SA-10/11 / Patriot |
 | EWR / GCI          | none → EWR → EWR + GCI vectoring                               |
 | Support package    | AWACS + tanker + escort → AWACS only → none → datalink-denied  |
 | Weather / vis      | clear → scattered → broken → overcast/IMC → night              |
@@ -205,6 +231,11 @@ texture beats a fingerprint.
 - **Make the label bite.** Ace means night/IMC + no support *actually
   applied*. Recruit means real support + clear weather, not just lowered
   skill.
+- **Set the AI's teeth, not just its aim.** `Skill` governs marksmanship;
+  ROE and reaction-to-threat govern *behaviour*. Recruit enemies hold fire
+  and don't defend; ace enemies are weapons-free, evade, and run ECM. Apply
+  per group with `tasking.apply_ai_difficulty(group, difficulty)` (CLAUDE.md)
+  — a distinct dial from raw skill.
 - **Document composition in the briefing** so the user sees what you built:
   > Difficulty: veteran. Excellent Flankers, bandits 1.5× player flight,
   > AIM-120/R-77, AWACS only, broken cloud layer.
