@@ -1,12 +1,22 @@
 # DCS Mission Creator
 
-A [pydcs](https://github.com/pydcs/dcs)-based generator for Digital Combat Simulator missions, plus a static **map overlay** that gives the generator spatial awareness — roads, rivers, buildings, elevation, slope, and vegetation — so ground units land in tactically plausible places instead of in lakes or on cliffs.
+DCS Mission Creator turns a plain-language mission idea into a ready-to-fly [DCS World](https://www.digitalcombatsimulator.com/) `.miz` file with a matching briefing. It is built to be driven by an AI coding assistant — specifically [Claude](https://claude.com/claude-code) via the bundled [`dcs-mission` skill](.claude/skills/dcs-mission/SKILL.md): you describe the scenario you want ("F-16 CAP over a Russian convoy near Senaki, dawn, broken clouds"), and Claude writes a mission generator script against this project's API, then runs it to produce the `.miz`.
 
-## Setup
+Under the hood it is a [pydcs](https://github.com/pydcs/dcs)-based generator, plus a static **map overlay** that gives the generator spatial awareness — roads, rivers, buildings, elevation, slope, and vegetation — so ground units land in tactically plausible places instead of in lakes or on cliffs.
+
+## Getting started
+
+The project uses [uv](https://docs.astral.sh/uv/) for dependency and environment management. If you don't have it yet, install it first (`curl -LsSf https://astral.sh/uv/install.sh | sh`).
 
 ```bash
 uv sync
 ```
+
+`uv sync` reads `pyproject.toml` and `uv.lock`, creates a `.venv/` if one doesn't exist, and installs the exact pinned dependencies (pydcs, the map-overlay build stack, the TTS engine, plus the `ruff` / `ty` dev tools). Run it once after cloning and again whenever the lockfile changes. Prefix project commands with `uv run` (e.g. `uv run dcs-mission-creator list`) so they execute inside that environment without a manual `activate`.
+
+### Generating a mission with Claude
+
+The intended workflow is to open this repo in [Claude Code](https://claude.com/claude-code) and ask for a mission in natural language. The `dcs-mission` skill teaches Claude the design conventions and pydcs quirks (see [SKILL.md](.claude/skills/dcs-mission/SKILL.md)); it will author a new module under [src/dcs_mission_creator/missions/](src/dcs_mission_creator/missions/), then generate the `.miz`. You can still run and iterate on any generator by hand with the CLI below.
 
 ## Two halves of the project
 
@@ -23,12 +33,40 @@ The overlay lives under [src/dcs_mission_creator/resources/overlays/&lt;theater&
 
 ## Generating a mission
 
+**Build the map overlay first.** Every generator reads the per-theater overlay at runtime (elevation, slope, roads, ...), so the Caucasus layers must exist before `generate` will work — see [Building the overlay](#building-the-overlay) below. Skip this only if the layers are already built under `src/dcs_mission_creator/resources/overlays/caucasus/`.
+
 ```bash
 uv run dcs-mission-creator list                    # show available missions
-uv run dcs-mission-creator generate coastal_cover  # builds out/coastal_cover/{coastal_cover.miz,README.md}
+uv run dcs-mission-creator generate coastal_cover  # writes <slug>.miz + README.md
 ```
 
-Each generator produces both the `.miz` and a mission briefing as `README.md` in the same folder.
+### Where the files land
+
+Each generator writes two files into one output folder: the `<slug>.miz` (load this in DCS) and a `README.md` mission briefing.
+
+- **Default:** `$DCS_MISSIONS_FOLDER/IAGeneratedMissions/<slug>/`. Set the `DCS_MISSIONS_FOLDER` env var to your DCS `Missions` folder so the `.miz` drops straight where DCS can load it; `generate` errors out if the var is unset and no `--output-dir` is given.
+- **Override:** `--output-dir DIR` writes both files to `DIR` instead.
+
+```bash
+export DCS_MISSIONS_FOLDER="$HOME/Saved Games/DCS/Missions"
+uv run dcs-mission-creator generate coastal_cover
+#   → $DCS_MISSIONS_FOLDER/IAGeneratedMissions/coastal_cover/coastal_cover.miz
+#   → $DCS_MISSIONS_FOLDER/IAGeneratedMissions/coastal_cover/README.md
+
+uv run dcs-mission-creator generate coastal_cover --output-dir out/coastal_cover
+```
+
+Grab the `.miz` from that folder and open it from the DCS mission editor or the mission list in-game.
+
+## Supported maps
+
+**Caucasus** and **Syria** are supported: both build a full overlay (elevation, slope, roads, rivers, buildings, vegetation) and can be targeted by `generate`. Caucasus is the primary theater and carries the worked example mission ([coastal_cover.py](src/dcs_mission_creator/missions/coastal_cover.py)); it also has a hand-tuned clip to the visible map area in [coords.py](src/dcs_mission_creator/map_overlay/coords.py). Syria builds and queries the same way but falls back to the full pydcs terrain bounds (no hand-tuned visible-map clip yet).
+
+The theater registry in [map_overlay/terrains.py](src/dcs_mission_creator/map_overlay/terrains.py) also recognises the other real-world pydcs maps by slug — `persiangulf`, `sinai`, `normandy`, `thechannel`, `falklands` — and each can build against the full-bounds fallback, but none is exercised yet; expect to add a visible-map clip in `coords.py` for clean coverage.
+
+The synthetic training-range maps (`nevada`, `marianaislands`) are recognised by name but out of scope — they have no real-world OSM / SRTM / WorldCover ground truth to build an overlay from.
+
+See [Out of scope (v1)](#out-of-scope-v1) for the full picture.
 
 ## Map overlay — what it stores
 
@@ -191,7 +229,7 @@ See [.claude/skills/dcs-mission/SKILL.md](.claude/skills/dcs-mission/SKILL.md) f
 
 ## Out of scope (v1)
 
-- Theaters other than Caucasus (pipeline is per-map configurable; Syria / Persian Gulf / Sinai work once their bbox + projection are added to `terrains.py`).
+- Theaters beyond Caucasus and Syria (pipeline is per-map configurable; Persian Gulf / Sinai / others work off the full-bounds fallback, cleaner once a visible-map clip is added to `coords.py`).
 - Synthetic theaters (Nevada, Marianas combat range) — no real-world OSM / SRTM / WorldCover ground truth.
 - Live in-game F10 screenshot capture — the public-data overlay reaches ~90 % alignment with DCS's own forest/road rendering, and the 100 m placement buffers absorb the remainder.
 - Full A\* convoy routing — DCS routes between `OnRoad` waypoints on its own.
