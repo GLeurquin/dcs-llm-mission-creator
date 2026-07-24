@@ -4,21 +4,97 @@ DCS Mission Creator turns a plain-language mission idea into a ready-to-fly [DCS
 
 Under the hood it is a [pydcs](https://github.com/pydcs/dcs)-based generator, plus a static **map overlay** that gives the generator spatial awareness — roads, rivers, buildings, elevation, slope, and vegetation — so ground units land in tactically plausible places instead of in lakes or on cliffs.
 
-## Getting started
+## Contents
 
-The project uses [uv](https://docs.astral.sh/uv/) for dependency and environment management. If you don't have it yet, install it first (`curl -LsSf https://astral.sh/uv/install.sh | sh`).
+- [Quick start](#quick-start) — zero to a `.miz` in four steps
+- [Generating missions with Claude](#generating-missions-with-claude) — the intended workflow
+- [Bundled mission examples](#bundled-mission-examples)
+- [Supported maps](#supported-maps)
+- [How it works](#how-it-works) — architecture
+- [Reference: the map overlay](#reference-the-map-overlay) — storage, building, querying
+- [Voice lines (TTS)](#voice-lines-tts)
+- [Adding a new mission](#adding-a-new-mission)
+- [Out of scope (v1)](#out-of-scope-v1)
+
+## Quick start
+
+From a fresh clone to a loadable `.miz`:
+
+### 1. Install `uv` and sync dependencies
+
+The project uses [uv](https://docs.astral.sh/uv/) for dependency and environment management. If you don't have it yet, install it first, then sync:
 
 ```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh   # skip if uv is already installed
 uv sync
 ```
 
 `uv sync` reads `pyproject.toml` and `uv.lock`, creates a `.venv/` if one doesn't exist, and installs the exact pinned dependencies (pydcs, the map-overlay build stack, the TTS engine, plus the `ruff` / `ty` dev tools). Run it once after cloning and again whenever the lockfile changes. Prefix project commands with `uv run` (e.g. `uv run dcs-mission-creator list`) so they execute inside that environment without a manual `activate`.
 
-### Generating a mission with Claude
+### 2. Build the map overlay (one-time, per theater)
 
-The intended workflow is to open this repo in [Claude Code](https://claude.com/claude-code) and ask for a mission in natural language. The `dcs-mission` skill teaches Claude the design conventions and pydcs quirks (see [SKILL.md](.claude/skills/dcs-mission/SKILL.md)); it will author a new module under [src/dcs_mission_creator/missions/](src/dcs_mission_creator/missions/), then generate the `.miz`. You can still run and iterate on any generator by hand with the CLI below.
+Every generator reads a per-theater **map overlay** at runtime (elevation, slope, roads, ...), so the layers must exist before `generate` will work. The `*.zarr` layers are gitignored, so a fresh clone has to build them once. For Caucasus:
 
-## Two halves of the project
+```bash
+uv run dcs-mission-creator map-overlay build caucasus --layers all
+```
+
+This downloads public elevation / OSM / land-cover data and takes ~45 min the first time (it caches and crash-resumes — see [Building the overlay](#building-the-overlay)). You only redo this per theater, not per mission.
+
+### 3. Generate a mission
+
+```bash
+uv run dcs-mission-creator list                    # show available missions
+uv run dcs-mission-creator generate coastal_cover  # writes <slug>.miz + README.md
+```
+
+Each generator writes two files into one output folder: the `<slug>.miz` (load this in DCS) and a `README.md` mission briefing.
+
+- **Default output:** `$DCS_MISSIONS_FOLDER/IAGeneratedMissions/<slug>/`. Set the `DCS_MISSIONS_FOLDER` env var to your DCS `Missions` folder so the `.miz` drops straight where DCS can load it; `generate` errors out if the var is unset and no `--output-dir` is given.
+- **Override:** `--output-dir DIR` writes both files to `DIR` instead.
+
+```bash
+export DCS_MISSIONS_FOLDER="$HOME/Saved Games/DCS/Missions"
+uv run dcs-mission-creator generate coastal_cover
+#   → $DCS_MISSIONS_FOLDER/IAGeneratedMissions/coastal_cover/coastal_cover.miz
+#   → $DCS_MISSIONS_FOLDER/IAGeneratedMissions/coastal_cover/README.md
+
+uv run dcs-mission-creator generate coastal_cover --output-dir out/coastal_cover
+```
+
+Add `--players N` (1–4) to scale the player flight into a coop mission.
+
+### 4. Fly it
+
+Grab the `<slug>.miz` from the output folder and open it from the DCS mission editor or the mission list in-game. Read the generated `README.md` for the full briefing.
+
+## Generating missions with Claude
+
+The intended workflow is to open this repo in [Claude Code](https://claude.com/claude-code) and ask for a mission in natural language. The `dcs-mission` skill teaches Claude the design conventions and pydcs quirks (see [SKILL.md](.claude/skills/dcs-mission/SKILL.md)); it will author a new module under [src/dcs_mission_creator/missions/](src/dcs_mission_creator/missions/), then generate the `.miz` for you. The [bundled examples](#bundled-mission-examples) below were all produced this way — read them as templates. You can still run and iterate on any generator by hand with the CLI from the [Quick start](#quick-start).
+
+## Bundled mission examples
+
+Five worked missions ship under [src/dcs_mission_creator/missions/](src/dcs_mission_creator/missions/) — read them as templates for what a generator does with the overlay, flight packages, threats, triggers, and TTS. All are single-seat F-16C-50 sorties (coop-scalable via `--players`); every ground placement comes from the `map_overlay` tactical-scene helpers, not hand-tuned offsets.
+
+| Slug | Theater | Difficulty | Sortie |
+|------|---------|-----------|--------|
+| [`coastal_cover`](src/dcs_mission_creator/missions/coastal_cover.py) | Caucasus | trained | CAP + escort of an A-10C `Hawg` strike on a Russian armoured convoy north of Senaki; handle a 2-ship MiG-29S intercept from Sukhumi-Babushara. AWACS only, no tanker. |
+| [`kodori_strike`](src/dcs_mission_creator/missions/kodori_strike.py) | Caucasus | trained | Lead a mixed package (`Weasel` SEAD, `Eagle` F-15C CAP, `Magic` AWACS, `Texaco` tanker) onto a Russian FOB in the Kodori valley; SA-6 rollback, Su-27 CAP launches on intrusion. |
+| [`abkhaz_sweep`](src/dcs_mission_creator/missions/abkhaz_sweep.py) | Caucasus | ace | Solo air-superiority sweep off the Abkhaz coast vs. Su-27 + MiG-29S aggressors from Sochi-Adler / Gudauta, under an SA-6 that forces a high fight. No support. |
+| [`daryal_run`](src/dcs_mission_creator/missions/daryal_run.py) | Caucasus | ace | Solo SEAD strike on an S-300PS (SA-10) south of Beslan; low-level ingress up the Daryal Gorge, terrain-masked HARM pop-up. AWACS only, no escort/tanker. |
+| [`eastern_shield`](src/dcs_mission_creator/missions/eastern_shield.py) | Syria | trained | SEAD an SA-6 defending the Kuweires depot, escort A-10C `Hawg` onto it, then a MiG-29S scramble + armoured reserve push. Full support: `Magic` AWACS, `Texaco` tanker, `Eagle` F-15C TARCAP. |
+
+`eastern_shield` is the Syria example; the other four are Caucasus. Each `generate <slug>` also writes a full markdown briefing (`README.md`) alongside the `.miz` — situation, package, threats, ROE, frequencies, win/loss conditions.
+
+## Supported maps
+
+**Caucasus** and **Syria** are supported: both build a full overlay (elevation, slope, roads, rivers, buildings, vegetation) and can be targeted by `generate`. Caucasus is the primary theater and carries most of the example missions; it also has a hand-tuned clip to the visible map area in [coords.py](src/dcs_mission_creator/map_overlay/coords.py). Syria builds and queries the same way but falls back to the full pydcs terrain bounds (no hand-tuned visible-map clip yet).
+
+The theater registry in [map_overlay/terrains.py](src/dcs_mission_creator/map_overlay/terrains.py) also recognises the other real-world pydcs maps by slug — `persiangulf`, `sinai`, `normandy`, `thechannel`, `falklands` — and each can build against the full-bounds fallback, but none is exercised yet; expect to add a visible-map clip in `coords.py` for clean coverage.
+
+The synthetic training-range maps (`nevada`, `marianaislands`) are recognised by name but out of scope — they have no real-world OSM / SRTM / WorldCover ground truth to build an overlay from.
+
+## How it works
 
 ```
 ┌─────────────────────────┐      ┌──────────────────────────────┐
@@ -31,44 +107,13 @@ The intended workflow is to open this repo in [Claude Code](https://claude.com/c
 
 The overlay lives under [src/dcs_mission_creator/resources/overlays/&lt;theater&gt;/](src/dcs_mission_creator/resources/overlays/) and is the only artefact that needs rebuilding when a new theater is added. Mission scripts in [src/dcs_mission_creator/missions/](src/dcs_mission_creator/missions/) consume it through the runtime API in [map_overlay/query.py](src/dcs_mission_creator/map_overlay/query.py).
 
-## Generating a mission
+---
 
-**Build the map overlay first.** Every generator reads the per-theater overlay at runtime (elevation, slope, roads, ...), so the Caucasus layers must exist before `generate` will work — see [Building the overlay](#building-the-overlay) below. Skip this only if the layers are already built under `src/dcs_mission_creator/resources/overlays/caucasus/`.
+# Reference: the map overlay
 
-```bash
-uv run dcs-mission-creator list                    # show available missions
-uv run dcs-mission-creator generate coastal_cover  # writes <slug>.miz + README.md
-```
+Everything below is internals — you do **not** need it to generate a mission (the [Quick start](#quick-start) covers that). Read on if you're building an overlay for a new theater, debugging placement, or extending the pipeline.
 
-### Where the files land
-
-Each generator writes two files into one output folder: the `<slug>.miz` (load this in DCS) and a `README.md` mission briefing.
-
-- **Default:** `$DCS_MISSIONS_FOLDER/IAGeneratedMissions/<slug>/`. Set the `DCS_MISSIONS_FOLDER` env var to your DCS `Missions` folder so the `.miz` drops straight where DCS can load it; `generate` errors out if the var is unset and no `--output-dir` is given.
-- **Override:** `--output-dir DIR` writes both files to `DIR` instead.
-
-```bash
-export DCS_MISSIONS_FOLDER="$HOME/Saved Games/DCS/Missions"
-uv run dcs-mission-creator generate coastal_cover
-#   → $DCS_MISSIONS_FOLDER/IAGeneratedMissions/coastal_cover/coastal_cover.miz
-#   → $DCS_MISSIONS_FOLDER/IAGeneratedMissions/coastal_cover/README.md
-
-uv run dcs-mission-creator generate coastal_cover --output-dir out/coastal_cover
-```
-
-Grab the `.miz` from that folder and open it from the DCS mission editor or the mission list in-game.
-
-## Supported maps
-
-**Caucasus** and **Syria** are supported: both build a full overlay (elevation, slope, roads, rivers, buildings, vegetation) and can be targeted by `generate`. Caucasus is the primary theater and carries the worked example mission ([coastal_cover.py](src/dcs_mission_creator/missions/coastal_cover.py)); it also has a hand-tuned clip to the visible map area in [coords.py](src/dcs_mission_creator/map_overlay/coords.py). Syria builds and queries the same way but falls back to the full pydcs terrain bounds (no hand-tuned visible-map clip yet).
-
-The theater registry in [map_overlay/terrains.py](src/dcs_mission_creator/map_overlay/terrains.py) also recognises the other real-world pydcs maps by slug — `persiangulf`, `sinai`, `normandy`, `thechannel`, `falklands` — and each can build against the full-bounds fallback, but none is exercised yet; expect to add a visible-map clip in `coords.py` for clean coverage.
-
-The synthetic training-range maps (`nevada`, `marianaislands`) are recognised by name but out of scope — they have no real-world OSM / SRTM / WorldCover ground truth to build an overlay from.
-
-See [Out of scope (v1)](#out-of-scope-v1) for the full picture.
-
-## Map overlay — what it stores
+## What it stores
 
 | Layer            | Format                | Built from                       | Used for                                            |
 |------------------|-----------------------|----------------------------------|-----------------------------------------------------|
@@ -132,6 +177,14 @@ Each builder is sized to fit comfortably below ~8 GB resident on a 15 GB VM:
 
 The Overpass API tile JSONs and SRTM `.hgt` tiles cache to `_build_cache/<theater>/`, so re-running a build after a config change skips the network entirely.
 
+### Visualising a build
+
+```bash
+uv run dcs-mission-creator map-overlay inspect caucasus --out /tmp/caucasus_layers.png
+```
+
+Emits a 6-panel composite (one panel per zarr layer) downsampled to ~4000 px on the long edge. Use this for sanity-checking new builds and for tuning OSM class filters in `manifest.json`.
+
 ## Querying the overlay at runtime
 
 Missions open the overlay once and query it with point or window APIs:
@@ -180,7 +233,7 @@ These return `dcs.mapping.Point` instances that the mission builder threads stra
 
 A worked example lives in [missions/coastal_cover.py](src/dcs_mission_creator/missions/coastal_cover.py): a Russian convoy snapped onto a real road north of Senaki, a two-launcher SA-13 placed on a prominence west of the convoy with verified line-of-sight, and a 55G6 EWR on high ground inland from Sukhumi-Babushara.
 
-## Voice lines (TTS)
+# Voice lines (TTS)
 
 Mission scripts speak to the player through in-game audio triggers, not just text messages. The [`core/tts/`](src/dcs_mission_creator/core/tts/) package renders briefings, ATC chatter, AWACS calls, and side-task announcements to WAV and wires them into pydcs `SoundTo*` actions.
 
@@ -211,29 +264,7 @@ from dcs_mission_creator.core.tts import PiperBackend, VoiceSynth
 tts = VoiceSynth(backend=PiperBackend(voice="en_GB-alan-medium", length_scale=1.05))
 ```
 
-## Visualising the overlay
-
-```bash
-uv run dcs-mission-creator map-overlay inspect caucasus --out /tmp/caucasus_layers.png
-```
-
-Emits a 6-panel composite (one panel per zarr layer) downsampled to ~4000 px on the long edge. Use this for sanity-checking new builds and for tuning OSM class filters in `manifest.json`.
-
-## Bundled mission examples
-
-Five worked missions ship under [src/dcs_mission_creator/missions/](src/dcs_mission_creator/missions/) — read them as templates for what a generator does with the overlay, flight packages, threats, triggers, and TTS. All are single-seat F-16C-50 sorties (coop-scalable via `--players`); every ground placement comes from the `map_overlay` tactical-scene helpers, not hand-tuned offsets.
-
-| Slug | Theater | Difficulty | Sortie |
-|------|---------|-----------|--------|
-| [`coastal_cover`](src/dcs_mission_creator/missions/coastal_cover.py) | Caucasus | trained | CAP + escort of an A-10C `Hawg` strike on a Russian armoured convoy north of Senaki; handle a 2-ship MiG-29S intercept from Sukhumi-Babushara. AWACS only, no tanker. |
-| [`kodori_strike`](src/dcs_mission_creator/missions/kodori_strike.py) | Caucasus | trained | Lead a mixed package (`Weasel` SEAD, `Eagle` F-15C CAP, `Magic` AWACS, `Texaco` tanker) onto a Russian FOB in the Kodori valley; SA-6 rollback, Su-27 CAP launches on intrusion. |
-| [`abkhaz_sweep`](src/dcs_mission_creator/missions/abkhaz_sweep.py) | Caucasus | ace | Solo air-superiority sweep off the Abkhaz coast vs. Su-27 + MiG-29S aggressors from Sochi-Adler / Gudauta, under an SA-6 that forces a high fight. No support. |
-| [`daryal_run`](src/dcs_mission_creator/missions/daryal_run.py) | Caucasus | ace | Solo SEAD strike on an S-300PS (SA-10) south of Beslan; low-level ingress up the Daryal Gorge, terrain-masked HARM pop-up. AWACS only, no escort/tanker. |
-| [`eastern_shield`](src/dcs_mission_creator/missions/eastern_shield.py) | Syria | trained | SEAD an SA-6 defending the Kuweires depot, escort A-10C `Hawg` onto it, then a MiG-29S scramble + armoured reserve push. Full support: `Magic` AWACS, `Texaco` tanker, `Eagle` F-15C TARCAP. |
-
-`eastern_shield` is the Syria example; the other four are Caucasus. Each `generate <slug>` also writes a full markdown briefing (`README.md`) alongside the `.miz` — situation, package, threats, ROE, frequencies, win/loss conditions.
-
-## Adding a new mission
+# Adding a new mission
 
 1. Create `src/dcs_mission_creator/missions/<slug>.py` defining one `MissionBuilder` subclass with `name`, `title`, `build_miz`, and `readme`.
 2. Add a `main()` at the bottom so `python -m dcs_mission_creator.missions.<slug>` works.
@@ -241,7 +272,7 @@ Five worked missions ship under [src/dcs_mission_creator/missions/](src/dcs_miss
 
 See [.claude/skills/dcs-mission/SKILL.md](.claude/skills/dcs-mission/SKILL.md) for the design playbook (faction naming, weather conventions, pydcs API quirks, lint and type-check commands).
 
-## Out of scope (v1)
+# Out of scope (v1)
 
 - Theaters beyond Caucasus and Syria (pipeline is per-map configurable; Persian Gulf / Sinai / others work off the full-bounds fallback, cleaner once a visible-map clip is added to `coords.py`).
 - Synthetic theaters (Nevada, Marianas combat range) — no real-world OSM / SRTM / WorldCover ground truth.
