@@ -12,10 +12,12 @@ description: >
 Turn vague mission requests ("Caucasus CAP at dawn", "SEAD against an SA-6 near
 Bandar Abbas") into a runnable pydcs script that builds a `.miz`.
 
-**This file is design intent only.** Package layout, pydcs API specifics
-(terrain classes, flight helpers, StartType, Skill enum, VoiceSynth methods,
-formation API, gotchas), and lint/type-check rules live in
-[CLAUDE.md](../../../CLAUDE.md). Consult it before guessing API shapes.
+**This file is design intent only.** The pydcs API (terrain classes, flight
+helpers, StartType, Skill enum, formation API, F10 drawings, gotchas) lives
+in [PYDCS_REFERENCE.md](PYDCS_REFERENCE.md) — consult it before guessing API
+shapes. Project conventions (package layout, the `VoiceSynth` / `PlanOverlay`
+helpers, script structure, lint / type-check) live in
+[CLAUDE.md](../../../CLAUDE.md).
 
 ## When to invoke
 
@@ -30,7 +32,7 @@ Confirm each. If the user didn't specify, **pick a sensible default and state
 it in one line** — ask for tweaks afterwards.
 
 1. **Theater** — terrain instance passed to `Mission(terrain=...)`. Default:
-   `Caucasus`. Full class list in CLAUDE.md.
+   `Caucasus`. Full class list in PYDCS_REFERENCE.md.
 2. **Mission type** — mix / CAP / strike / SEAD / CAS / anti-ship / escort /
    training. Default: mix.
 3. **Player faction** — name the side by faction (USA, USAF, Russia, Ukraine,
@@ -222,7 +224,7 @@ cockpit; the WAV catches attention.
 Rule: every such trigger gets a `MessageToAll` / `MessageToCoalition` AND a
 matching `VoiceSynth.attach_to_*` call. Pass the **same string** to both so
 on-screen and audio match word-for-word. `VoiceSynth` API + wiring in
-CLAUDE.md.
+CLAUDE.md (project-owned helper).
 
 ### When voice is required
 
@@ -268,7 +270,8 @@ That's the giveaway "spawned by a script" look. Pick by purpose:
 | `Scattered` | **Default for static defences** — SAM sites, AAA on a hilltop, FOB garrisons, dispersed infantry. `max_radius=40–120 m`. |
 
 Single-unit groups (`group_size=1`) ignore the kwarg — spread via separate
-positions instead. Formation enum + spawn / post-spawn API in CLAUDE.md.
+positions instead. Formation enum + spawn / post-spawn API in
+PYDCS_REFERENCE.md.
 
 ## F10 map briefing drawings
 
@@ -276,7 +279,8 @@ Draw the **plan** on the F10 map so the player reads the sortie at a glance,
 not just from prose. Annotations complement the briefing text and voice
 check-ins — same intent, different channel. Put them on the `Blue` layer
 (player-facing side); never annotate the enemy's own layer. Drawing API
-(`m.drawings`, layers, `Rgba`, `StandardIcon`, `add_*`) in CLAUDE.md.
+(`m.drawings`, layers, `Rgba`, `StandardIcon`, `add_*`) in PYDCS_REFERENCE.md;
+the project-owned `PlanOverlay` wrapper is in CLAUDE.md.
 
 **Always draw (every difficulty)** — the friendly plan, which is never a
 secret:
@@ -340,7 +344,7 @@ Role-compatibility:
 ## Coop player slots
 
 DCS coop = multiple humans sharing a flight. Mark slots flyable by setting
-each unit's `skill = Skill.Client` (CLAUDE.md covers the API).
+each unit's `skill = Skill.Client` (PYDCS_REFERENCE.md covers the API).
 
 Rules:
 
