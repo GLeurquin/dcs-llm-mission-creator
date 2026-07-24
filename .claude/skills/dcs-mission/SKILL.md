@@ -9,550 +9,317 @@ description: >
   for a mission file under this project.
 ---
 
-This skill turns vague mission requests ("a Caucasus CAP at dawn", "SEAD package
-against an SA-6 site near Bandar Abbas") into a runnable pydcs script that produces
-a `.miz` the user can open in the DCS Mission Editor.
+Turn vague mission requests ("Caucasus CAP at dawn", "SEAD against an SA-6 near
+Bandar Abbas") into a runnable pydcs script that builds a `.miz`.
+
+**This file is design intent only.** Package layout, pydcs API specifics
+(terrain classes, flight helpers, StartType, Skill enum, VoiceSynth methods,
+formation API, gotchas), and lint/type-check rules live in
+[CLAUDE.md](../../../CLAUDE.md). Consult it before guessing API shapes.
 
 ## When to invoke
 
 - User asks for a DCS mission, `.miz` file, training scenario, or pydcs script.
-- User to add a new scenario to this repo.
+- User wants to add a new scenario to this repo.
 
 Skip if the user is asking about DCS Lua, the in-game ME, or a non-pydcs tool.
 
-## Before writing code
+## The eight scenario knobs
 
-Confirm the eight scenario knobs. If the user didn't specify, **pick sensible
-defaults and state them in one line** — and ask the user for tweaks if they want:
+Confirm each. If the user didn't specify, **pick a sensible default and state
+it in one line** — ask for tweaks afterwards.
 
-1. **Theater** — pass a terrain instance to `Mission(terrain=...)`. Available
-   classes in `dcs.terrain`: `Caucasus`, `PersianGulf`, `Syria`, `Nevada`,
-   `Normandy`, `TheChannel`, `Sinai`, `Falklands`, `MarianaIslands` (note the
-   class is `MarianaIslands`, not `Marianas`). Default: `Caucasus`. See
-   [CLAUDE.md](../../../CLAUDE.md) for the full verified list.
-2. **Mission type** — mix / CAP / strike / SEAD / CAS / anti-ship / escort / training. (default: mix)
+1. **Theater** — terrain instance passed to `Mission(terrain=...)`. Default:
+   `Caucasus`. Full class list in CLAUDE.md.
+2. **Mission type** — mix / CAP / strike / SEAD / CAS / anti-ship / escort /
+   training. Default: mix.
 3. **Player faction** — name the side by faction (USA, USAF, Russia, Ukraine,
-   Germany, ...), not by `red` / `blue`. Default: USA. Coalition (blue/red)
-   is a pydcs implementation detail: assign each faction's country to a
-   coalition with `airport.set_blue()` / `set_red()`, but never use the
-   words *red* or *blue* in scenario narrative, briefings, or task text.
-4. **Player airframe** — default: `dcs.planes.F_16C_50`. See
-   [Player airframe knob](#player-airframe-knob) for the supported map and
-   role-compatibility rules.
-5. **Coop player count** — 1–4 (default: 1). Number of client slots in the player
-   flight. See [Coop player slots](#coop-player-slots).
-6. **Difficulty** — `recruit` / `trained` / `veteran` / `ace` (default: `trained`).
-   Drives enemy AI skill, threat density, support package, and weather.
-   See [Difficulty knob](#difficulty-knob).
-7. **Time + weather** — defaults to mid-morning, clear, light wind unless the user
-   asks for night, IMC, or a specific season. Difficulty can override this.
-8. **Mission length** — defaults to **45–60 minutes** of total flight time
-   (transit + on-station + RTB). See [Mission pacing](#mission-pacing) for how
-   this constrains distances, fuel, and threat staging.
+   Germany, …), never by `red` / `blue`. Default: USA. See *Faction naming*.
+4. **Player airframe** — default `dcs.planes.F_16C_50` (flexible across CAP /
+   CAS / SEAD / strike). See *Player airframe*.
+5. **Coop player count** — 1–4 client slots. Default: 1. See *Coop slots*.
+6. **Difficulty** — recruit / trained / veteran / ace. Default: trained. See
+   *Difficulty*.
+7. **Time + weather** — default mid-morning, clear, light wind. Difficulty,
+   theater, and season can override.
+8. **Mission length** — default 45–60 min total flight time. See *Pacing*.
 
-## Faction naming (never "red"/"blue" in narrative)
+## Faction naming
 
-Scenarios must talk about **factions** (USA, USAF, Russia, Russian, Ukraine,
-Ukrainian, Germany, ...), not pydcs coalitions. The split:
-
-| Where                                       | Wording                       |
-|---------------------------------------------|-------------------------------|
-| pydcs API: `set_blue` / `set_red` / `Coalition.Blue` | Keep `blue` / `red`. |
-| Code comments inside `build_miz` helpers    | `blue side` / `red side` OK   |
-| `readme()` markdown briefing                | "Russian convoy", "USAF A-10s"|
-| `_in_game_briefing()` plain text            | "Russian MiG-29S", "USAF AWACS" |
-| `set_description_text` / `*task_text` body  | Faction names only            |
-| Trigger `MessageToAll` / `MessageToCoalition` text | Faction names only      |
-
-In-game text the player reads must not contain the words *red* or *blue*.
-The pydcs method names (`bluetask` / `redtask`) and the underlying coalition
-keys are an implementation detail of the engine.
-
-## Project conventions
-
-Lives in [CLAUDE.md](../../../CLAUDE.md) — see *Package layout*, *Script
-structure: small named functions*, and *Lint and type-check*. That file is
-the source of truth for the `MissionBuilder` contract, `build_miz` /
-`readme()` signatures, argparse `main()` pattern, auto-discovery in
-[__main__.py](../../../src/dcs_mission_creator/__main__.py), output folder defaults,
-and the helper-method orchestration rules. The skill focuses on the
-*design* knobs below; the project conventions live in CLAUDE.md so they
-don't drift between this skill and the codebase.
+Briefings and in-game text name **factions** (USA, USAF, Russia, Ukrainian,
+…), never `red` / `blue`. The words `blue` / `red` exist only in pydcs API
+calls (`airport.set_blue()`, `Coalition.Blue`, `bluetask_text`) and code
+comments — never in `readme()`, `set_description_text`, side-task bodies, or
+trigger messages. Full mapping in CLAUDE.md.
 
 ## Realism checklist
 
-A "realistic" mission is more than spawning aircraft. Hit these before declaring done:
+A "realistic" mission is more than spawning aircraft. Hit these before done:
 
-- **Time of day matches the threat picture.** Night CAS implies IR-guided weapons
-  and NVG-equipped airframes; high noon strike implies LGB self-lase windows.
-- **Weather is plausible for the theater + season.** Persian Gulf in July: 40°C,
-  haze, light NW wind. Caucasus in January: -5°C, low overcast, snow on the deck.
-  Set `season_temperature`, cloud base/thickness, and wind at all three altitudes.
-- **Airbases are friendly to the assigned faction.** Don't spawn USA flights
-  from a Russian-coalition airfield — call `airport.set_blue()` /
-  `set_red()` explicitly. (Coalition assignment is the only place `blue` /
-  `red` appears; briefings still name the faction.)
-- **Package composition makes sense.** A strike needs escort + SEAD + tanker +
-  AWACS, not a lone F-16 with bombs. Even small missions get an AWACS or GCI.
-- **Loadouts match the task.** Don't send Mavericks against an SA-10 — use HARMs.
-  Don't send a four-ship of F-15Cs with bombs.
-- **Threats are layered, not stacked.** One SA-6 with a search radar + a few
-  shilkas is harder than five SA-10s on one hill. Players should be able to
-  reason about the threat picture.
-- **Briefing text exists.** Use `set_description_text`,
-  `set_description_bluetask_text`, `set_description_redtask_text`. Include
-  bullseye, AO coordinates, ROE, package callsigns, and bingo fuel. The
-  text inside refers to factions (USA, Russia, Ukraine, ...) — `bluetask` /
-  `redtask` is only the API method name, not how you describe the side
-  to the player.
-- **Frequencies and TACAN.** AWACS and tankers get a frequency + TACAN channel
-  in the briefing so the player can actually use them.
-- **AI skill is varied.** Don't set everything to Excellent — mix High / Average
-  for ground units, Excellent only for the boss threat.
-- **Create a scenario** Give a mission context, a scenario and a purpose. Use in-game text to set the scene, and react to player actions with text and actions.
-- **Immersive missions** Make the player feel like they're in a real operation, not a training exercise. Use narrative, varied threats, and dynamic events to create tension and engagement. Use the text fields and voice to tell a story, not just list objectives.
-
-## Ground unit formations
-
-`m.vehicle_group(...)` and `m.vehicle_group_platoon(...)` default to
-`formation=VehicleGroup.Formation.Line` — units placed perpendicular to
-`heading` at fixed 20 m spacing. That straight-line look is obvious from the
-air and unrealistic for anything that isn't a column on a road.
-
-`dcs.unitgroup.VehicleGroup.Formation` values (set via the `formation=` kwarg
-on spawn, or by calling `group.formation_<name>(heading, ...)` after):
-
-| Formation   | Layout                                         | Use for                                 |
-|-------------|------------------------------------------------|-----------------------------------------|
-| `Line`      | Row perpendicular to heading, 20 m spacing     | Convoy column on a road (`OnRoad` snaps it once moving) |
-| `Vee`       | V shape around the lead unit                   | Advancing armor, hasty defense          |
-| `Rectangle` | `ceil(sqrt(N))` grid                           | Motor-pool / staging area, parade ground|
-| `Star`      | Clustered blocks of 8 around the centre        | Dense cluster, rare                     |
-| `Scattered` | Random positions within a radius, collision-checked | **Default for static defenses**: SAM sites, AAA on a hilltop, FOB garrisons, dispersed infantry |
-
-Rules:
-
-- **Static ground clusters (SAM sites, AAA, FOB garrisons, dispersed
-  defenders) use `Scattered`.** Line is the giveaway "spawned by a script"
-  look. Scattered with a sensible `max_radius` (40–120 m) reads as a real
-  emplacement.
-- **Convoys on roads keep `Line`** with `move_formation=PointAction.OnRoad`.
-  Once the first `OnRoad` waypoint fires, road-snap controls spacing.
-- **Armor pushes use `Vee` or `Rectangle`** when the platoon is supposed to
-  look like a moving combat formation, not a parked motor pool.
-- **Single-unit groups (`group_size=1`)** — formation kwarg is a no-op; skip
-  it. Spread is achieved by picking different `position` per group, not by
-  formation.
-- For finer control, override after spawn:
-  ```python
-  grp = m.vehicle_group_platoon(...)
-  grp.formation_scattered(heading=180, max_radius=80)   # custom radius
-  grp.formation_vee(heading=90, distance=40)            # wider Vee
-  ```
-  Or post-process individual units (`u.position`, `u.heading`) for
-  hand-tuned placement.
-
-Apply in code:
-
-```python
-from dcs.unitgroup import VehicleGroup
-
-sa6 = m.vehicle_group_platoon(
-    russia, "SAM Kodori-6", sa6_types,
-    position=sa6_pos, heading=180,
-    formation=VehicleGroup.Formation.Scattered,
-)
-```
+- **Time + threats match.** Night CAS → IR weapons + NVG airframes. High
+  noon strike → LGB self-lase windows.
+- **Weather plausible for theater + season.** Persian Gulf July: 40 °C, haze,
+  light NW. Caucasus January: −5 °C, low overcast, snow.
+- **Airbases coalition-correct.** Don't spawn USA flights from a
+  Russian-coalition field — call `set_blue()` / `set_red()` explicitly.
+- **Package composition makes sense.** A strike needs escort + SEAD + tanker
+  + AWACS, not a lone F-16 with bombs. Even small missions get AWACS or GCI.
+- **Loadouts match the task.** No Mavericks on SA-10 (use HARM); no F-15Cs
+  with bombs.
+- **Threats layered, not stacked.** One SA-6 + a few Shilkas reads harder
+  than five SA-10s on one hill.
+- **Briefing exists.** `set_description_text`, `*_bluetask_text`,
+  `*_redtask_text` with bullseye, AO coords, ROE, callsigns, bingo fuel.
+- **Frequencies + TACAN** for AWACS and tankers in the briefing.
+- **AI skill varied.** Don't set everything Excellent. Mix High / Average
+  for ground; Excellent only for boss threats.
+- **Tell a story.** Mission context, scene-setting intro, dynamic reactions
+  to player actions via text + voice. Not a target list.
+- **No targets in deep forests.**
 
 ## Mission pacing
 
-Default total flight time = **45–60 minutes** unless the user specifies
-otherwise. Anything between roughly 20 min ("quick rep") and 180 min ("deep
-strike") should be reachable by scaling the same pacing model — the rules
-below are length-parametric, not tied to the default.
+Default total flight time `L` = **45–60 min** unless the user specifies.
+Range 20 min ("quick rep") to 180 min ("deep strike") reachable by scaling
+the same model.
 
-### Phase budget (proportional model)
+### Phase budget
 
-Subtract fixed overhead from the total `L` minutes, then split the rest 1:2:1
-(transit out : on-station : transit back).
+Subtract fixed overhead from `L`, split rest 1:2:1.
 
-| Phase                     | Budget                                       |
-|---------------------------|----------------------------------------------|
-| Startup + taxi (`T_start`)| ~2 min hot ramp (default), ~7 min cold start |
-| RTB + recovery (`T_rtb`)  | ~7 min approach + landing buffer             |
-| Useful budget             | `U = L − T_start − T_rtb`                    |
-| Transit out               | `0.25 × U`                                   |
-| On-station / target work  | `0.50 × U`                                   |
-| Transit back              | `0.25 × U`                                   |
+| Phase                | Budget                                  |
+|----------------------|-----------------------------------------|
+| `T_start` (startup)  | ~2 min hot ramp (default), ~7 min cold  |
+| `T_rtb` (recovery)   | ~7 min approach + landing               |
+| Useful `U`           | `L − T_start − T_rtb`                   |
+| Transit out          | `0.25 × U`                              |
+| On-station           | `0.50 × U`                              |
+| Transit back         | `0.25 × U`                              |
 
-The default hot-ramp start (`StartType.Warm`) keeps `T_start` low so the
-on-station window stays usable for short missions. Only escalate to
-`StartType.Cold` (~7 min) if the user is explicitly running a startup-procedure
-rep, and re-check that the on-station window doesn't collapse. For very long
-missions (`L ≥ 120 min`) plan at least one mid-mission tanker pass into the
-on-station phase.
+Hot ramp (`StartType.Warm`) is default. Only escalate to `Cold` (~7 min) if
+the user asks for a startup-procedure rep. For `L ≥ 120 min`, plan a
+mid-mission tanker pass.
 
-### Distance cap (derived from transit budget)
+### Distance cap
 
-Jet transit averages ~14 km/min (450 kn ground speed). Helicopters ~3 km/min
-(140 kn). The AO / patrol box / target should sit within:
+Jets cruise ~14 km/min (450 kn GS); helicopters ~3 km/min (140 kn).
 
 ```
-max_ao_distance_m = transit_out_minutes × cruise_speed_m_per_min
-                  = (0.25 × U) × cruise_speed_m_per_min
+max_ao_distance_m = (0.25 × U) × cruise_speed_m_per_min
 ```
 
-Worked examples (jets, default hot ramp, `T_start=2`, `T_rtb=7`):
+| `L`  | Transit out | Max AO (jet) |
+|------|-------------|--------------|
+| 30   | 5.25 min    | ~75 km       |
+| 50   | 10.25 min   | ~145 km      |
+| 60   | 12.75 min   | ~180 km      |
+| 90   | 20.25 min   | ~285 km      |
+| 120  | 27.75 min   | ~390 km      |
 
-| `L`     | `U`     | Transit out | Max AO distance |
-|---------|---------|-------------|-----------------|
-| 30 min  | 21 min  | 5.25 min    | ~75 km          |
-| 50 min  | 41 min  | 10.25 min   | ~145 km         |
-| 60 min  | 51 min  | 12.75 min   | ~180 km         |
-| 90 min  | 81 min  | 20.25 min   | ~285 km         |
-| 120 min | 111 min | 27.75 min   | ~390 km         |
-
-Cold start (`T_start=7`) trims ~5 minutes from every row — re-derive if the
-user opts in.
-
-Push past these caps only if you're also adjusting fuel (tanker, externals,
-or a closer divert field).
+Cold start trims ~5 min from every row. Push past caps only with extra fuel
+(tanker, externals, closer divert).
 
 ### Fuel
 
-Compare round-trip + on-station time against the airframe's combat endurance.
-Rough internal-fuel figures (hot, combat power):
-
-| Airframe         | Internal endurance |
-|------------------|--------------------|
-| F-16C, F/A-18C   | ~35 min            |
-| F-15C, Mirage 2000C | ~50 min         |
-| F-14B            | ~70 min            |
-| A-10C            | ~90 min            |
-| Most helicopters | ~90–120 min        |
-
-If `L > internal_endurance − 10 min margin`, **spawn a tanker** (override the
-difficulty-driven support drop) and call it out in the briefing. Don't rely
-on the player to know they're under-fuelled.
+Internal endurance (hot, combat power): F-16C / F-18C ~35 min, F-15C /
+M2000C ~50 min, F-14B ~70 min, A-10C ~90 min, helos ~90–120 min. If
+`L > endurance − 10 min`, **spawn a tanker** even if the difficulty drops
+support — and announce it in the briefing.
 
 ### Threat staging
 
-Spread enemy contact across the on-station window so the flight doesn't burn
-through everything in the first five minutes. Aim for more than one wave depending
-on length.
-
-Space waves evenly across on-station time and use distance to phase them
-naturally: wave `i` starts at `position` offset roughly proportional to the
-delay you want before contact. With AI cruise around 14 km/min, an additional
-14 km of standoff buys ~1 min more before merge. For deterministic timing,
-fall back to `mission.triggerrules` activation.
+Spread enemy contact across the on-station window. Multiple waves, spaced
+~14 km of standoff per extra minute before merge. For deterministic timing,
+fall back to `triggerrules` activation.
 
 ### Patrol legs
 
-Size race-track legs so the flight makes **3–5 passes during the on-station
-window**, regardless of mission length:
+Size race-track legs so the flight makes **3–5 passes during on-station**:
 
 ```
-leg_length_m ≈ (on_station_minutes × cruise_speed_m_per_min) / (2 × laps_target)
+leg_length_m ≈ (on_station_min × cruise_speed_m_per_min) / (2 × laps_target)
 ```
 
-For jets at 14 km/min over a 25-min on-station, targeting 4 laps:
-`(25 × 14_000) / (2 × 4) ≈ 44 km`. Longer missions get longer legs (or more
-patrol stations), not laps that drag on for 15 minutes each.
+Jets, 25 min on-station, 4 laps → `(25 × 14_000) / 8 ≈ 44 km`. Longer
+missions get longer legs or more stations, not 15-minute laps.
 
-### Support on-station times
+### Support on-station
 
-`awacs_flight` and `refuel_flight` use `race_distance` (in meters) to size
-their racetrack. The default `120_000 m` AWACS / `80_000 m` tanker tracks
-cover roughly 60–90 min on station each — fine for default-length missions.
-For longer missions, **explicitly scale** `race_distance` so the support
-asset lives the full sortie:
+`awacs_flight` / `refuel_flight` default tracks (120 km / 80 km) cover
+60–90 min. For longer missions:
 
 ```
-race_distance_m = max(60_000, length_minutes × 1_500)   # ~1.5 km/min station-keeping
+race_distance_m = max(60_000, L × 1_500)
 ```
 
-### Mission-end behaviour
+### Mission end
 
-There is **no `mission.duration` field in pydcs.** Length is an emergent
-property of distances, fuel, threat staging, and (optionally) triggers.
+No `mission.duration` in pydcs. Length is emergent (distances + fuel +
+threats). Let it end naturally — bandits down + bingo fuel → RTB. Always
+print a success/failure message so the player knows the sortie resolved.
 
-Let it end naturally — when bandits are killed and the flight is bingo,
-   players will RTB. This is what most missions should do.
-   It should print a message to let the player know the mission ends (either success or failure depending on objectives)
+## Difficulty
 
-## Trigger announcements
+Difficulty is a **judgement call**, not a recipe. The label
+(recruit / trained / veteran / ace) is a feel; you reach it by combining
+several dials. Two missions at the same label should feel different — varied
+texture beats a fingerprint.
 
-**Every gameplay-affecting trigger must announce itself to the player —
-with both a text message AND a synthesized voice-over.** If the trigger
-fires silently, the player sees an effect (a new threat appears, a group
-activates, an objective changes) without knowing *why* — it reads as a
-bug or as the mission cheating. Text alone is easy to miss while the
-player is heads-down in the cockpit; the WAV from `VoiceSynth` is what
-actually catches their attention.
+### Intent per label
 
-Rule: any `TriggerOnce` / `TriggerContinious` whose action changes the world
-(`ActivateGroup`, `AITaskPush`, `AITaskSet`, `Destroy`, `FlagSet` that gates
-other logic, success/failure) must include a `MessageToAll` or
-`MessageToCoalition` action **and** a `VoiceSynth.attach_to_*` call that
-renders the same text to audio and pushes a `SoundTo*` action onto the rule.
+| Label    | Intent                                                                   |
+|----------|--------------------------------------------------------------------------|
+| recruit  | Forgiving. Pilot leaves with kills + successful RTB.                     |
+| trained  | Squadron default. Demands competence; punishes carelessness.             |
+| veteran  | Hard. Package coordination, fuel, SA all required.                       |
+| ace      | Brutal. One mistake ends the sortie. Currency-builds only.               |
 
-### Voice-overs are the default
+### Dials
 
-Every mission builder must instantiate `VoiceSynth` in `__init__` and call
-`self._voice.attach_to_all(m, rule, text)` (or `attach_to_coalition` /
-`attach_to_group`) on **every** gameplay-affecting trigger. This includes:
+| Dial               | Range                                                          |
+|--------------------|----------------------------------------------------------------|
+| Enemy AI skill     | Average / Good / High / Excellent (mix freely)                 |
+| Numeric balance    | bandits outnumbered → 3× player flight                         |
+| Enemy missile gen  | gen-3 (R-27 / AIM-7) vs gen-4 (R-77 / AIM-120)                 |
+| SAM threats        | none → MANPADS → SHORAD → SA-6 → SA-10                         |
+| EWR / GCI          | none → EWR → EWR + GCI vectoring                               |
+| Support package    | AWACS + tanker + escort → AWACS only → none → datalink-denied  |
+| Weather / vis      | clear → scattered → broken → overcast/IMC → night              |
+| Fuel margin        | comfortable → tight → fuel-critical                            |
+| Ingress / egress   | clean → threats on route → divert field required               |
+| Player loadout     | armament gen, missile / bomb types                              |
+| AI wingmen         | count, skill, behaviour                                        |
+
+### Guidelines
+
+- **Match airframe + mission type.** Veteran F-15C CAP leans on bandit
+  count + missile gen + GCI, not SAMs. Veteran SEAD inverts that.
+- **Vary across runs.** Same label, different texture each time.
+- **Honour overrides.** "Trained but no AWACS" → keep support none, pull
+  other dials down so overall feel stays trained.
+- **Sanity-check worst case.** 2-player flight vs 8 Excellent Flankers +
+  SA-10 + IMC + no support is unplayable, not ace. Back off the least
+  thematic dial.
+- **Make the label bite.** Ace means night/IMC + no support *actually
+  applied*. Recruit means real support + clear weather, not just lowered
+  skill.
+- **Document composition in the briefing** so the user sees what you built:
+  > Difficulty: veteran. Excellent Flankers, bandits 1.5× player flight,
+  > AIM-120/R-77, AWACS only, broken cloud layer.
+
+Player flight skill is **always** `Skill.Client`, never difficulty-derived.
+AI wingmen on the player's flight match difficulty (Average on recruit,
+Excellent on ace).
+
+## Trigger announcements (text + voice)
+
+**Every gameplay-affecting trigger announces itself with both an on-screen
+message AND synthesized voice-over.** Silent triggers that change the world
+(`ActivateGroup`, `AITaskPush`, `AITaskSet`, `Destroy`, gating `FlagSet`,
+success/failure) read as bugs or cheating. Text alone is missable in the
+cockpit; the WAV catches attention.
+
+Rule: every such trigger gets a `MessageToAll` / `MessageToCoalition` AND a
+matching `VoiceSynth.attach_to_*` call. Pass the **same string** to both so
+on-screen and audio match word-for-word. `VoiceSynth` API + wiring in
+CLAUDE.md.
+
+### When voice is required
 
 - Mission start (`TriggerStart`) — AWACS/Magic check-in with the picture.
-- Support package check-ins — tanker on station, TARCAP on station,
-  strike holding for SAM-safe call. Use `TimeAfter` triggers staged
-  across the early sortie.
-- Objective gates — SAM down, depot down, MiGs scrambling, reserve
-  pushing, etc.
+- Support check-ins (tanker on station, TARCAP up, strike holding for
+  SAM-safe call) — `TimeAfter` triggers staged across early sortie.
+- Objective gates — SAM down, depot down, MiGs scrambling, reserve pushing.
 - Success and failure.
 
-The text passed to `attach_to_*` should be **what the player would hear
-on the radio** — short, callsigns up front, no narration prose ("Magic,
-Hawg holding west of AO, ready for SAM safe call." not "The A-10s are
-waiting"). Re-use the exact message string already passed to
-`MessageToAll` / `MessageToCoalition` so the on-screen text and the audio
-match word-for-word.
+### What the message should say
 
-Patterns:
+Radio-style. Callsign first. No narration prose.
 
-| Trigger type                  | What the message should say                                |
-|-------------------------------|------------------------------------------------------------|
-| Reinforcement / reserve push  | "Russian armor reserve activated, pushing toward Senaki."  |
-| Bandit late-activation        | "MiG-29S airborne out of Sukhumi-Babushara, bearing 270."  |
-| SAM activation / radar lit    | "SA-6 radar emissions detected south of the AO."           |
-| Friendly support inbound      | "Hawg 1-2 checking in, IP in 8 minutes."                   |
-| Objective change              | "New tasking: convoy reached Senaki — withdraw to Batumi." |
-| Success / failure             | "Strike package destroyed the convoy. RTB Batumi."         |
-
-Apply in code:
-
-```python
-call = "Russian armor reserve activated, pushing south toward Senaki."
-rule = triggers.TriggerOnce(comment="Reserve counterattack")
-rule.add_condition(condition.GroupLifeLess(convoy.id, 50))
-rule.add_action(action.ActivateGroup(reserve.id))
-rule.add_action(action.MessageToAll(m.string(call), seconds=15))
-self._voice.attach_to_all(m, rule, call)        # default: voice + text
-m.triggerrules.triggers.append(rule)
-```
-
-For the mission-start picture call:
-
-```python
-intro = triggers.TriggerStart(comment="Magic check-in")
-call = (
-    "Springfield, Magic on station. Picture: 2 contacts cold east, "
-    "MiG-29S Bassel Al-Assad. Texaco on tap, 270.0, TACAN 10X."
-)
-intro.add_action(action.MessageToCoalition(
-    action.Coalition.Blue, m.string(call), seconds=20,
-))
-self._voice.attach_to_coalition(m, intro, call, coalition="blue")
-m.triggerrules.triggers.append(intro)
-```
+| Trigger                         | Example                                                   |
+|---------------------------------|-----------------------------------------------------------|
+| Reinforcement push              | "Russian armor reserve activated, pushing toward Senaki." |
+| Bandit late-activation          | "MiG-29S airborne out of Sukhumi-Babushara, bearing 270." |
+| SAM activation / radar lit      | "SA-6 radar emissions detected south of the AO."          |
+| Friendly support inbound        | "Hawg 1-2 checking in, IP in 8 minutes."                  |
+| Objective change                | "New tasking: convoy reached Senaki — withdraw to Batumi."|
+| Success / failure               | "Strike package destroyed the convoy. RTB Batumi."        |
 
 Guidelines:
 
-- Wrap text with `m.string("…")` so it lands in the translation table.
-- Use faction names ("Russian", "USAF"), never `red` / `blue`.
-- Keep messages short (one line, ≤ 15 s on screen). Long walls of text the
-  player can't read while flying.
-- Coalition-scoped messages (`MessageToCoalition`) when the info is
-  side-specific (e.g. friendly AWACS calls go to blue only).
-- Silent triggers are fine for **bookkeeping** that the player doesn't need
-  to know about (flag plumbing, internal mission state). The rule is about
-  triggers whose *effect* is visible.
+- `m.string("…")` wraps the text so it lands in the translation table.
+- Faction names, never `red` / `blue`.
+- One line, ≤ 15 s on screen.
+- `MessageToCoalition` when side-specific (friendly AWACS → blue only).
+- Silent triggers OK for bookkeeping (flag plumbing, internal state) — the
+  rule is about triggers with player-visible *effects*.
 
-## Player airframe knob
+## Ground formations
 
-Default to `dcs.planes.F_16C_50` whenever the user doesn't name an airframe.
-It's the most flexible module — handles CAP, CAS, SEAD, and strike — so it's
-the safest fit when the mission type is also unspecified.
+`vehicle_group*` defaults to `Formation.Line` — straight row, 20 m spacing.
+That's the giveaway "spawned by a script" look. Pick by purpose:
 
-Other modules available to the players:
+| Formation   | Use for                                                           |
+|-------------|-------------------------------------------------------------------|
+| `Line`      | Convoy column on a road (`OnRoad` snaps spacing once moving).     |
+| `Vee`       | Advancing armor, hasty defence.                                   |
+| `Rectangle` | Motor-pool / staging area, parade ground.                         |
+| `Star`      | Dense cluster around a centre (rare).                             |
+| `Scattered` | **Default for static defences** — SAM sites, AAA on a hilltop, FOB garrisons, dispersed infantry. `max_radius=40–120 m`. |
 
-| Module          | pydcs attr                  | Good for                  | Coop slots |
-|-----------------|-----------------------------|---------------------------|-----------:|
-| F-16C Block 50  | `planes.F_16C_50`           | CAP, CAS, SEAD, strike    | up to 4    |
-| F/A-18C Hornet  | `planes.FA_18C_hornet`      | CAP, CAS, anti-ship, strike| up to 4   |
-| AH-64D Apache   | `helicopters.AH_64D_BLK_II` | CAS, anti-armor           | up to 4 (2-seat) |
+Single-unit groups (`group_size=1`) ignore the kwarg — spread via separate
+positions instead. Formation enum + spawn / post-spawn API in CLAUDE.md.
 
-Role-compatibility rules — enforce these before writing the script:
+## Player airframe
 
-- If the user asks for **CAS** with an F-15C or Mirage 2000C, swap to F-16C and
-  state the swap in one line ("F-15C is air-to-air only; using F-16C for CAS").
-- If the user asks for **CAP** with an A-10C, same — swap to F-16C or F-15C.
-- Faction must match the airframe's nation: a Russian-coalition flight in an
-  F-16C is wrong; use Su-27 / MiG-29S / Su-25T instead. If the user gives an
-  inconsistent pair, state the conflict and follow the *faction* (it's the
-  louder signal).
-- Helicopter airframes use `dcs.helicopters.*`, not `dcs.planes.*`. The
-  `flight_group_from_airport` call works the same way; pass it under
-  `aircraft_type`.
-- If the user names an airframe that isn't in this table, look it up in
-  [dcs/planes.py](https://github.com/pydcs/dcs/blob/master/dcs/planes.py) or
-  [dcs/helicopters.py](https://github.com/pydcs/dcs/blob/master/dcs/helicopters.py)
-  before guessing — don't invent attribute names like `planes.F_35A`.
+Default `dcs.planes.F_16C_50` — most flexible (CAP, CAS, SEAD, strike). Safe
+when mission type is also unspecified.
+
+| Module          | pydcs attr                  | Good for                   | Coop slots |
+|-----------------|-----------------------------|----------------------------|------------|
+| F-16C Block 50  | `planes.F_16C_50`           | CAP, CAS, SEAD, strike     | up to 4    |
+| F/A-18C Hornet  | `planes.FA_18C_hornet`      | CAP, CAS, anti-ship, strike| up to 4    |
+| AH-64D Apache   | `helicopters.AH_64D_BLK_II` | CAS, anti-armor            | up to 4    |
+
+Role-compatibility:
+
+- CAS with F-15C / M2000C → swap to F-16C and state the swap.
+- CAP with A-10C → swap to F-16C or F-15C.
+- Faction must match airframe nation. A Russian-coalition flight in an
+  F-16C is wrong — use Su-27 / MiG-29S / Su-25T. Inconsistent pair? Follow
+  the faction (it's the louder signal); state the conflict.
+- Helos under `dcs.helicopters.*`, not `planes.*`. Same
+  `flight_group_from_airport(aircraft_type=...)` call.
+- Unknown airframe? Grep `dcs/planes.py` or `dcs/helicopters.py`. Don't
+  invent attributes like `planes.F_35A`.
 
 ## Coop player slots
 
-DCS "coop" = multiple human players sharing a flight. In pydcs, a slot becomes
-human-flyable by setting that unit's `skill` to `Skill.Client` (preferred over
-`Player`, which is reserved for the single-player mission editor's "host" slot).
+DCS coop = multiple humans sharing a flight. Mark slots flyable by setting
+each unit's `skill = Skill.Client` (CLAUDE.md covers the API).
 
 Rules:
 
-- `group_size` on the player flight equals the requested player count (1–4).
-- Iterate `group.units` and set **every** unit to `Skill.Client` for a pure coop
-  flight. Empty Client slots show up as unoccupied seats in the multiplayer UI
-  and DCS will leave them parked if nobody joins.
-- Default `start_type=StartType.Warm` for the player flight. In pydcs terms,
-  `Warm` = "ramp hot" (engines running, ready to taxi) — what the DCS community
-  calls a *hot start*. **There is no `StartType.Hot`** in pydcs; do not write
-  it. Use `StartType.Cold` only when the user explicitly asks for a cold-and-dark
-  start (training reps focused on startup procedures), and `StartType.Runway`
-  for runway-ready starts. Airborne starts are not a `StartType` option — set
-  the flight up with `flight_group_inflight` instead.
-- One player flight per group. If the user asks for two distinct human flights
-  (e.g., two F-16s + two A-10s), build two groups, each with its own clients.
-- Callsign convention: `Dodge` / `Springfield` / `Uzi` for USA/NATO faction,
-  `Boris` / `Ivan` for Russian faction. Avoid reusing AI flight callsigns.
-
-```python
-from dcs.unit import Skill
-
-player = m.flight_group_from_airport(
-    country=usa, name="Dodge",
-    aircraft_type=dcs.planes.F_16C_50,
-    airport=batumi, maintask=task.CAS,
-    start_type=StartType.Warm,         # hot ramp; use Cold only if user asks
-    group_size=player_count,           # 1..4
-)
-for u in player.units:
-    u.skill = Skill.Client
-```
-
-Aircraft-type sanity:
-
-- Single-seat fighters (F-16C, F/A-18C, Mirage 2000C, MiG-29, Su-27): 1 slot per
-  unit. `group_size=4` → 4 coop slots.
-- Two-seat modules (F-14B, AH-64D, JF-17 ... wait, JF-17 is single-seat):
-  pydcs still spawns one unit per `group_size`. The second seat (RIO/CPG) is
-  occupied by joining a different multiplayer slot in-game, not via pydcs.
-- Helicopters: same rule; coop pairs are usually two separate units, not
-  pilot+gunner in one airframe.
-
-## Difficulty knob
-
-Difficulty is a **judgement call**, not a recipe. The user picks a label
-(`recruit` / `trained` / `veteran` / `ace`) and you build a scenario that
-*feels* like that label by combining several dials — enemy AI skill, threat
-count and type, support package, weather, egress complexity.
-
-Two missions with the same label should be allowed to feel different — one
-heavy on SAMs with clear weather, another light on SAMs with night IMC —
-because varied texture beats a single fingerprint.
-
-Do not place targets inside deep forests.
-
-### What each label should feel like
-
-| Label     | Intent                                                                                                                        |
-|-----------|-------------------------------------------------------------------------------------------------------------------------------|
-| recruit   | Forgiving. Mistakes are recoverable. Onboarding a new pilot — they should leave the sortie with kills and a successful RTB.    |
-| trained   | Squadron-default. Demands competence; punishes carelessness. A good pilot wins comfortably; a bad one loses the jet.            |
-| veteran   | Hard. Demands package coordination, fuel management, situational awareness. Wins are earned, not given.                        |
-| ace       | Brutal. One mistake ends the sortie. Reserve for currency-builds where the player explicitly wants to be tested.               |
-
-### Dials you can move
-
-When composing, reach for any subset of these — you don't need to touch every
-one, and the right mix depends on the mission type and theater.
-
-| Dial                  | Range you can pick from                                                                              |
-|-----------------------|------------------------------------------------------------------------------------------------------|
-| Enemy AI skill        | `Skill.Average`, `Skill.Good`, `Skill.High`, `Skill.Excellent`. Different ennemies can have different skills.                                       |
-| Numeric balance       | Bandits outnumbered, parity, bandits 1.5×, 2×, 3× player flight                                      |
-| Enemy missile gen     | gen-3 (R-27 / AIM-7) vs gen-4 (R-77 / AIM-120)                                                       |
-| SAM threats           | none → MANPADS/Shilka → short-range radar (SA-13/8) → medium (SA-6) → long-range (SA-10)             |
-| EWR / GCI coverage    | none → single EWR → EWR + GCI vectoring                                                              |
-| Player support        | AWACS + tanker + escort → AWACS + tanker → AWACS only → none → denied (no datalink)                  |
-| Weather / visibility  | clear day → scattered → broken → overcast/IMC → night (stacks with weather)                          |
-| Time pressure         | comfortable fuel margin → tight → fuel-critical                                                      |
-| Egress complexity     | clean RTB → threats along egress → divert field required                                             |
-| Ingress complexity    | clean ingress → threats along ingress → divert field required                                        |
-| Player loadout        | armement generation, type of missiles, bombs, etc...                                                 |
-| AI wingmens           | number, skill, behavior                                                                              |
-
-### Guidelines, not rules
-
-- **Match the airframe and mission type.** A `veteran` CAP with an F-15C
-  leans on bandit count, missile gen, and GCI — not SAMs. A `veteran` SEAD
-  inverts that. Don't drop SAMs on a fighter-sweep mission just to hit a
-  difficulty label.
-- **Vary across runs.** If you previously built a `veteran` with Excellent
-  bandits + SA-6 + AWACS only, the next one can be High bandits + IMC night
-  + no support. Same label, different texture. Avoid emitting the same
-  composition twice in a row.
-- **Honour user overrides.** If the user says "trained but no AWACS", keep
-  support at none and pull other dials downward (lower AI skill, fewer
-  bandits) so the overall feel stays trained.
-- **Sanity-check the worst case.** A 2-player flight against 8 Excellent
-  Flankers + SA-10 + IMC + no support is not `ace` — it's unplayable. If you
-  catch yourself stacking every dial to maximum, back off the least
-  thematic one.
-- **Make the label bite.** For `ace`, the night/IMC and no-support choices
-  should actually be applied, not just labeled. For `recruit`, give the
-  player a real support package and clear weather — don't just lower AI
-  skill and call it done.
-
-### Apply in code
-
-**Document the composition in the mission briefing** so the user can see what
-you actually built without reading the script:
-
-```
-Difficulty: veteran. Composition: Excellent Flankers, bandits 1.5x player
-flight, AIM-120/R-77 class, AWACS only, broken cloud layer.
-```
-
-### Caveats
-
-- The player flight is **never** set to a difficulty-derived skill — it's
-  always `Skill.Client`. Difficulty applies to enemies and AI wingmen only.
-- AI wingmen on the player's flight (when `player_count < group_size`, which
-  is uncommon) should match difficulty: `Average` on recruit so they don't
-  outshoot the player, `Excellent` on ace.
-
+- `group_size` on the player flight = requested player count (1–4).
+- **All** units in the flight get `Skill.Client`. Empty Client slots appear
+  as unoccupied seats in MP UI; DCS leaves them parked if nobody joins.
+- Default `start_type=StartType.Warm` (hot ramp). Cold only when the user
+  asks for a startup-procedure rep. There is no `StartType.Hot`.
+- One player flight per group. Two distinct human flights (F-16s + A-10s) =
+  two groups, each with its own clients.
+- Callsigns: `Dodge` / `Springfield` / `Uzi` for USA-NATO; `Boris` / `Ivan`
+  for Russian. Don't reuse AI callsigns (`Magic`, `Hawg`, `Eagle`, `Texaco`).
+- Two-seat modules (F-14B, AH-64D): pydcs still spawns one unit per
+  `group_size`. The second seat is occupied via a separate MP slot in-game,
+  not via pydcs.
 
 ## After generating
 
-1. Run the script (`uv run python -m dcs_mission_creator.missions.<slug>` or
-   `uv run dcs-mission-creator generate <slug>`).
-2. Confirm both the `.miz` and `README.md` were written, and report the
-   output folder.
-3. **Do not** try to "validate" by opening the file — there's no DCS install on
-   this box. Sanity-check by re-loading with `Mission().load_file(path)` if the
-   user wants verification.
-4. Mention which knobs the user can tweak (theater, airframe, players,
-   difficulty, length, time, package, threats) so they can iterate. Show the
-   exact CLI re-invocation, e.g.
-   `--players 2 --difficulty veteran --airframe FA_18C_hornet --length-minutes 60`.
-
-## Gotchas
-
-- `cap_flight` does not exist in pydcs. Use `patrol_flight` with `patrol_type`.
-- Airports are **dict-indexed**: `m.terrain.airports["Batumi"]` — there is no
-  `m.terrain.batumi()` method. Names use the display form
-  ("Sukhumi-Babushara", "Senaki-Kolkhi", …).
-- `Point(x, y)` uses DCS world coords (meters), not lat/lon. Anchor on
-  `airport.position` and add offsets.
-- `m.country(name)` takes a *string* — pass `countries.USA.name`, not `USA`.
-- `group_size` caps at 4 for fighters; AI flights of 5+ desync formations.
-- Saving requires the parent directory to exist — `mkdir(parents=True)` first.
-- Don't commit `.miz` outputs; they're binary and large.
+1. Run `uv run dcs-mission-creator generate <slug>` (or
+   `uv run python -m dcs_mission_creator.missions.<slug>`).
+2. Confirm both `.miz` and `README.md` were written; report the output folder.
+3. **Don't** "validate" by opening the file — no DCS install on this box.
+   For sanity, re-load via `Mission().load_file(path)` if the user wants it.
+4. List the knobs the user can tweak (theater, airframe, players, difficulty,
+   length, time, package, threats) and show the exact CLI re-invocation,
+   e.g. `--players 2 --difficulty veteran --airframe FA_18C_hornet --length-minutes 60`.

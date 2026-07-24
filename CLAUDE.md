@@ -13,7 +13,7 @@ verified against the installed source under
   [src/dcs_mission_creator/missions/](src/dcs_mission_creator/missions/) as
   `<scenario_slug>.py`. Each module defines **one** concrete subclass of
   `MissionBuilder` (from
-  [missions/_base.py](src/dcs_mission_creator/missions/_base.py)) with:
+  [core/mission_builder.py](src/dcs_mission_creator/core/mission_builder.py)) with:
   - class attributes `name: str` (filesystem slug, matches the filename) and
     `title: str` (display name);
   - `def build_miz(self, miz_path: Path) -> None` — writes the `.miz`. Use
@@ -105,6 +105,15 @@ source — trust the source.
 ### Ground helpers
 - `vehicle_group(country, name, _type, position, heading=0, group_size=N, …)` — single type, multiple units.
 - `vehicle_group_platoon(country, name, types: List[VehicleType], position, heading=0, …)` — mixed types in one group. **Use this for a convoy.**
+- **Formations.** `vehicle_group*` defaults to `VehicleGroup.Formation.Line`
+  (perpendicular row, 20 m spacing) — that straight line reads as scripted
+  from the air. Pass `formation=VehicleGroup.Formation.<X>` or call
+  `group.formation_<x>(heading, …)` post-spawn. Values in
+  `dcs.unitgroup.VehicleGroup.Formation`: `Line`, `Vee`, `Rectangle`, `Star`,
+  `Scattered`. `formation_scattered(heading=0, max_radius=None)` accepts a
+  custom radius; the others take `distance` (spacing). The formation kwarg
+  is a no-op for `group_size=1`. Design rules on which to pick live in the
+  skill doc.
 - Vehicle catalog is namespaced in `dcs.vehicles`:
   - `vehicles.AirDefence.*` — SAMs, AAA, EWR. Note awkward leading-X names:
     `X_1L13_EWR`, `X_55G6_EWR`, `X_2S6_Tunguska`, `X_5p73_s_125_ln`.
@@ -166,6 +175,44 @@ source — trust the source.
 - Console noise on non-Windows: pydcs prints `"Cannot read registry keys on
   non-Windows OS, returning None"` and `"Couldn't detect any installed DCS
   World version"` on import / save. Harmless; don't try to suppress.
+
+## Voice-over helper (project-owned)
+
+[`VoiceSynth`](src/dcs_mission_creator/core/tts/synth.py) renders TTS audio
+(Piper by default), caches WAVs to `cache/voice/`, registers them on
+`mission.map_resource`, and appends the right `SoundTo*` action to a trigger
+rule. Every mission instantiates one in `__init__` (`self._voice =
+VoiceSynth()`). Methods (text matches the on-screen `MessageTo*` body
+word-for-word):
+
+```python
+self._voice.attach_to_all(m, rule, text)
+self._voice.attach_to_coalition(m, rule, text, coalition="blue")   # or "red"
+self._voice.attach_to_group(m, rule, text, group_id=group.id)
+```
+
+Cache key combines `backend.fingerprint()` + text, so swapping voice or
+backend invalidates without collision. Renders are deterministic per
+backend; commit the cache only if you want reproducible CI builds (we
+don't).
+
+## Gotchas (pydcs)
+
+- `cap_flight` does not exist. Use `patrol_flight(patrol_type=...)`.
+- Airports are dict-indexed: `m.terrain.airports["Batumi"]`. Display names
+  ("Sukhumi-Babushara", "Senaki-Kolkhi", …), no method form.
+- `Point(x, y)` uses DCS world meters, not lat/lon. Anchor on
+  `airport.position` and add offsets.
+- `m.country(name)` takes a **string**: `m.country(countries.USA.name)`,
+  not `m.country(countries.USA)`.
+- `group_size` caps at 4 for fighter flights; AI flights of 5+ desync
+  formations in pydcs output.
+- `m.save(path)` does not create parents — `path.parent.mkdir(parents=True,
+  exist_ok=True)` first.
+- `mission.duration` does not exist. End the sortie via triggers (success /
+  failure messages on `GroupDead` / `GroupLifeLess` / `TimeAfter`) or let
+  bingo fuel resolve it.
+- Don't commit `.miz` outputs — binary, large, gitignored.
 
 ## Aircraft and target lookups
 
