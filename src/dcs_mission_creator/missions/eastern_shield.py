@@ -27,7 +27,6 @@ Composition (difficulty: trained):
 from __future__ import annotations
 
 import argparse
-import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -57,15 +56,6 @@ def _offset(
 ) -> Point:
     """Return a point offset from `origin` in DCS world meters (east/north)."""
     return Point(origin.x + north_m, origin.y + east_m, terrain)
-
-
-def _heading_deg(a: Point, b: Point) -> float:
-    """Compass heading from a to b (0=N, 90=E). Syria uses x=north, y=east."""
-    return math.degrees(math.atan2(b.y - a.y, b.x - a.x)) % 360.0
-
-
-def _distance_m(a: Point, b: Point) -> float:
-    return math.hypot(a.x - b.x, a.y - b.y)
 
 
 def _mark_clients(group) -> None:
@@ -535,7 +525,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         push_target = scene.overlay.overlay.find_road_spawn(
             scene.reserve_destination, radius_m=15_000
         )
-        heading = int(_heading_deg(spawn, push_target))
+        heading = int(spawn.heading_between_point(push_target))
         reserve_types = [
             vehicles.Armor.T_72B,
             vehicles.Armor.T_72B,
@@ -612,8 +602,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             plane_type=planes.E_3A,
             airport=scene.incirlik,
             position=p1,
-            race_distance=int(_distance_m(p1, p2)),
-            heading=int(_heading_deg(p1, p2)),
+            race_distance=int(p1.distance_to_point(p2)),
+            heading=int(p1.heading_between_point(p2)),
             altitude=9000,
             speed=410,
             start_type=StartType.Warm,
@@ -637,8 +627,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             plane_type=planes.KC_135,
             airport=scene.incirlik,
             position=p1,
-            race_distance=int(_distance_m(p1, p2)),
-            heading=int(_heading_deg(p1, p2)),
+            race_distance=int(p1.distance_to_point(p2)),
+            heading=int(p1.heading_between_point(p2)),
             altitude=6500,
             speed=407,
             start_type=StartType.Warm,
@@ -651,7 +641,9 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self, m: Mission, usa: Country, scene: _Scene
     ) -> tuple[Point, Point]:
         """F-15C Eagle 2-ship TARCAP east of the AO, racetrack toward Bassel."""
-        threat_bearing = _heading_deg(scene.incirlik.position, scene.bassel.position)
+        threat_bearing = scene.incirlik.position.heading_between_point(
+            scene.bassel.position
+        )
         p1, p2 = scene.overlay.place_cap_station(
             defended_asset=scene.depot_anchor,
             threat_bearing_deg=threat_bearing,

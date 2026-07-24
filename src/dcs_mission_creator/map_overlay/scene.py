@@ -7,7 +7,6 @@ duplicating it.
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from typing import Literal
 
@@ -23,25 +22,6 @@ class ConvoyRoute:
 
     waypoints: list[Point]
     total_length_m: float
-
-
-def _distance_m(a: Point, b: Point) -> float:
-    return math.hypot(a.x - b.x, a.y - b.y)
-
-
-def _offset_point(origin: Point, bearing_deg: float, distance_m: float) -> Point:
-    """Return point at `distance_m` from origin along `bearing_deg` (0=N, 90=E)."""
-    rad = math.radians(bearing_deg)
-    return Point(
-        origin.x + math.cos(rad) * distance_m,
-        origin.y + math.sin(rad) * distance_m,
-        origin._terrain,
-    )
-
-
-def _bearing(a: Point, b: Point) -> float:
-    """Heading from a to b in degrees (0=N, 90=E)."""
-    return math.degrees(math.atan2(b.y - a.y, b.x - a.x)) % 360.0
 
 
 @dataclass
@@ -95,7 +75,7 @@ class TacticalScene:
         snapped_dest = self.overlay.find_road_spawn(destination, radius_m=5_000)
         return ConvoyRoute(
             waypoints=[snapped_origin, snapped_dest],
-            total_length_m=_distance_m(snapped_origin, snapped_dest),
+            total_length_m=snapped_origin.distance_to_point(snapped_dest),
         )
 
     # ----------------------------------------------------------------- ambush
@@ -226,7 +206,9 @@ class TacticalScene:
                 for j in range(1, len(frontier_polyline)):
                     cumlen.append(
                         cumlen[-1]
-                        + _distance_m(frontier_polyline[j - 1], frontier_polyline[j])
+                        + frontier_polyline[j - 1].distance_to_point(
+                            frontier_polyline[j]
+                        )
                     )
                 total = cumlen[-1]
                 target_len = t * total
@@ -342,7 +324,7 @@ class TacticalScene:
             min_distance_to=min_distance_to_threats,
         )
         if threat_axis_deg is not None:
-            probe = _offset_point(near, threat_axis_deg, 30_000.0)
+            probe = near.point_from_heading(threat_axis_deg, 30_000.0)
             require = require.merged_with(no_line_of_sight_to=(probe,))
         spots = self.overlay.find_placement(near, radius_m=radius_m, require=require)
         if not spots:
@@ -533,10 +515,10 @@ class TacticalScene:
         over_water: bool = False,
     ) -> tuple[Point, Point]:
         """Race-track standoff from threat axis, anchored toward friendly base."""
-        bearing_threat = _bearing(home_base, threat_axis)
+        bearing_threat = home_base.heading_between_point(threat_axis)
         safe_bearing = (bearing_threat + 180.0) % 360.0
-        p1 = _offset_point(home_base, safe_bearing, standoff_m)
-        p2 = _offset_point(p1, (safe_bearing + 90.0) % 360.0, track_length_m)
+        p1 = home_base.point_from_heading(safe_bearing, standoff_m)
+        p2 = p1.point_from_heading((safe_bearing + 90.0) % 360.0, track_length_m)
         if over_water:
             req = Placement(near_water_m=0.0, min_distance_to_road_m=10_000.0)
             for i, p in enumerate((p1, p2)):
@@ -573,8 +555,8 @@ class TacticalScene:
         track_length_m: float = 40_000.0,
     ) -> tuple[Point, Point]:
         """Two-point race-track between asset and threat bearing."""
-        p1 = _offset_point(defended_asset, threat_bearing_deg, forward_distance_m)
-        p2 = _offset_point(p1, (threat_bearing_deg + 90.0) % 360.0, track_length_m)
+        p1 = defended_asset.point_from_heading(threat_bearing_deg, forward_distance_m)
+        p2 = p1.point_from_heading((threat_bearing_deg + 90.0) % 360.0, track_length_m)
         return p1, p2
 
     # -------------------------------------------------------- ingress corridor
@@ -732,8 +714,8 @@ class TacticalScene:
         denom = max(1, escort_count - 1)
         for i in range(escort_count):
             bearing = (threat_bearing_deg - spread / 2.0 + spread * i / denom) % 360.0
-            escorts.append(_offset_point(cv, bearing, 8_000.0))
-        picket = _offset_point(cv, threat_bearing_deg, picket_distance_m)
+            escorts.append(cv.point_from_heading(bearing, 8_000.0))
+        picket = cv.point_from_heading(threat_bearing_deg, picket_distance_m)
         return CarrierGroup(carrier=cv, escorts=escorts, picket=picket)
 
     # ------------------------------------------------------ surface action group
@@ -757,9 +739,9 @@ class TacticalScene:
         if not spots:
             raise LookupError("no offshore line found at requested standoff")
         anchor = spots[0]
-        line_bearing = (_bearing(anchor, shore_target) + 90.0) % 360.0
+        line_bearing = (anchor.heading_between_point(shore_target) + 90.0) % 360.0
         return [
-            _offset_point(anchor, line_bearing, (i - (count - 1) / 2.0) * spacing_m)
+            anchor.point_from_heading(line_bearing, (i - (count - 1) / 2.0) * spacing_m)
             for i in range(count)
         ]
 
@@ -772,12 +754,12 @@ class TacticalScene:
         column_spacing_m: float = 4_000.0,
     ) -> list[ConvoyRoute]:
         """N parallel convoy columns on the same axis, perpendicular-offset."""
-        perp = (_bearing(origin, destination) + 90.0) % 360.0
+        perp = (origin.heading_between_point(destination) + 90.0) % 360.0
         routes: list[ConvoyRoute] = []
         for i in range(columns):
             off = (i - (columns - 1) / 2.0) * column_spacing_m
-            o = _offset_point(origin, perp, off)
-            d = _offset_point(destination, perp, off)
+            o = origin.point_from_heading(perp, off)
+            d = destination.point_from_heading(perp, off)
             try:
                 routes.append(self.place_convoy_route(o, d))
             except LookupError:
@@ -796,7 +778,7 @@ class TacticalScene:
         hidden_from: Point | None = None,
     ) -> Point:
         """Armor reserve in treeline behind FLOT, road-accessible for push forward."""
-        anchor = _offset_point(flot_point, rear_bearing_deg, rear_distance_m)
+        anchor = flot_point.point_from_heading(rear_bearing_deg, rear_distance_m)
         require = Placement.near_treeline(
             within_m=100,
             light_forest_ok=True,

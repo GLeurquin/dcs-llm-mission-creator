@@ -29,7 +29,6 @@ Composition (difficulty: trained):
 from __future__ import annotations
 
 import argparse
-import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -65,15 +64,6 @@ def _offset(
 ) -> Point:
     """Return a point offset from `origin` in DCS world meters (east/north)."""
     return Point(origin.x + north_m, origin.y + east_m, terrain)
-
-
-def _heading_deg(a: Point, b: Point) -> float:
-    """Compass heading from a to b (0=N, 90=E). Caucasus uses x=north, y=east."""
-    return math.degrees(math.atan2(b.y - a.y, b.x - a.x)) % 360.0
-
-
-def _distance_m(a: Point, b: Point) -> float:
-    return math.hypot(a.x - b.x, a.y - b.y)
 
 
 def _mark_clients(group) -> None:
@@ -654,8 +644,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             plane_type=planes.E_3A,
             airport=scene.kutaisi,
             position=p1,
-            race_distance=int(_distance_m(p1, p2)),
-            heading=int(_heading_deg(p1, p2)),
+            race_distance=int(p1.distance_to_point(p2)),
+            heading=int(p1.heading_between_point(p2)),
             altitude=8500,
             speed=410,
             start_type=StartType.Warm,
@@ -679,8 +669,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             plane_type=planes.KC_135,
             airport=scene.kutaisi,
             position=p1,
-            race_distance=int(_distance_m(p1, p2)),
-            heading=int(_heading_deg(p1, p2)),
+            race_distance=int(p1.distance_to_point(p2)),
+            heading=int(p1.heading_between_point(p2)),
             altitude=4500,
             speed=380,
             start_type=StartType.Warm,
@@ -708,7 +698,9 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self, m: Mission, usa: Country, scene: _Scene
     ) -> tuple[Point, Point]:
         """F-15C 2-ship Eagle on an overlay CAP station forward toward Gudauta."""
-        threat_bearing = _heading_deg(scene.kutaisi.position, scene.gudauta.position)
+        threat_bearing = scene.kutaisi.position.heading_between_point(
+            scene.gudauta.position
+        )
         p1, p2 = scene.overlay.place_cap_station(
             defended_asset=scene.kutaisi.position,
             threat_bearing_deg=threat_bearing,
