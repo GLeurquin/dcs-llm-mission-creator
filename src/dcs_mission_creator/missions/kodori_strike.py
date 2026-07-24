@@ -37,6 +37,7 @@ from typing import cast
 
 from dcs import action, condition, planes, task, triggers, vehicles
 from dcs.country import Country
+from dcs.drawing.icon import StandardIcon
 from dcs.mapping import Point
 from dcs.mission import Mission, StartType
 from dcs.terrain.caucasus.caucasus import Caucasus
@@ -45,6 +46,7 @@ from dcs.unit import Skill
 from dcs.unitgroup import VehicleGroup
 from dcs.unittype import VehicleType
 
+from dcs_mission_creator.core.map_draw import PlanOverlay
 from dcs_mission_creator.core.mission_builder import MissionBuilder
 from dcs_mission_creator.core.placement import (
     FOREST_BUFFER_M as _FOREST_BUFFER_M,
@@ -275,12 +277,12 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         fob, sa6, sa6_pos, sa13_positions, ewr_pos = self._spawn_red_ground(
             m, russia, scene
         )
-        self._spawn_awacs(m, usa, scene)
-        self._spawn_tanker(m, usa, scene)
+        awacs_track = self._spawn_awacs(m, usa, scene)
+        tanker_track = self._spawn_tanker(m, usa, scene)
         weasel = self._spawn_sead(m, usa, scene, sa6_pos=sa6_pos)
-        self._spawn_escort(m, usa, scene)
+        escort_track = self._spawn_escort(m, usa, scene)
         self._spawn_red_intercept(m, russia, scene)
-        self._spawn_player(
+        corridor = self._spawn_player(
             m,
             usa,
             scene,
@@ -288,6 +290,18 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         )
 
         self._add_end_triggers(m, fob=fob, sa6=sa6, weasel=weasel)
+        self._draw_plan(
+            m,
+            scene,
+            fob=fob,
+            sa6_pos=sa6_pos,
+            sa13_positions=sa13_positions,
+            ewr_pos=ewr_pos,
+            corridor=corridor,
+            escort_track=escort_track,
+            awacs_track=awacs_track,
+            tanker_track=tanker_track,
+        )
         self._add_briefing(m)
 
         miz_path.parent.mkdir(parents=True, exist_ok=True)
@@ -624,7 +638,9 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     # -- blue side ----------------------------------------------------------
 
-    def _spawn_awacs(self, m: Mission, usa: Country, scene: _Scene) -> None:
+    def _spawn_awacs(
+        self, m: Mission, usa: Country, scene: _Scene
+    ) -> tuple[Point, Point]:
         """E-3A Magic on an overlay-placed track behind Kutaisi, 251.000 AM."""
         p1, p2 = scene.overlay.place_awacs_track(
             home_base=scene.kutaisi.position,
@@ -645,8 +661,11 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             start_type=StartType.Warm,
             frequency=251,
         )
+        return p1, p2
 
-    def _spawn_tanker(self, m: Mission, usa: Country, scene: _Scene) -> None:
+    def _spawn_tanker(
+        self, m: Mission, usa: Country, scene: _Scene
+    ) -> tuple[Point, Point]:
         """KC-135 Texaco on an overlay-placed track behind Kutaisi, 252.000 AM, 10Y."""
         p1, p2 = scene.overlay.place_tanker_track(
             home_base=scene.kutaisi.position,
@@ -668,6 +687,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             frequency=252,
             tacanchannel="10Y",
         )
+        return p1, p2
 
     def _spawn_sead(self, m: Mission, usa: Country, scene: _Scene, *, sa6_pos: Point):
         """F-16C Weasel 2-ship from Kutaisi, fragged on the placed SA-6 site."""
@@ -684,7 +704,9 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         _set_skill(weasel, Skill.High)
         return weasel
 
-    def _spawn_escort(self, m: Mission, usa: Country, scene: _Scene):
+    def _spawn_escort(
+        self, m: Mission, usa: Country, scene: _Scene
+    ) -> tuple[Point, Point]:
         """F-15C 2-ship Eagle on an overlay CAP station forward toward Gudauta."""
         threat_bearing = _heading_deg(scene.kutaisi.position, scene.gudauta.position)
         p1, p2 = scene.overlay.place_cap_station(
@@ -707,7 +729,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             group_size=2,
         )
         _set_skill(eagle, Skill.High)
-        return eagle
+        return p1, p2
 
     def _spawn_player(
         self,
@@ -716,7 +738,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         scene: _Scene,
         *,
         threats: tuple[Point, ...],
-    ) -> None:
+    ) -> list[Point]:
         """Dodge F-16C-50 from Kutaisi, hot ramp; overlay-routed terrain-masked corridor.
 
         Route: Kutaisi → PUSH → corridor (terrain-masked legs avoiding LOS to
@@ -754,6 +776,45 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         player.add_waypoint(egress, altitude=6500, speed=420, name="EGRESS")
         player.add_runway_waypoint(scene.kutaisi)
         player.land_at(scene.kutaisi)
+        return [*corridor, egress]
+
+    # -- F10 map briefing ---------------------------------------------------
+
+    def _draw_plan(
+        self,
+        m: Mission,
+        scene: _Scene,
+        *,
+        fob,
+        sa6_pos: Point,
+        sa13_positions: list[Point],
+        ewr_pos: Point,
+        corridor: list[Point],
+        escort_track: tuple[Point, Point],
+        awacs_track: tuple[Point, Point],
+        tanker_track: tuple[Point, Point],
+    ) -> None:
+        """Paint the plan on the F10 map (trained: coarse, estimated threats)."""
+        plan = PlanOverlay(m, "trained")
+        plan.objective(scene.ao_center, "AO — FOB Kodori", radius=6_000.0)
+        plan.route(corridor, "Dodge ingress")
+        plan.orbit(*escort_track, "Eagle CAP")
+        plan.orbit(*awacs_track, "Magic AWACS")
+        plan.orbit(*tanker_track, "Texaco tanker")
+        plan.threat(
+            fob.units[0].position,
+            radius=2_500.0,
+            label="FOB",
+            icon=StandardIcon.Mechanized,
+        )
+        plan.threat(
+            sa6_pos, radius=10_000.0, label="SA-6", icon=StandardIcon.AirDefense
+        )
+        for pos in sa13_positions:
+            plan.threat(
+                pos, radius=6_000.0, label="SA-13", icon=StandardIcon.AirDefense
+            )
+        plan.threat(ewr_pos, radius=4_000.0, label="EWR", icon=StandardIcon.SearchRadar)
 
     # -- triggers and briefing ----------------------------------------------
 

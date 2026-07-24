@@ -35,6 +35,7 @@ from typing import cast
 
 from dcs import action, condition, planes, task, triggers, vehicles
 from dcs.country import Country
+from dcs.drawing.icon import StandardIcon
 from dcs.mapping import Point
 from dcs.mission import Mission, StartType
 from dcs.point import PointAction
@@ -44,6 +45,7 @@ from dcs.unit import Skill
 from dcs.unitgroup import VehicleGroup
 from dcs.unittype import VehicleType
 
+from dcs_mission_creator.core.map_draw import PlanOverlay
 from dcs_mission_creator.core.mission_builder import MissionBuilder
 from dcs_mission_creator.core.placement import load_scene, sam_site_on_ridge
 from dcs_mission_creator.core.tts import VoiceSynth
@@ -284,17 +286,29 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         reserve = self._spawn_red_reserve(m, russia, scene)
         migs = self._spawn_red_intercept(m, russia, scene)
 
-        self._spawn_awacs(m, usa, scene)
-        self._spawn_tanker(m, usa, scene)
-        self._spawn_tarcap(m, usa, scene)
+        awacs_track = self._spawn_awacs(m, usa, scene)
+        tanker_track = self._spawn_tanker(m, usa, scene)
+        tarcap_track = self._spawn_tarcap(m, usa, scene)
         hog = self._spawn_strike(m, usa, scene, target_unit=depot.units[0])
-        self._spawn_player(
+        corridor = self._spawn_player(
             m,
             usa,
             scene,
             threats=(scene.sa6_anchor, shorad_pos, *ewr_positions),
         )
 
+        self._draw_plan(
+            m,
+            scene,
+            sa6_pos=scene.sa6_anchor,
+            shorad_pos=shorad_pos,
+            ewr_positions=ewr_positions,
+            reserve_origin=scene.reserve_origin,
+            corridor=corridor,
+            tarcap_track=tarcap_track,
+            awacs_track=awacs_track,
+            tanker_track=tanker_track,
+        )
         self._add_intro_voice(m)
         self._add_support_checkins(m)
         self._add_layered_triggers(
@@ -578,7 +592,9 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     # -- blue side ----------------------------------------------------------
 
-    def _spawn_awacs(self, m: Mission, usa: Country, scene: _Scene) -> None:
+    def _spawn_awacs(
+        self, m: Mission, usa: Country, scene: _Scene
+    ) -> tuple[Point, Point]:
         """E-3A Magic on a Mediterranean track, 251.000 AM, 120 km legs.
 
         2h sortie demands a long race-track so Magic lives the whole mission;
@@ -603,8 +619,11 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             start_type=StartType.Warm,
             frequency=251,
         )
+        return p1, p2
 
-    def _spawn_tanker(self, m: Mission, usa: Country, scene: _Scene) -> None:
+    def _spawn_tanker(
+        self, m: Mission, usa: Country, scene: _Scene
+    ) -> tuple[Point, Point]:
         """KC-135 Texaco over the Med west of Latakia, TACAN 10X, 270.000 AM."""
         p1, p2 = scene.overlay.place_tanker_track(
             home_base=scene.incirlik.position,
@@ -626,8 +645,11 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             frequency=270,
             tacanchannel="10X",
         )
+        return p1, p2
 
-    def _spawn_tarcap(self, m: Mission, usa: Country, scene: _Scene):
+    def _spawn_tarcap(
+        self, m: Mission, usa: Country, scene: _Scene
+    ) -> tuple[Point, Point]:
         """F-15C Eagle 2-ship TARCAP east of the AO, racetrack toward Bassel."""
         threat_bearing = _heading_deg(scene.incirlik.position, scene.bassel.position)
         p1, p2 = scene.overlay.place_cap_station(
@@ -650,7 +672,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             group_size=2,
         )
         _set_skill(eagle, Skill.High)
-        return eagle
+        return p1, p2
 
     def _spawn_strike(self, m: Mission, usa: Country, scene: _Scene, *, target_unit):
         """A-10C 2-ship Hawg from Incirlik, fragged on the depot lead vehicle.
@@ -680,7 +702,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         scene: _Scene,
         *,
         threats: tuple[Point, ...],
-    ) -> None:
+    ) -> list[Point]:
         """Springfield F-16C-50 from Incirlik, terrain-masked SEAD ingress."""
         player = m.flight_group_from_airport(
             country=usa,
@@ -714,6 +736,45 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         player.add_waypoint(scene.depot_anchor, altitude=6500, speed=400, name="DEPOT")
         player.add_runway_waypoint(scene.incirlik)
         player.land_at(scene.incirlik)
+        return [*corridor, scene.depot_anchor]
+
+    # -- F10 map briefing ---------------------------------------------------
+
+    def _draw_plan(
+        self,
+        m: Mission,
+        scene: _Scene,
+        *,
+        sa6_pos: Point,
+        shorad_pos: Point,
+        ewr_positions: list[Point],
+        reserve_origin: Point,
+        corridor: list[Point],
+        tarcap_track: tuple[Point, Point],
+        awacs_track: tuple[Point, Point],
+        tanker_track: tuple[Point, Point],
+    ) -> None:
+        """Paint the plan on the F10 map (trained: coarse, estimated threats)."""
+        plan = PlanOverlay(m, "trained")
+        plan.objective(scene.depot_anchor, "Depot — Kuweires", radius=5_000.0)
+        plan.route(corridor, "Springfield ingress")
+        plan.orbit(*tarcap_track, "Eagle TARCAP")
+        plan.orbit(*awacs_track, "Magic AWACS")
+        plan.orbit(*tanker_track, "Texaco tanker")
+        plan.threat(
+            sa6_pos, radius=12_000.0, label="SA-6", icon=StandardIcon.AirDefense
+        )
+        plan.threat(
+            shorad_pos, radius=6_000.0, label="SA-13", icon=StandardIcon.AirDefense
+        )
+        for pos in ewr_positions:
+            plan.threat(pos, radius=4_000.0, label="EWR", icon=StandardIcon.SearchRadar)
+        plan.threat(
+            reserve_origin,
+            radius=3_000.0,
+            label="Reserve (Aleppo rd)",
+            icon=StandardIcon.Mechanized,
+        )
 
     # -- triggers and briefing ----------------------------------------------
 

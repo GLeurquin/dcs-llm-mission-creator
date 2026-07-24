@@ -39,6 +39,7 @@ from dcs.terrain.terrain import Airport
 from dcs.unit import Skill
 from dcs.unittype import VehicleType
 
+from dcs_mission_creator.core.map_draw import PlanOverlay
 from dcs_mission_creator.core.mission_builder import MissionBuilder
 from dcs_mission_creator.core.tts import VoiceSynth
 
@@ -282,9 +283,10 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         )
         self._spawn_awacs(m, usa, scene)
         self._spawn_red_intercept(m, russia, scene)
-        player = self._spawn_player(m, usa, scene)
+        player, route = self._spawn_player(m, usa, scene)
 
         self._add_end_triggers(m, sa10_radars=sa10_radars, player=player)
+        self._draw_plan(m, scene, route=route)
         self._add_briefing(m)
 
         miz_path.parent.mkdir(parents=True, exist_ok=True)
@@ -513,19 +515,14 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         t = self._terrain
         v = scene.vaziani.position
 
+        push = _offset(v, t, east_m=-8_000, north_m=25_000)
+        descend = _offset(v, t, east_m=-13_000, north_m=60_000)
+        egress_w = Point(-165000, 815000, t)
+        egress_s = Point(-240000, 830000, t)
+
         player.add_runway_waypoint(scene.vaziani)
-        player.add_waypoint(
-            _offset(v, t, east_m=-8_000, north_m=25_000),
-            altitude=3000,
-            speed=380,
-            name="PUSH",
-        )
-        player.add_waypoint(
-            _offset(v, t, east_m=-13_000, north_m=60_000),
-            altitude=1500,
-            speed=360,
-            name="DESCEND",
-        )
+        player.add_waypoint(push, altitude=3000, speed=380, name="PUSH")
+        player.add_waypoint(descend, altitude=1500, speed=360, name="DESCEND")
         player.add_waypoint(
             scene.valley_entry, altitude=800, speed=340, name="VALLEY_IN"
         )
@@ -538,15 +535,37 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         player.add_waypoint(scene.ip, altitude=600, speed=360, name="IP")
         player.add_waypoint(scene.sa10_site, altitude=1500, speed=380, name="TARGET")
         # Egress: west, then south around the western ridges. Do NOT re-cross Daryal.
-        player.add_waypoint(
-            Point(-165000, 815000, t), altitude=1500, speed=400, name="EGRESS_W"
-        )
-        player.add_waypoint(
-            Point(-240000, 830000, t), altitude=4500, speed=420, name="EGRESS_S"
-        )
+        player.add_waypoint(egress_w, altitude=1500, speed=400, name="EGRESS_W")
+        player.add_waypoint(egress_s, altitude=4500, speed=420, name="EGRESS_S")
         player.add_runway_waypoint(scene.vaziani)
         player.land_at(scene.vaziani)
-        return player
+        route = [
+            push,
+            descend,
+            scene.valley_entry,
+            scene.valley_mid,
+            scene.valley_exit,
+            scene.ip,
+            scene.sa10_site,
+            egress_w,
+            egress_s,
+        ]
+        return player, route
+
+    # -- F10 map briefing ---------------------------------------------------
+
+    def _draw_plan(self, m: Mission, scene: _Scene, *, route: list[Point]) -> None:
+        """Paint the plan on the F10 map (ace: friendly plan + a vague threat zone).
+
+        Ace reveals no enemy positions. The low Daryal ingress is the whole
+        point of the plan, so the route is drawn precisely; the SA-10 shows
+        only as a vague target area and the MiG CAP as a coarse zone.
+        """
+        plan = PlanOverlay(m, "ace")
+        plan.objective(scene.sa10_site, "TARGET — SA-10", radius=8_000.0)
+        plan.route(route, "Dodge ingress (Daryal)")
+        plan.waypoint_label(scene.awacs_anchor, "Magic AWACS")
+        plan.threat_area(scene.intrusion_center, 30_000.0, "MiG-29S CAP — vicinity")
 
     # -- triggers and briefing ----------------------------------------------
 

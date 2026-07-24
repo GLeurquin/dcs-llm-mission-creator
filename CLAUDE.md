@@ -167,6 +167,64 @@ source — trust the source.
 ### Trigger zones
 - `m.triggers.add_triggerzone(position: Point, radius: float, hidden=False, name="zone", color=None)` returns a `TriggerZoneCircular`. Pass to `intercept_flight(zone=...)`.
 
+### F10 map drawings (briefing annotations)
+
+Everything renders on the **F10 in-game map** — these are the coloured
+shapes/labels the player sees planning the sortie, not 3D-world objects.
+Classes in `dcs.drawing.*`; you never construct them directly — call the
+`add_*` methods on a **layer**.
+
+- **Layers.** `m.drawings` is a `Drawings` instance pre-seeded with five
+  layers. Grab one with
+  `m.drawings.get_layer(StandardLayer.Blue)` (enum in
+  `dcs.drawing.drawings`: `Red`, `Blue`, `Neutral`, `Common`, `Author`).
+  A drawing on the `Blue` layer is visible to the blue coalition; `Common`
+  to everyone. **Put player-facing plan annotations on `Blue`** (USAF /
+  NATO player) so red doesn't see them and vice-versa.
+- **Colours.** `Rgba(r, g, b, a)` (0–255 each) from `dcs.drawing.drawing`.
+  `a` is alpha (0 transparent … 255 opaque). Fills want low alpha
+  (`Rgba(255,0,0,60)`), outlines full (`Rgba(255,0,0,255)`). `LineStyle`
+  (same module): `Solid`, `Dash`, `Dot`, `DotDash`, `Square`, … .
+- **All `add_*` methods live on the layer** (`dcs.drawing.layer.Layer`) and
+  return the created drawing:
+
+  ```python
+  from dcs.drawing.drawings import StandardLayer
+  from dcs.drawing.drawing import Rgba, LineStyle
+  from dcs.drawing.icon import StandardIcon
+
+  blue = m.drawings.get_layer(StandardLayer.Blue)
+  blue.add_circle(center, radius=25_000, color=Rgba(255,0,0,255), fill=Rgba(255,0,0,40))
+  blue.add_text_box(center, "SA-6 (est.)", color=Rgba(255,0,0,255), fill=Rgba(0,0,0,0))
+  blue.add_icon(pos, StandardIcon.AirDefense, scale=1.0, color=Rgba(255,0,0,255))
+  blue.add_arrow(start_pos, angle=heading_deg, length=30_000)   # angle in degrees
+  ```
+
+  Full set: `add_line_segment(position, end_point)`,
+  `add_line_segments(position, points, closed=False)`,
+  `add_line_freeform(position, points, closed=False)`,
+  `add_circle(position, radius)`, `add_oval(position, r1, r2, angle=0)`,
+  `add_rectangle(position, width, height, angle=0)`,
+  `add_freeform_polygon(position, points)`,
+  `add_arrow(position, angle, length)`,
+  `add_oblong(p1, p2, radius)` (capsule / corridor — takes two **absolute**
+  points), `add_icon(position, file|StandardIcon, scale=1.0)`,
+  `add_text_box(position, text, font_size=20, angle=0)`.
+- **`StandardIcon`** (`dcs.drawing.icon`) NATO symbols: `Mechanized`,
+  `MechanizedInfantry`, `MechanizedInfantryWithFightingVehicle`, `Recce`,
+  `Logistics`, `MechanizedArtillery`, `MechanizedRocketArtillery`,
+  `AirDefense`, `SearchRadar`. Or pass a raw `.png` filename string.
+- **Coordinate gotcha.** For the point-list drawings
+  (`line_segment(s)`, `line_freeform`, `freeform_polygon`) the `position`
+  is the anchor and the `points` are **offsets relative to that anchor**,
+  not absolute world points — the first point is usually `Point(0,0,terrain)`.
+  Build offsets with `anchor.point_from_heading(hdg, dist)` then subtract
+  the anchor, or copy the local-coordinate transform pydcs' own `add_oblong`
+  uses. `add_circle` / `add_oval` / `add_rectangle` / `add_arrow` /
+  `add_icon` / `add_text_box` take a single absolute `position` — no offset
+  math. `add_oblong` is the exception: pass two absolute points, it does the
+  transform for you.
+
 ### Saving
 - `m.save(str(path))` writes the `.miz`. Caller must `mkdir(parents=True)`
   beforehand — pydcs does not create the parent dir.
@@ -195,6 +253,40 @@ Cache key combines `backend.fingerprint()` + text, so swapping voice or
 backend invalidates without collision. Renders are deterministic per
 backend; commit the cache only if you want reproducible CI builds (we
 don't).
+
+## Map-drawing helper (project-owned)
+
+[`PlanOverlay`](src/dcs_mission_creator/core/map_draw.py) wraps the pydcs F10
+drawing API (the `### F10 map drawings` section above) and paints the *plan*
+on the blue layer so the player reads the sortie at a glance. It owns two
+things the raw pydcs `Layer` does not: **faction-correct placement** (always
+the blue `StandardLayer`) and **difficulty-scaled enemy reveal**. Construct it
+per mission with the mission's difficulty label:
+
+```python
+plan = PlanOverlay(m, "trained")           # or Difficulty.TRAINED
+plan.objective(scene.ao_center, "AO — convoy axis", radius=6_000.0)
+plan.route(corridor, "Dodge ingress")      # list[Point] of the flown route
+plan.orbit(p1, p2, "Eagle CAP")            # a friendly race-track leg
+plan.waypoint_label(pos, "Magic AWACS")
+plan.threat(sa13_pos, radius=8_000.0, label="SA-13", icon=StandardIcon.AirDefense)
+plan.threat_area(center, 28_000.0, "SA-6 + bandit CAP — vicinity")
+```
+
+Pass **absolute** world `Point`s — `PlanOverlay` does the layer selection,
+colour choice (enemy red / friendly cyan / objective amber), the
+anchor-relative offset math the point-list drawings need, and the difficulty
+policy. `.threat()` is the difficulty dial: full icon + true ring on
+`recruit`, coarse + offset + "(est.)" on `trained`, **no-op** on
+`veteran`/`ace` (use `.threat_area()` for a vague zone there). `.objective()`
+tightens/loosens the same way. Friendly-plan calls (`route`, `orbit`,
+`waypoint_label`) always draw precisely. Design rules (what to draw, reveal
+per label) live in the `dcs-mission` skill; the drawing API lives above.
+
+Missions call this in a `_draw_plan` step near the end of `build_miz` (after
+triggers, before `_add_briefing`). Spawn helpers that own friendly geometry
+(the ingress corridor, AWACS/tanker/CAP tracks) return their `Point`s so
+`_draw_plan` can annotate them.
 
 ## Gotchas (pydcs)
 
@@ -232,6 +324,17 @@ naming is inconsistent (`F_16C_50` but `MiG_29S`, `X_1L13_EWR` but
   Caucasus mix: F-16C escort/CAP from Batumi over an A-10C strike on a
   Russian convoy near Senaki, MiG-29S intercept from Sukhumi-Babushara,
   trained difficulty, ~50 min sortie. Generates to `out/coastal_cover.miz`.
+
+All five missions ([coastal_cover](src/dcs_mission_creator/missions/coastal_cover.py),
+[kodori_strike](src/dcs_mission_creator/missions/kodori_strike.py),
+[eastern_shield](src/dcs_mission_creator/missions/eastern_shield.py),
+[abkhaz_sweep](src/dcs_mission_creator/missions/abkhaz_sweep.py),
+[daryal_run](src/dcs_mission_creator/missions/daryal_run.py)) paint an F10
+briefing plan via a `_draw_plan` step using `PlanOverlay` — see the
+map-drawing helper section above. The three trained missions (coastal_cover,
+kodori_strike, eastern_shield) draw estimated threat rings + NATO icons; the
+two ace missions (abkhaz_sweep, daryal_run) draw only the friendly plan plus
+a single vague threat zone (enemy positions withheld).
 
 ## Running
 

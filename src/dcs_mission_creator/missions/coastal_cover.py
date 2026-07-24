@@ -28,6 +28,7 @@ from typing import cast
 
 from dcs import action, condition, planes, task, triggers, vehicles
 from dcs.country import Country
+from dcs.drawing.icon import StandardIcon
 from dcs.mapping import Point
 from dcs.mission import Mission, StartType
 from dcs.point import PointAction
@@ -37,6 +38,7 @@ from dcs.unit import Skill
 from dcs.unitgroup import VehicleGroup
 from dcs.unittype import VehicleType
 
+from dcs_mission_creator.core.map_draw import PlanOverlay
 from dcs_mission_creator.core.mission_builder import MissionBuilder
 from dcs_mission_creator.core.placement import (
     load_scene,
@@ -241,15 +243,25 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         usa, russia = m.country("USA"), m.country("Russia")
 
         convoy, sa13_pos, ewr_positions = self._spawn_red_ground(m, russia, scene)
-        self._spawn_awacs(m, usa, scene)
+        awacs_track = self._spawn_awacs(m, usa, scene)
         hog = self._spawn_strike(m, usa, scene, target_unit=convoy.units[4])
-        self._spawn_cap(m, usa, scene)
+        cap_track = self._spawn_cap(m, usa, scene)
         self._spawn_red_intercept(m, russia, scene)
-        self._spawn_player(m, usa, scene, threats=(sa13_pos, *ewr_positions))
+        corridor = self._spawn_player(m, usa, scene, threats=(sa13_pos, *ewr_positions))
 
         self._add_end_triggers(m, convoy=convoy, hog=hog)
         if self._reserve is not None:
             self._add_reserve_trigger(m, convoy=convoy, reserve=self._reserve)
+        self._draw_plan(
+            m,
+            scene,
+            convoy=convoy,
+            sa13_pos=sa13_pos,
+            ewr_positions=ewr_positions,
+            corridor=corridor,
+            cap_track=cap_track,
+            awacs_track=awacs_track,
+        )
         self._add_briefing(m)
 
         miz_path.parent.mkdir(parents=True, exist_ok=True)
@@ -503,7 +515,9 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     # -- blue side ----------------------------------------------------------
 
-    def _spawn_awacs(self, m: Mission, usa: Country, scene: _Scene) -> None:
+    def _spawn_awacs(
+        self, m: Mission, usa: Country, scene: _Scene
+    ) -> tuple[Point, Point]:
         """E-3A Magic on an overlay-placed Black Sea race-track, 251.000 AM."""
         p1, p2 = scene.overlay.place_awacs_track(
             home_base=scene.batumi.position,
@@ -524,6 +538,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             start_type=StartType.Warm,
             frequency=251,
         )
+        return p1, p2
 
     def _spawn_strike(self, m: Mission, usa: Country, scene: _Scene, *, target_unit):
         """A-10C 2-ship Hawg from Kutaisi, fragged on the convoy."""
@@ -539,7 +554,9 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         _set_skill(hog, Skill.High)
         return hog
 
-    def _spawn_cap(self, m: Mission, usa: Country, scene: _Scene):
+    def _spawn_cap(
+        self, m: Mission, usa: Country, scene: _Scene
+    ) -> tuple[Point, Point]:
         """F-15C 2-ship Eagle on an overlay-placed race-track toward Sukhumi."""
         threat_bearing = _heading_deg(scene.batumi.position, scene.sukhumi.position)
         p1, p2 = scene.overlay.place_cap_station(
@@ -562,7 +579,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             group_size=2,
         )
         _set_skill(eagle, Skill.High)
-        return eagle
+        return p1, p2
 
     def _spawn_player(
         self,
@@ -571,7 +588,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         scene: _Scene,
         *,
         threats: tuple[Point, ...],
-    ) -> None:
+    ) -> list[Point]:
         """Dodge F-16C-50 from Batumi, hot ramp; terrain-masked ingress corridor."""
         player = m.flight_group_from_airport(
             country=usa,
@@ -603,6 +620,39 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             player.add_waypoint(pt, altitude=6500, speed=380, name=name)
         player.add_runway_waypoint(scene.batumi)
         player.land_at(scene.batumi)
+        return list(corridor)
+
+    # -- F10 map briefing ---------------------------------------------------
+
+    def _draw_plan(
+        self,
+        m: Mission,
+        scene: _Scene,
+        *,
+        convoy,
+        sa13_pos: Point,
+        ewr_positions: list[Point],
+        corridor: list[Point],
+        cap_track: tuple[Point, Point],
+        awacs_track: tuple[Point, Point],
+    ) -> None:
+        """Paint the plan on the F10 map (trained: coarse, estimated threats)."""
+        plan = PlanOverlay(m, "trained")
+        plan.objective(scene.ao_center, "AO — convoy axis", radius=6_000.0)
+        plan.route(corridor, "Dodge ingress")
+        plan.orbit(*cap_track, "Eagle CAP")
+        plan.orbit(*awacs_track, "Magic AWACS")
+        plan.threat(
+            convoy.units[0].position,
+            radius=2_500.0,
+            label="Convoy",
+            icon=StandardIcon.Mechanized,
+        )
+        plan.threat(
+            sa13_pos, radius=8_000.0, label="SA-13", icon=StandardIcon.AirDefense
+        )
+        for pos in ewr_positions:
+            plan.threat(pos, radius=4_000.0, label="EWR", icon=StandardIcon.SearchRadar)
 
     # -- triggers and briefing ----------------------------------------------
 

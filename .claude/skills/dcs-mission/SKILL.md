@@ -270,6 +270,50 @@ That's the giveaway "spawned by a script" look. Pick by purpose:
 Single-unit groups (`group_size=1`) ignore the kwarg — spread via separate
 positions instead. Formation enum + spawn / post-spawn API in CLAUDE.md.
 
+## F10 map briefing drawings
+
+Draw the **plan** on the F10 map so the player reads the sortie at a glance,
+not just from prose. Annotations complement the briefing text and voice
+check-ins — same intent, different channel. Put them on the `Blue` layer
+(player-facing side); never annotate the enemy's own layer. Drawing API
+(`m.drawings`, layers, `Rgba`, `StandardIcon`, `add_*`) in CLAUDE.md.
+
+**Always draw (every difficulty)** — the friendly plan, which is never a
+secret:
+
+- AO / target area — a circle or labelled box around the objective.
+- Ingress / egress arrows or a route polyline from the departure field.
+- Key friendly geometry — CAP race-track, tanker track, AWACS orbit,
+  IP / push points — as lines + a text label each.
+- Bullseye / reference-point label if the briefing calls bearings off it.
+
+**Enemy positions scale with difficulty** — this is the point of the whole
+section. Lower difficulty = more the player is *shown*; higher = more they
+must *find*. It mirrors the intel a real flight would brief with, and it is
+a difficulty dial in its own right (SA on the enemy picture).
+
+| Label    | Enemy reveal on the F10 map                                                          |
+|----------|--------------------------------------------------------------------------------------|
+| recruit  | Exact icons at true positions. `StandardIcon.AirDefense` / `SearchRadar` on each SAM/EWR, threat rings at true envelope radius, convoy/target marked precisely. Label them plainly ("SA-6"). |
+| trained  | Real threat rings and icons, but coarser — cluster nearby units into one ring, place the icon at the cluster centroid not the exact TEL. Label with type ("SA-6 site"). |
+| veteran  | A vague **threat area** only — one large low-alpha polygon / oblong ("SAM threat — vicinity Senaki"), no per-unit icons, no true radius. Position offset a few km from truth. Air threat as a bearing arrow from the enemy field, not a fix. |
+| ace      | Little or nothing. AO + friendly plan only. Enemy shown as an unlabelled search box at best ("threats expected"), or omitted entirely — the player builds the picture from RWR, AWACS calls, and the tally. |
+
+Rules:
+
+- **Never reveal more than the briefing text claims.** If prose says
+  "estimated SA-6, location unconfirmed", the map gets a vague area, not a
+  pinpoint icon — the two channels must agree.
+- **Mark estimates as estimates.** On trained+ append "(est.)" to labels
+  and offset the mark from the true unit so a precise ring can't be
+  reverse-engineered.
+- **Colour convention.** Enemy in red (`Rgba(255,0,0,·)`), friendly plan in
+  blue/cyan, notes/neutral in white — fills low-alpha, outlines opaque.
+- **Don't clutter.** A handful of purposeful marks beats a busy map; if it
+  wouldn't appear on a real kneeboard, leave it off.
+- **Honour overrides.** "Recruit but I want to find them myself" → pull the
+  reveal down without touching other dials.
+
 ## Player airframe
 
 Default `dcs.planes.F_16C_50` — most flexible (CAP, CAS, SEAD, strike). Safe

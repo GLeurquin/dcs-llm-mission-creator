@@ -48,6 +48,7 @@ from dcs.unit import Skill
 from dcs.unitgroup import VehicleGroup
 from dcs.unittype import VehicleType
 
+from dcs_mission_creator.core.map_draw import PlanOverlay
 from dcs_mission_creator.core.mission_builder import MissionBuilder
 from dcs_mission_creator.core.tts import VoiceSynth
 
@@ -304,6 +305,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         player = self._spawn_player(m, usa, scene)
 
         self._add_end_triggers(m, su27=su27, mig29=mig29, player=player)
+        self._draw_plan(m, scene)
         self._add_briefing(m)
 
         miz_path.parent.mkdir(parents=True, exist_ok=True)
@@ -566,6 +568,27 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         player.add_runway_waypoint(scene.batumi)
         player.land_at(scene.batumi)
         return player
+
+    # -- F10 map briefing ---------------------------------------------------
+
+    def _draw_plan(self, m: Mission, scene: _Scene) -> None:
+        """Paint the plan on the F10 map (ace: friendly plan + a vague threat zone).
+
+        Ace reveals no enemy positions — the player builds the picture off RWR,
+        Magic, and the tally. Only the sweep geometry and one coarse threat
+        area (the SA-6 ridge / bandit CAP off Sukhumi) are drawn.
+        """
+        plan = PlanOverlay(m, "ace")
+        ao = scene.station_south.midpoint(scene.station_north)
+        plan.objective(ao, "Sweep AO", radius=8_000.0)
+        plan.route(
+            [scene.push, scene.station_south, scene.station_north, scene.egress],
+            "Dodge sweep",
+        )
+        plan.waypoint_label(scene.awacs_anchor, "Magic AWACS")
+        plan.threat_area(
+            scene.sukhumi.position, 28_000.0, "SA-6 + bandit CAP — vicinity"
+        )
 
     # -- triggers and briefing ----------------------------------------------
 
