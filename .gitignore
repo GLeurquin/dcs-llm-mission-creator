@@ -7,13 +7,11 @@ __pycache__/
 build/
 dist/
 *.egg-info/
-uv.lock
 out/
 *.miz
 *.egg-info/
 .pytest_cache/
 .ruff_cache/
-*.lock
 .claude/settings.local.json
 
 # Map overlay build artifacts and caches
