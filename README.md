@@ -219,6 +219,20 @@ uv run dcs-mission-creator map-overlay inspect caucasus --out /tmp/caucasus_laye
 
 Emits a 6-panel composite (one panel per zarr layer) downsampled to ~4000 px on the long edge. Use this for sanity-checking new builds and for tuning OSM class filters in `manifest.json`.
 
+## Bundled mission examples
+
+Five worked missions ship under [src/dcs_mission_creator/missions/](src/dcs_mission_creator/missions/) — read them as templates for what a generator does with the overlay, flight packages, threats, triggers, and TTS. All are single-seat F-16C-50 sorties (coop-scalable via `--players`); every ground placement comes from the `map_overlay` tactical-scene helpers, not hand-tuned offsets.
+
+| Slug | Theater | Difficulty | Sortie |
+|------|---------|-----------|--------|
+| [`coastal_cover`](src/dcs_mission_creator/missions/coastal_cover.py) | Caucasus | trained | CAP + escort of an A-10C `Hawg` strike on a Russian armoured convoy north of Senaki; handle a 2-ship MiG-29S intercept from Sukhumi-Babushara. AWACS only, no tanker. |
+| [`kodori_strike`](src/dcs_mission_creator/missions/kodori_strike.py) | Caucasus | trained | Lead a mixed package (`Weasel` SEAD, `Eagle` F-15C CAP, `Magic` AWACS, `Texaco` tanker) onto a Russian FOB in the Kodori valley; SA-6 rollback, Su-27 CAP launches on intrusion. |
+| [`abkhaz_sweep`](src/dcs_mission_creator/missions/abkhaz_sweep.py) | Caucasus | ace | Solo air-superiority sweep off the Abkhaz coast vs. Su-27 + MiG-29S aggressors from Sochi-Adler / Gudauta, under an SA-6 that forces a high fight. No support. |
+| [`daryal_run`](src/dcs_mission_creator/missions/daryal_run.py) | Caucasus | ace | Solo SEAD strike on an S-300PS (SA-10) south of Beslan; low-level ingress up the Daryal Gorge, terrain-masked HARM pop-up. AWACS only, no escort/tanker. |
+| [`eastern_shield`](src/dcs_mission_creator/missions/eastern_shield.py) | Syria | trained | SEAD an SA-6 defending the Kuweires depot, escort A-10C `Hawg` onto it, then a MiG-29S scramble + armoured reserve push. Full support: `Magic` AWACS, `Texaco` tanker, `Eagle` F-15C TARCAP. |
+
+`eastern_shield` is the Syria example; the other four are Caucasus. Each `generate <slug>` also writes a full markdown briefing (`README.md`) alongside the `.miz` — situation, package, threats, ROE, frequencies, win/loss conditions.
+
 ## Adding a new mission
 
 1. Create `src/dcs_mission_creator/missions/<slug>.py` defining one `MissionBuilder` subclass with `name`, `title`, `build_miz`, and `readme`.
