@@ -10,6 +10,7 @@ count and calls `.generate(output_dir)`, which writes both the `.miz` and a
 Usage:
     dcs-mission-creator list
     dcs-mission-creator generate coastal_cover [--output-dir DIR] [--players N]
+    dcs-mission-creator generate                # every discovered mission
     dcs-mission-creator map-overlay build <theater> [--layers L,L,...]
     dcs-mission-creator map-overlay inspect <theater> [--layers L] [--out FILE]
     dcs-mission-creator map-overlay query <theater> --point X,Z --layer L
@@ -86,21 +87,49 @@ def _default_output_dir(name: str) -> Path:
     return Path(root) / _GENERATED_SUBDIR / name
 
 
+def _generate_one(
+    slug: str,
+    cls: type[MissionBuilder],
+    target: Path,
+    players: int,
+) -> None:
+    miz, readme = cls(players=players).generate(target)
+    log.info("wrote", mission=slug, path=str(miz))
+    log.info("wrote", mission=slug, path=str(readme))
+
+
 def _cmd_generate(
     missions_map: dict[str, type[MissionBuilder]],
-    name: str,
+    name: str | None,
     output_dir: Path | None,
     players: int,
 ) -> int:
-    cls = missions_map.get(name)
-    if cls is None:
-        available = ", ".join(sorted(missions_map)) or "(none)"
-        log.error("unknown mission", name=name, available=available)
+    """Generate one mission by slug, or every discovered mission when `name` is None."""
+    if name is not None:
+        cls = missions_map.get(name)
+        if cls is None:
+            available = ", ".join(sorted(missions_map)) or "(none)"
+            log.error("unknown mission", name=name, available=available)
+            return 2
+        _generate_one(name, cls, output_dir or _default_output_dir(name), players)
+        return 0
+
+    if not missions_map:
+        log.error("no missions found")
         return 2
-    target = output_dir or _default_output_dir(name)
-    miz, readme = cls(players=players).generate(target)
-    log.info("wrote", path=str(miz))
-    log.info("wrote", path=str(readme))
+
+    # With no slug, `--output-dir` is the parent that receives one folder per mission.
+    failed: list[str] = []
+    for slug in sorted(missions_map):
+        target = output_dir / slug if output_dir else _default_output_dir(slug)
+        try:
+            _generate_one(slug, missions_map[slug], target, players)
+        except Exception:
+            log.exception("failed to generate mission", mission=slug)
+            failed.append(slug)
+    if failed:
+        log.error("some missions failed", missions=", ".join(failed))
+        return 1
     return 0
 
 
@@ -242,11 +271,16 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("list", help="List available missions.")
 
-    gen = sub.add_parser("generate", help="Generate a mission by name.")
+    gen = sub.add_parser(
+        "generate",
+        help="Generate a mission by name (all missions if no name is given).",
+    )
     gen.add_argument(
         "name",
+        nargs="?",
+        default=None,
         choices=sorted(missions_map) or None,
-        help="Mission slug (e.g. coastal_cover).",
+        help="Mission slug (e.g. coastal_cover). Omit to generate every mission.",
     )
     out_arg = gen.add_argument(
         "--output-dir",
@@ -254,7 +288,9 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help=(
             f"Output directory for the .miz and README.md "
-            f"(default: ${_MISSIONS_ENV}/{_GENERATED_SUBDIR}/<name>/)."
+            f"(default: ${_MISSIONS_ENV}/{_GENERATED_SUBDIR}/<name>/). "
+            f"With no mission name, it is the parent that receives one "
+            f"<name>/ folder per mission."
         ),
     )
     out_arg.completer = argcomplete.completers.DirectoriesCompleter()  # ty: ignore[unresolved-attribute]

@@ -46,15 +46,19 @@ This downloads public elevation / OSM / land-cover data and takes ~45 min the fi
 ```bash
 uv run dcs-mission-creator list                    # show available missions
 uv run dcs-mission-creator generate coastal_cover  # writes <slug>.miz + README.md
+uv run dcs-mission-creator generate                # no slug → every mission
 ```
 
 Each generator writes two files into one output folder: the `<slug>.miz` (load this in DCS) and a `README.md` mission briefing.
 
 - **Default output:** `$DCS_MISSIONS_FOLDER/IAGeneratedMissions/<slug>/`. Set the `DCS_MISSIONS_FOLDER` env var to your DCS `Missions` folder so the `.miz` drops straight where DCS can load it; `generate` errors out if the var is unset and no `--output-dir` is given.
 - **Override:** `--output-dir DIR` writes both files to `DIR` instead.
+- **All at once:** omitting the mission slug generates every discovered mission, each into its own `<slug>/` folder; with `--output-dir DIR` that folder becomes `DIR/<slug>/`. A mission that fails is logged and the rest still run (exit code 1 at the end).
+- **Loadouts:** set `DCS_INSTALL_DIR` to your DCS World folder. pydcs reads stock payloads from the installed game and otherwise finds it only via the Windows registry, so off Windows (WSL included) an unset var means every aircraft spawns with empty pylons. Windows spellings are accepted and mapped to `/mnt/<drive>` under WSL.
 
 ```bash
 export DCS_MISSIONS_FOLDER="$HOME/Saved Games/DCS/Missions"
+export DCS_INSTALL_DIR="/mnt/e/Games/DCS World OpenBeta"   # WSL path to the game
 uv run dcs-mission-creator generate coastal_cover
 #   → $DCS_MISSIONS_FOLDER/IAGeneratedMissions/coastal_cover/coastal_cover.miz
 #   → $DCS_MISSIONS_FOLDER/IAGeneratedMissions/coastal_cover/README.md

@@ -313,8 +313,12 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
     # -- time, weather, airports --------------------------------------------
 
     def _set_time(self, m: Mission) -> None:
-        """05:30 local on 18 July 2026 (Caucasus is UTC+4)."""
-        m.start_time = datetime(2026, 7, 18, 1, 30, 0, tzinfo=timezone.utc)
+        """05:30 map-local on 18 July 2026 — dawn, the wall clock DCS shows in-game.
+
+        pydcs serialises the hour/minute verbatim and DCS reads the field as
+        map-local, so `tzinfo` is inert: write the local time you want.
+        """
+        m.start_time = datetime(2026, 7, 18, 5, 30, 0, tzinfo=timezone.utc)
 
     def _set_weather(self, m: Mission) -> None:
         """Summer dawn, scattered cumulus 2400 m, light NW wind, 22 C, 24 km vis."""

@@ -54,7 +54,9 @@ This is a pydcs-based DCS mission generator. Three docs, one job each:
   (plus `list`). The `pyproject.toml` `dcs-mission-creator` entry-point targets
   `__main__:main`, so both `uv run dcs-mission-creator generate <slug>` and
   `uv run python -m dcs_mission_creator generate <slug>` work once the project
-  is installed.
+  is installed. The slug is optional: `generate` with no name builds **every**
+  discovered mission (each into its own `<slug>/` folder), logging and skipping
+  past any that raise, then exiting 1 if any failed.
 - Default output for `generate` is the folder
   `$DCS_MISSIONS_FOLDER/IAGeneratedMissions/<slug>/`, which receives both
   `<slug>.miz` and `README.md`. The CLI errors out if `DCS_MISSIONS_FOLDER`
@@ -84,6 +86,12 @@ Cache key combines `backend.fingerprint()` + text, so swapping voice or
 backend invalidates without collision. Renders are deterministic per
 backend; commit the cache only if you want reproducible CI builds (we
 don't).
+
+For audio played from **mission Lua** rather than a trigger action, use
+`self._voice.register(m, text) -> str`: it renders, adds the WAV to the
+mission, and returns the in-`.miz` file name that
+`trigger.action.outSound*(…, "<name>.wav")` expects (the `SoundTo*` actions
+take a resource key instead — that is what `attach_to_*` wires up).
 
 ## Map-drawing helper (project-owned)
 
@@ -179,6 +187,69 @@ tasking.scramble_on_trigger(m, reserve,               # cold-ramp alert-5
   with a queued `StartCommand` and pushes it on the condition(s); generalizes
   pydcs `FlyingGroup.delay_start` (time-only) to any condition.
 
+## SAM EMCON / HARM-reaction helper (project-owned)
+
+[`emcon`](src/dcs_mission_creator/core/emcon.py) gives radar sites the one
+behaviour DCS does not model: reacting to an anti-radiation shot. Left alone, a
+site radiates while the HARM rides the beam in, so every SEAD shot is a free
+kill. `arm_emcon_reaction` writes one mission-start `DoScript` whose Lua hooks
+`S_EVENT_SHOT`, recognises ARM weapons, and cycles the listed sites through
+`ALARM_STATE GREEN` (radars off, weapons hold) and back to `RED`:
+
+```python
+from dcs_mission_creator.core.emcon import ArmSite, arm_emcon_reaction
+
+arm_emcon_reaction(
+    m,
+    [ArmSite(sa6, "SA-6", probability=0.9, delay_s=(3, 7), shutdown_s=(70, 130)),
+     ArmSite(sa2, "SA-2", probability=0.7), *ewr_groups],   # bare groups OK
+    voice=self._voice,                       # calls are spoken as well as printed
+    down_call="Magic: {label} has ceased emissions, site is dark.",
+    up_call="Magic: {label} is radiating again, expect it hot.",
+)
+```
+
+Per-site dials are the SEAD difficulty statement: `probability` (does this crew
+catch the launch at all), `delay_s` (recognition lag — a close-in HARM still
+kills), `shutdown_s` (how long it stays dark; repeat fire extends it),
+`react_range_m` (how far down the net the launch travels). Only list
+**radar-guided** sites — SA-13/MANPADS have nothing to shut down, and listing a
+mixed convoy would make the whole column hold fire on every HARM shot. Design
+rules (what reveal, what difficulty) live in the `dcs-mission` skill; the pydcs
+`DoScript` mechanics are in PYDCS_REFERENCE.md §7.
+
+## Mission Lua lives in `.lua` files
+
+Never embed mission-script Lua as a Python string literal. Every `DoScript`
+payload is a real file under
+[core/lua/](src/dcs_mission_creator/core/lua/) (e.g. `emcon.lua`), loaded via
+that package's loader:
+
+```python
+from dcs_mission_creator.core import lua
+
+script = lua.render("emcon.lua", SITES=rows, SIDE="coalition.side.BLUE",
+                    COOLDOWN="20.0")
+rule.add_action(lua.InlineDoScript(script))
+```
+
+Attach it with `lua.InlineDoScript`, **never** pydcs's `action.DoScript`: that
+one parks the Lua in the l10n dictionary and emits
+`a_do_script(getValueDictByKey("DictKey_…"))`, but DCS does not resolve
+dictionary keys inside the scripting sandbox — it hands the key back and
+compiles *that* as Lua, so the trigger dies at mission start with
+`[string "DictKey_Translation_N"]:1: '=' expected near '<eof>'`.
+`InlineDoScript` writes the source into the action's own `text` field, the way
+stock ED missions do.
+
+`lua.render(name, **subs)` replaces `__KEY__` placeholders with already-formatted
+Lua source and raises if a substitution names a placeholder the file lacks or if
+any `__PLACEHOLDER__` survives (a leftover would be a Lua syntax error at mission
+start). It does no quoting — build literals on the Python side (see `_lua_str` in
+[core/emcon.py](src/dcs_mission_creator/core/emcon.py)). `lua.source(name)`
+returns the raw text. New `.lua` files are picked up automatically; the
+`[tool.setuptools.package-data]` entry ships them in the wheel.
+
 ## Script structure: small named functions
 
 `build_miz` is the orchestrator, not the implementation. Each block of the
@@ -244,21 +315,48 @@ remain only at the pydcs API layer (`airport.set_blue()`,
   Caucasus mix: F-16C escort/CAP from Batumi over an A-10C strike on a
   Russian convoy near Senaki, MiG-29S intercept from Sukhumi-Babushara,
   trained difficulty, ~50 min sortie. Generates to `out/coastal_cover.miz`.
+- [idlib_gauntlet.py](src/dcs_mission_creator/missions/idlib_gauntlet.py) —
+  Syria: F-16C out of Hatay against a Syrian resupply column with organic
+  SHORAD, run through three SAM belts (SA-2 / SA-6 / SA-8 + EWR) that go dark
+  on HARM fire and re-radiate (`core/emcon.py`). Trained difficulty, ~60 min.
+  The reference for missions that want realistic SEAD.
 
-All five missions ([coastal_cover](src/dcs_mission_creator/missions/coastal_cover.py),
+All six missions ([coastal_cover](src/dcs_mission_creator/missions/coastal_cover.py),
 [kodori_strike](src/dcs_mission_creator/missions/kodori_strike.py),
 [eastern_shield](src/dcs_mission_creator/missions/eastern_shield.py),
+[idlib_gauntlet](src/dcs_mission_creator/missions/idlib_gauntlet.py),
 [abkhaz_sweep](src/dcs_mission_creator/missions/abkhaz_sweep.py),
 [daryal_run](src/dcs_mission_creator/missions/daryal_run.py)) paint an F10
 briefing plan via a `_draw_plan` step using `PlanOverlay` — see the
-map-drawing helper section above. The three trained missions (coastal_cover,
-kodori_strike, eastern_shield) draw estimated threat rings + NATO icons; the
-two ace missions (abkhaz_sweep, daryal_run) draw only the friendly plan plus
-a single vague threat zone (enemy positions withheld).
+map-drawing helper section above. The four trained missions (coastal_cover,
+kodori_strike, eastern_shield, idlib_gauntlet) draw estimated threat rings +
+NATO icons; the two ace missions (abkhaz_sweep, daryal_run) draw only the
+friendly plan plus a single vague threat zone (enemy positions withheld).
+
+## DCS installation (loadouts)
+
+pydcs reads stock payloads out of the **installed game**, and finds it only
+through the Windows registry — under WSL that fails, so
+`load_task_default_loadout()` silently leaves every pylon empty.
+[`core/dcs_install.py`](src/dcs_mission_creator/core/dcs_install.py) fixes that
+from the `DCS_INSTALL_DIR` env var; `MissionBuilder.__init__` calls
+`dcs_install.configure()` before any flight exists (pydcs caches its payload
+directories on first use), so missions need to do nothing.
+
+```bash
+export DCS_INSTALL_DIR="/mnt/e/Games/DCS World OpenBeta"   # 'E:\Games\…' also accepted
+# optional: only if the Saved Games folder isn't auto-found
+export DCS_SAVED_GAMES_DIR="/mnt/c/Users/<user>/Saved Games/DCS.openbeta"
+```
+
+Unset, the helper logs a warning and every generated flight flies clean.
+Liveries stay at the DCS default even when set — pydcs's livery scanner splits
+paths on `\` and cannot be used off Windows (see the docstring).
 
 ## Running
 
-(rely on the `DCS_MISSIONS_FOLDER` env var being available)
+(rely on the `DCS_MISSIONS_FOLDER` and `DCS_INSTALL_DIR` env vars being
+available)
 
 ```bash
 uv run python -m dcs_mission_creator.missions.coastal_cover --players 1

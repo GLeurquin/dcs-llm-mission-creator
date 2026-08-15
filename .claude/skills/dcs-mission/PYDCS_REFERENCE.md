@@ -61,9 +61,15 @@ assert not status                             # empty list == clean
   sides. Do not call any `add_country`; just fetch with `m.country("USA")` /
   `m.country("Russia")`. The argument is a **string** —
   `m.country(countries.USA.name)`, never `m.country(countries.USA)`.
-- `m.start_time` is a UTC `datetime`. Convert local→UTC by the terrain
-  offset. Caucasus is UTC+4, so 10:00 local on 15 May 2026 =
-  `datetime(2026, 5, 15, 6, 0, 0, tzinfo=timezone.utc)`.
+- `m.start_time` is a `datetime` whose **wall clock is map-local time — do
+  not apply any UTC offset**. pydcs serialises it as
+  `hour*3600 + minute*60 + second` verbatim (`mission.py`, `_get_mission_dict`)
+  and DCS reads that field as local time on the map, so `tzinfo` never reaches
+  the `.miz`. 10:00 local on Caucasus is
+  `datetime(2026, 5, 15, 10, 0, 0, tzinfo=timezone.utc)` — the `tzinfo` is
+  inert filler that keeps ruff's `DTZ` rules quiet. Subtracting the terrain
+  offset (writing `6, 0, 0` for a 10:00 sortie) silently moves the mission four
+  hours earlier and is how a daytime package ends up flying in the dark.
 - There is **no `mission.duration`**. End the sortie with triggers (§7) or
   let bingo fuel resolve it.
 - Import/save on non-Windows prints
@@ -147,6 +153,39 @@ for u in grp.units:
 - pydcs auto-assigns callsigns; the flight `name` seeds them. Project
   convention: player USAF/NATO `Dodge`/`Springfield`/`Uzi`, player Russian
   `Boris`/`Ivan`; AI `Magic`/`Hawg`/`Eagle`/`Texaco`.
+
+### 4.5 Loadouts — **spell them out, always**
+
+> **Gotcha.** `load_task_default_loadout(task)` / `load_loadout(name)` read
+> payload files from a **local DCS installation** (`dcs.payloads
+> .PayloadDirectories`), found only via the Windows registry. This project
+> feeds pydcs the path from `$DCS_INSTALL_DIR`
+> ([core/dcs_install.py](../../../src/dcs_mission_creator/core/dcs_install.py),
+> wired into `MissionBuilder.__init__`); with the var unset the payload files
+> are missing and every flight ships with **empty pylons** — an unarmed
+> player, a HARM-less Weasel, bandits with no missiles.
+>
+> **Corollary.** `Mission.flight_group*` calls `load_task_default_loadout`
+> itself at group creation, so a flight already carries a generic task loadout
+> by the time you touch it. `load_pylon` merges into that — clear the stations
+> first or the defaults survive on every pylon your list skips.
+
+```python
+f16 = planes.F_16C_50
+for u in grp.units:              # make the spelled-out loadout authoritative
+    u.pylons.clear()
+grp.load_pylon(f16.Pylon3.AGM_88C_HARM___High_Speed_Anti_Radiation_Missile_)
+grp.load_pylon(f16.Pylon10.AN_ASQ_213_HTS___HARM_Targeting_System)
+```
+- Each `PlaneType` carries `pylons` (valid station numbers) and a `PylonN`
+  class per station whose attributes are the stores that station legally
+  accepts — `(pylon_number, {"clsid": …})` tuples. Use them; do not hand-write
+  CLSIDs, and do not assume a store fits a station (the F-16C takes Mavericks
+  on 3/7 but not 4/6).
+- `FlyingGroup.load_pylon(store, pylon=None)` applies to every unit in the
+  group; the pylon number comes from the tuple. Discover options with
+  `[a for a in dir(planes.F_16C_50.Pylon3) if not a.startswith("_")]`.
+- Raw CLSIDs live in `dcs.weapons_data.Weapons` if you need a name→id lookup.
 
 ---
 
@@ -313,6 +352,42 @@ m.triggerrules.triggers.append(t)
 - **Wrap all displayed text in `m.string("…")`** to register it in the
   translation table before handing it to a `MessageTo*`/briefing setter.
 
+### 7.1 Mission scripting (`DoScript`) — for behaviour triggers can't express
+
+```python
+from dcs_mission_creator.core import lua
+
+t = triggers.TriggerStart(comment="ARM reaction")
+t.add_action(lua.InlineDoScript(lua_source))   # multi-line Lua is fine
+m.triggerrules.triggers.append(t)
+```
+- **Do not use pydcs's `action.DoScript`.** It is a `TextAction`: the Lua lands
+  in the l10n dictionary and the rule references it as
+  `a_do_script(getValueDictByKey("DictKey_…"))`. DCS does *not* resolve
+  dictionary keys in the scripting sandbox — `getValueDictByKey` returns the key
+  itself, so the game compiles the string `DictKey_Translation_N` as Lua and the
+  trigger dies at mission start:
+  `Mission script error: [string "DictKey_Translation_N"]:1: '=' expected near
+  '<eof>'`. Stock ED missions instead store the source inline in the action's
+  own `text` field with no `KeyDict_text`; the project's
+  `lua.InlineDoScript` (in [core/lua/__init__.py](../../../src/dcs_mission_creator/core/lua/__init__.py))
+  does that. `dcs.lua.serialize.dumps` escapes `"` and turns each newline into a
+  Lua line-continuation, so a multi-line script survives the double escaping
+  verbatim (verified by compiling the emitted chunk).
+- `DoScriptFile(res_key)` runs a `.lua` added via
+  `m.map_resource.add_resource_file(...)` instead.
+- The mission-scripting env (`world`, `timer`, `Group.getByName`, `Controller
+  :setOption`, `trigger.action.out*`) is what makes reactive AI possible:
+  `AI.Option.Ground.id.ALARM_STATE` / `.ROE` toggle a SAM site between
+  radiating and dark, `world.addEventHandler` sees `S_EVENT_SHOT`, and
+  `timer.scheduleFunction(fn, arg, t)` schedules the way back.
+- Sounds played from Lua are addressed **by file name**
+  (`trigger.action.outSoundForCoalition(side, "x.wav")`), not by resource key —
+  register the WAV with `m.map_resource.add_resource_file(path)`; it lands at
+  `l10n/DEFAULT/<basename>` (project wrapper: `VoiceSynth.register`).
+- **Project wrapper:** `emcon.arm_emcon_reaction(m, sites, …)` generates the
+  HARM-reaction script; see CLAUDE.md before hand-rolling one.
+
 ### Briefing setters (on `Mission`)
 `set_description_text`, `set_description_bluetask_text`,
 `set_description_redtask_text`, `set_sortie_text`. Plain text.
@@ -456,6 +531,9 @@ calling §11 / triggers directly. Their contracts live in
 - `m.country("USA")` takes a **string**.
 - `StartType` has no `Hot`; `Warm` is hot-ramp.
 - `group_size` caps at 4 for fighters; ≥5 AI desyncs formation output.
+- Loadouts come from the DCS install `$DCS_INSTALL_DIR` points at; unset, the
+  jets fly empty. Spelling a loadout out means clearing `u.pylons` first —
+  group creation already applied a task default (§4.5).
 - `Point` is world meters, not lat/lon; third ctor arg is the terrain.
 - `m.save(path)` does **not** mkdir the parent.
 - No `mission.duration` — end via triggers or bingo fuel.

@@ -34,6 +34,9 @@ package-dir = {"" = "src"}
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"dcs_mission_creator.core.lua" = ["*.lua"]
+
 [dependency-groups]
 dev = [
     "ruff>=0.15.13",

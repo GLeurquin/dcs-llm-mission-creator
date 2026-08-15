@@ -22,7 +22,7 @@ it does for `mission.vehicle_group(...)`.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import structlog
 from dcs.unit import Skill
@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from dcs.mapping import Point
     from dcs.mission import Mission
     from dcs.terrain.terrain import Terrain
+    from dcs.unitgroup import Group
     from dcs.unittype import VehicleType
 
     from dcs_mission_creator.map_overlay.query import MapOverlay
@@ -52,18 +53,22 @@ _LAUNCHER_RING = 65.0
 # -- shared placement primitives -------------------------------------------
 
 
-def set_skill(group: VehicleGroup, skill: Skill) -> None:
-    """Apply `skill` to every unit of `group` (was per-mission `_set_skill`)."""
+def set_skill(group: Group, skill: Skill) -> None:
+    """Apply `skill` to every unit of `group` (was per-mission `_set_skill`).
+
+    Takes any pydcs `Group` — vehicle sites, flights, ships — not just the
+    air-defense groups the rest of this module builds.
+    """
     for u in group.units:
         u.skill = skill
 
 
 def _add(
-    m: "Mission",
+    m: Mission,
     vg: VehicleGroup,
     name: str,
-    type_: "type[VehicleType]",
-    center: "Point",
+    type_: type[VehicleType],
+    center: Point,
     site_heading: float,
     *,
     bearing: float,
@@ -77,11 +82,11 @@ def _add(
 
 
 def _ring(
-    m: "Mission",
+    m: Mission,
     vg: VehicleGroup,
     label: str,
-    type_: "type[VehicleType]",
-    center: "Point",
+    type_: type[VehicleType],
+    center: Point,
     site_heading: float,
     count: int,
     *,
@@ -105,8 +110,8 @@ def _ring(
 def _finish(
     vg: VehicleGroup,
     skill: Skill,
-    overlay: Optional["MapOverlay"],
-    terrain: Optional["Terrain"],
+    overlay: MapOverlay | None,
+    terrain: Terrain | None,
 ) -> VehicleGroup:
     """Set uniform skill and, if an overlay is given, snap units off canopy."""
     set_skill(vg, skill)
@@ -120,16 +125,16 @@ def _finish(
 
 
 def build_sa2_site(
-    m: "Mission",
-    country: "Country",
-    position: "Point",
+    m: Mission,
+    country: Country,
+    position: Point,
     heading: float = 0,
     *,
     launchers: int = 6,
     prefix: str = "",
     skill: Skill = Skill.Average,
-    overlay: Optional["MapOverlay"] = None,
-    terrain: Optional["Terrain"] = None,
+    overlay: MapOverlay | None = None,
+    terrain: Terrain | None = None,
 ) -> VehicleGroup:
     """SA-2 (S-75 'Guideline'): Flat Face SR + Fan Song TR + RF + N launchers."""
     vg = m.vehicle_group(
@@ -160,16 +165,16 @@ def build_sa2_site(
 
 
 def build_sa3_site(
-    m: "Mission",
-    country: "Country",
-    position: "Point",
+    m: Mission,
+    country: Country,
+    position: Point,
     heading: float = 0,
     *,
     launchers: int = 4,
     prefix: str = "",
     skill: Skill = Skill.Average,
-    overlay: Optional["MapOverlay"] = None,
-    terrain: Optional["Terrain"] = None,
+    overlay: MapOverlay | None = None,
+    terrain: Terrain | None = None,
 ) -> VehicleGroup:
     """SA-3 (S-125 'Goa'): Flat Face SR + Low Blow TR + N launchers."""
     vg = m.vehicle_group(
@@ -198,16 +203,16 @@ def build_sa3_site(
 
 
 def build_sa5_site(
-    m: "Mission",
-    country: "Country",
-    position: "Point",
+    m: Mission,
+    country: Country,
+    position: Point,
     heading: float = 0,
     *,
     launchers: int = 4,
     prefix: str = "",
     skill: Skill = Skill.Average,
-    overlay: Optional["MapOverlay"] = None,
-    terrain: Optional["Terrain"] = None,
+    overlay: MapOverlay | None = None,
+    terrain: Terrain | None = None,
 ) -> VehicleGroup:
     """SA-5 (S-200 'Gammon'): Tin Shield SR + Square Pair TR + N launchers."""
     vg = m.vehicle_group(
@@ -237,16 +242,16 @@ def build_sa5_site(
 
 
 def build_nasams_site(
-    m: "Mission",
-    country: "Country",
-    position: "Point",
+    m: Mission,
+    country: Country,
+    position: Point,
     heading: float = 0,
     *,
     launchers: int = 3,
     prefix: str = "",
     skill: Skill = Skill.Average,
-    overlay: Optional["MapOverlay"] = None,
-    terrain: Optional["Terrain"] = None,
+    overlay: MapOverlay | None = None,
+    terrain: Terrain | None = None,
 ) -> VehicleGroup:
     """NASAMS: MPQ-64F1 Sentinel SR + command post + N AIM-120C launchers."""
     vg = m.vehicle_group(
@@ -273,16 +278,16 @@ def build_nasams_site(
 
 
 def build_irist_site(
-    m: "Mission",
-    country: "Country",
-    position: "Point",
+    m: Mission,
+    country: Country,
+    position: Point,
     heading: float = 0,
     *,
     launchers: int = 3,
     prefix: str = "",
     skill: Skill = Skill.Average,
-    overlay: Optional["MapOverlay"] = None,
-    terrain: Optional["Terrain"] = None,
+    overlay: MapOverlay | None = None,
+    terrain: Terrain | None = None,
 ) -> VehicleGroup:
     """IRIS-T SLM: search/track radar + command post + N launchers."""
     vg = m.vehicle_group(
@@ -315,16 +320,16 @@ def build_irist_site(
 
 
 def build_roland_site(
-    m: "Mission",
-    country: "Country",
-    position: "Point",
+    m: Mission,
+    country: Country,
+    position: Point,
     heading: float = 0,
     *,
     launchers: int = 2,
     prefix: str = "",
     skill: Skill = Skill.Average,
-    overlay: Optional["MapOverlay"] = None,
-    terrain: Optional["Terrain"] = None,
+    overlay: MapOverlay | None = None,
+    terrain: Terrain | None = None,
 ) -> VehicleGroup:
     """Roland: acquisition radar (EWR) + N Roland ADS fire units."""
     vg = m.vehicle_group(
@@ -335,16 +340,16 @@ def build_roland_site(
 
 
 def build_rapier_site(
-    m: "Mission",
-    country: "Country",
-    position: "Point",
+    m: Mission,
+    country: Country,
+    position: Point,
     heading: float = 0,
     *,
     launchers: int = 2,
     prefix: str = "",
     skill: Skill = Skill.Average,
-    overlay: Optional["MapOverlay"] = None,
-    terrain: Optional["Terrain"] = None,
+    overlay: MapOverlay | None = None,
+    terrain: Terrain | None = None,
 ) -> VehicleGroup:
     """Rapier: blindfire TR + optical tracker + N launchers."""
     vg = m.vehicle_group(
@@ -377,16 +382,16 @@ def build_rapier_site(
 
 
 def build_hq7_site(
-    m: "Mission",
-    country: "Country",
-    position: "Point",
+    m: Mission,
+    country: Country,
+    position: Point,
     heading: float = 0,
     *,
     launchers: int = 4,
     prefix: str = "",
     skill: Skill = Skill.Average,
-    overlay: Optional["MapOverlay"] = None,
-    terrain: Optional["Terrain"] = None,
+    overlay: MapOverlay | None = None,
+    terrain: Terrain | None = None,
 ) -> VehicleGroup:
     """HQ-7: search radar + N HQ-7B SHORAD TELARs."""
     vg = m.vehicle_group(
@@ -400,16 +405,16 @@ def build_hq7_site(
 
 
 def build_sa8_site(
-    m: "Mission",
-    country: "Country",
-    position: "Point",
+    m: Mission,
+    country: Country,
+    position: Point,
     heading: float = 0,
     *,
     launchers: int = 3,
     prefix: str = "",
     skill: Skill = Skill.Average,
-    overlay: Optional["MapOverlay"] = None,
-    terrain: Optional["Terrain"] = None,
+    overlay: MapOverlay | None = None,
+    terrain: Terrain | None = None,
 ) -> VehicleGroup:
     """SA-8 (Osa 'Gecko'): N self-contained TELARs, no separate radar."""
     vg = m.vehicle_group(
@@ -430,17 +435,17 @@ def build_sa8_site(
 
 
 def build_sa13_site(
-    m: "Mission",
-    country: "Country",
-    position: "Point",
+    m: Mission,
+    country: Country,
+    position: Point,
     heading: float = 0,
     *,
     launchers: int = 2,
     prefix: str = "",
     skill: Skill = Skill.Average,
     with_dog_ear: bool = True,
-    overlay: Optional["MapOverlay"] = None,
-    terrain: Optional["Terrain"] = None,
+    overlay: MapOverlay | None = None,
+    terrain: Terrain | None = None,
 ) -> VehicleGroup:
     """SA-13 (Strela-10 'Gopher'): N TELARs, optional Dog Ear search radar."""
     vg = m.vehicle_group(
@@ -472,16 +477,16 @@ def build_sa13_site(
 
 
 def build_sa15_site(
-    m: "Mission",
-    country: "Country",
-    position: "Point",
+    m: Mission,
+    country: Country,
+    position: Point,
     heading: float = 0,
     *,
     launchers: int = 2,
     prefix: str = "",
     skill: Skill = Skill.Average,
-    overlay: Optional["MapOverlay"] = None,
-    terrain: Optional["Terrain"] = None,
+    overlay: MapOverlay | None = None,
+    terrain: Terrain | None = None,
 ) -> VehicleGroup:
     """SA-15 (Tor 'Gauntlet'): N self-contained TELARs (current pydcs id)."""
     vg = m.vehicle_group(
@@ -502,16 +507,16 @@ def build_sa15_site(
 
 
 def build_sa19_site(
-    m: "Mission",
-    country: "Country",
-    position: "Point",
+    m: Mission,
+    country: Country,
+    position: Point,
     heading: float = 0,
     *,
     launchers: int = 2,
     prefix: str = "",
     skill: Skill = Skill.Average,
-    overlay: Optional["MapOverlay"] = None,
-    terrain: Optional["Terrain"] = None,
+    overlay: MapOverlay | None = None,
+    terrain: Terrain | None = None,
 ) -> VehicleGroup:
     """SA-19 (2S6 Tunguska 'Grison'): N self-contained gun/missile TELARs."""
     vg = m.vehicle_group(

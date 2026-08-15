@@ -70,6 +70,17 @@ class VoiceSynth:
 
     # -- DCS-side wiring ----------------------------------------------------
 
+    def register(self, m: "Mission", text: str) -> str:
+        """Render `text`, add it to the mission, return its in-`.miz` file name.
+
+        For audio played from mission Lua (`trigger.action.outSound*`), which
+        addresses sounds by file name — unlike the `SoundTo*` trigger actions
+        the `attach_to_*` helpers use, which take a resource key.
+        """
+        wav = self.render(text)
+        m.map_resource.add_resource_file(str(wav))
+        return wav.name
+
     def attach_to_all(self, m: "Mission", rule: "TriggerRule", text: str) -> Path:
         """Render `text`, register with the mission, append `SoundToAll`."""
         from dcs import action

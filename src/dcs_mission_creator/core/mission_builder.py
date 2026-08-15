@@ -12,6 +12,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from pathlib import Path
 
+from dcs_mission_creator.core import dcs_install
+
 
 class MissionBuilder(ABC):
     name: str
@@ -21,6 +23,8 @@ class MissionBuilder(ABC):
         if players < 1 or players > 4:
             raise ValueError(f"players must be 1..4, got {players}")
         self.players = players
+        # Before any flight is built: pydcs caches its payload dirs on first use.
+        dcs_install.configure()
 
     @abstractmethod
     def build_miz(self, miz_path: Path) -> None:
