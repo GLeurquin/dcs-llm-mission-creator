@@ -46,7 +46,7 @@ from dcs.unitgroup import VehicleGroup
 from dcs.unittype import VehicleType
 
 from dcs_mission_creator.core import waypoints
-from dcs_mission_creator.core.map_draw import PlanOverlay, conceal_country
+from dcs_mission_creator.core.map_draw import PlanOverlay
 from dcs_mission_creator.core.mission_builder import MissionBuilder
 from dcs_mission_creator.core.placement import (
     FOREST_BUFFER_M as _FOREST_BUFFER_M,
@@ -57,6 +57,7 @@ from dcs_mission_creator.core.placement import (
 )
 from dcs_mission_creator.core.tasking import apply_ai_difficulty
 from dcs_mission_creator.core.tts import VoiceSynth
+from dcs_mission_creator.core.visibility import conceal_country
 from dcs_mission_creator.map_overlay.placement import Placement
 from dcs_mission_creator.map_overlay.scene import TacticalScene
 

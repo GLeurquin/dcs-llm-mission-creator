@@ -54,7 +54,7 @@ from dcs.unittype import VehicleType
 
 from dcs_mission_creator.core import air_defense as ad, routing, waypoints
 from dcs_mission_creator.core.emcon import ArmSite, arm_emcon_reaction
-from dcs_mission_creator.core.map_draw import PlanOverlay, conceal_country
+from dcs_mission_creator.core.map_draw import PlanOverlay
 from dcs_mission_creator.core.mission_builder import MissionBuilder
 from dcs_mission_creator.core.placement import (
     convoy_spawn,
@@ -71,6 +71,7 @@ from dcs_mission_creator.core.tasking import (
     scramble_on_trigger,
 )
 from dcs_mission_creator.core.tts import VoiceSynth
+from dcs_mission_creator.core.visibility import conceal_country
 from dcs_mission_creator.map_overlay.scene import TacticalScene
 
 # Flag raised when the F/A-18C strike pair is cleared into the AO.

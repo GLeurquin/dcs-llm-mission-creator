@@ -13,7 +13,7 @@ import json
 from dataclasses import dataclass, field
 from importlib.resources import files
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from dcs.mapping import Point
@@ -75,6 +75,11 @@ class MapOverlay:
         default=None, init=False, repr=False, compare=False
     )
 
+    #: Opened zarr arrays, keyed by layer name — see `_open_layer`.
+    _layers: dict[str, Any] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
+
     @staticmethod
     def load(theater: str, *, seed: int = DEFAULT_SEED) -> MapOverlay:
         root = overlay_root(theater)
@@ -92,10 +97,21 @@ class MapOverlay:
         col = int((point.y - b.left) / cell_size_m)
         return row, col
 
-    def _open_layer(self, name: str):
-        import zarr  # local import keeps cold-start cheap for callers using only one layer
+    def _open_layer(self, name: str) -> Any:
+        """Open a layer's zarr array once and keep it.
 
-        return zarr.open_array(str(self.root / f"{name}.zarr"), mode="r")
+        The point queries below run per unit and, inside `find_placement`'s
+        fallback spiral, per candidate cell — reopening the array every time
+        made a snap of one platoon hundreds of opens deep. zarr reads stay
+        lazy either way; only the handle is cached.
+        """
+        cached = self._layers.get(name)
+        if cached is None:
+            import zarr  # local import keeps cold-start cheap for one-layer callers
+
+            cached = zarr.open_array(str(self.root / f"{name}.zarr"), mode="r")
+            self._layers[name] = cached
+        return cached
 
     # ---------------------------------------------------------- point queries
     def vegetation_at(self, point: Point) -> Vegetation:

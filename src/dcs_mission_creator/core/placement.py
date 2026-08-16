@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import math
 
+import structlog
 from dcs.mapping import Point
 from dcs.terrain.terrain import Terrain
 from dcs.unitgroup import VehicleGroup
@@ -25,6 +26,8 @@ from dcs.unitgroup import VehicleGroup
 from dcs_mission_creator.map_overlay.placement import Placement, Vegetation
 from dcs_mission_creator.map_overlay.query import MapOverlay
 from dcs_mission_creator.map_overlay.scene import TacticalScene
+
+log = structlog.get_logger(__name__)
 
 # Standard "no canopy, no water" exclusion. Ground vehicles, AAA, SAMs and
 # EWR all want this — DCS ground units render and engage poorly inside dense
@@ -80,6 +83,16 @@ def find_clear_spot(
             cand = Point(anchor.x + dx, anchor.y + dy, terrain)
             if overlay.vegetation_at(cand) not in NO_FOREST:
                 return cand
+    # Every strategy failed. Handing back the anchor drops the unit wherever it
+    # was — in the canopy or the water this function exists to avoid — so say so
+    # rather than letting a mission ship with a drowned platoon in silence.
+    log.warning(
+        "no clear spot found, falling back to the raw anchor",
+        x=round(anchor.x),
+        y=round(anchor.y),
+        radius_m=radius_m,
+        vegetation=overlay.vegetation_at(anchor).name,
+    )
     return anchor
 
 

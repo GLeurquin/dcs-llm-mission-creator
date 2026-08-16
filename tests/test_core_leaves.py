@@ -15,7 +15,7 @@ import pytest
 from dcs_mission_creator.core import lua
 from dcs_mission_creator.core.dcs_install import _local_path, _variant_suffix
 from dcs_mission_creator.core.emcon import _lua_str
-from dcs_mission_creator.core.map_draw import Difficulty
+from dcs_mission_creator.core.difficulty import Difficulty
 
 
 # ------------------------------------------------------------------- lua.source

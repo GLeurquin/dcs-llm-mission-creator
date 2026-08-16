@@ -39,7 +39,7 @@ from dcs import action, task, triggers
 from dcs.mapping import Vector2
 from dcs.task import Designation, Modulation, WeaponType
 
-from dcs_mission_creator.core.map_draw import Difficulty
+from dcs_mission_creator.core.difficulty import Difficulty
 
 if TYPE_CHECKING:
     from dcs.condition import Condition
@@ -89,11 +89,7 @@ def apply_ai_difficulty(
     group's spawn-waypoint ComboTask. Recruit = passive, radar-shy, bugs out on
     bingo; ace = weapons-free, defends and uses ECM aggressively, stays on task.
     """
-    d = (
-        difficulty
-        if isinstance(difficulty, Difficulty)
-        else Difficulty.parse(difficulty)
-    )
+    d = Difficulty.coerce(difficulty)
     tasks = group.points[0].tasks
     tasks.append(task.OptROE(_ROE[d]))
     tasks.append(task.OptReactOnThreat(_REACT[d]))
