@@ -24,10 +24,8 @@ Composition (difficulty: ace):
 
 from __future__ import annotations
 
-import argparse
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import cast
 
 from dcs import action, condition, planes, task, triggers, vehicles
@@ -41,6 +39,7 @@ from dcs.unitgroup import VehicleGroup
 from dcs.unittype import VehicleType
 
 from dcs_mission_creator.core import waypoints
+from dcs_mission_creator.core.cli import run_cli
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.map_draw import PlanOverlay
 from dcs_mission_creator.core.mission_builder import MissionBuilder
@@ -49,6 +48,7 @@ from dcs_mission_creator.core.placement import load_scene
 from dcs_mission_creator.core.tasking import apply_ai_difficulty
 from dcs_mission_creator.core.tts import VoiceSynth
 from dcs_mission_creator.core.visibility import conceal_country
+from dcs_mission_creator.core.weather import Weather, Wind
 from dcs_mission_creator.map_overlay.query import MapOverlay
 from dcs_mission_creator.map_overlay.scene import TacticalScene
 
@@ -303,20 +303,17 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     def _set_weather(self, m: Mission) -> None:
         """Autumn dusk, broken layer at 2200 m, light N wind, 12 C, 30 km visibility."""
-        w = m.weather
-        w.season_temperature = 12.0
-        w.qnh = 760
-        w.wind_at_ground.direction = 0
-        w.wind_at_ground.speed = 4
-        w.wind_at_2000.direction = 10
-        w.wind_at_2000.speed = 6
-        w.wind_at_8000.direction = 350
-        w.wind_at_8000.speed = 8
-        w.clouds_base = 2200
-        w.clouds_thickness = 800
-        w.clouds_density = 6
-        w.visibility_distance = 30000
-        w.name = "Autumn dusk"
+        Weather(
+            name="Autumn dusk",
+            season_temperature=12.0,
+            clouds_base=2200,
+            clouds_thickness=800,
+            clouds_density=6,
+            visibility_distance=30000,
+            wind_at_ground=Wind(0, 4),
+            wind_at_2000=Wind(10, 6),
+            wind_at_8000=Wind(350, 8),
+        ).apply(m)
 
     def _setup_airports(self, m: Mission) -> _Scene:
         """Claim Vaziani for blue, Mozdok for red, derive valley + target geometry."""
@@ -629,26 +626,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Generate the Caucasus 'Daryal Run' ace SEAD mission."
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=Path("out/daryal_run"),
-        help="Output directory for the .miz and README.md (default: out/daryal_run)",
-    )
-    parser.add_argument(
-        "--players",
-        type=int,
-        default=1,
-        choices=[1, 2, 3, 4],
-        help="Number of coop client slots in Dodge flight (default: 1)",
-    )
-    args = parser.parse_args()
-    miz, readme = DaryalRun(players=args.players).generate(args.output_dir)
-    print(f"wrote {miz}")
-    print(f"wrote {readme}")
+    run_cli(DaryalRun)
 
 
 if __name__ == "__main__":

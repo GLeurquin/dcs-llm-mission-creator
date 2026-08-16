@@ -34,10 +34,8 @@ Composition (difficulty: trained):
 
 from __future__ import annotations
 
-import argparse
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import cast
 
 from dcs import action, condition, planes, task, templates, triggers, vehicles
@@ -53,6 +51,7 @@ from dcs.unitgroup import FlyingGroup, VehicleGroup
 from dcs.unittype import VehicleType
 
 from dcs_mission_creator.core import air_defense as ad, routing, waypoints
+from dcs_mission_creator.core.cli import run_cli
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.emcon import ArmSite, arm_emcon_reaction
 from dcs_mission_creator.core.map_draw import PlanOverlay
@@ -74,6 +73,7 @@ from dcs_mission_creator.core.tasking import (
 )
 from dcs_mission_creator.core.tts import VoiceSynth
 from dcs_mission_creator.core.visibility import conceal_country
+from dcs_mission_creator.core.weather import Weather, Wind
 from dcs_mission_creator.map_overlay.query import MapOverlay
 from dcs_mission_creator.map_overlay.scene import TacticalScene
 
@@ -423,20 +423,17 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     def _set_weather(self, m: Mission) -> None:
         """Late-summer Levant haze: 30 C, light west wind, 25 km visibility."""
-        w = m.weather
-        w.season_temperature = 30.0
-        w.qnh = 760
-        w.wind_at_ground.direction = 270
-        w.wind_at_ground.speed = 3
-        w.wind_at_2000.direction = 280
-        w.wind_at_2000.speed = 7
-        w.wind_at_8000.direction = 290
-        w.wind_at_8000.speed = 12
-        w.clouds_base = 3000
-        w.clouds_thickness = 300
-        w.clouds_density = 2
-        w.visibility_distance = 25000
-        w.name = "Late summer haze"
+        Weather(
+            name="Late summer haze",
+            season_temperature=30.0,
+            clouds_base=3000,
+            clouds_thickness=300,
+            clouds_density=2,
+            visibility_distance=25000,
+            wind_at_ground=Wind(270, 3),
+            wind_at_2000=Wind(280, 7),
+            wind_at_8000=Wind(290, 12),
+        ).apply(m)
 
     def _setup_airports(self, m: Mission) -> _Scene:
         """Claim the two blue fields, the Syrian fields for red, derive the AO axis.
@@ -1472,26 +1469,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Generate the Syria 'Idlib Gauntlet' convoy-interdiction mission."
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=Path("out/idlib_gauntlet"),
-        help="Output directory for the .miz and README.md (default: out/idlib_gauntlet)",
-    )
-    parser.add_argument(
-        "--players",
-        type=int,
-        default=1,
-        choices=[1, 2, 3, 4],
-        help="Number of coop client slots in Uzi flight (default: 1)",
-    )
-    args = parser.parse_args()
-    miz, readme = IdlibGauntlet(players=args.players).generate(args.output_dir)
-    print(f"wrote {miz}")
-    print(f"wrote {readme}")
+    run_cli(IdlibGauntlet)
 
 
 if __name__ == "__main__":

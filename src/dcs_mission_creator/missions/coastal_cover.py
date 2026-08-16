@@ -19,10 +19,8 @@ Composition (difficulty: trained):
 
 from __future__ import annotations
 
-import argparse
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import cast
 
 from dcs import action, condition, planes, task, triggers, vehicles
@@ -37,6 +35,7 @@ from dcs.unit import Skill
 from dcs.unitgroup import VehicleGroup
 from dcs.unittype import VehicleType
 
+from dcs_mission_creator.core.cli import run_cli
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.map_draw import PlanOverlay
 from dcs_mission_creator.core.mission_builder import MissionBuilder
@@ -48,6 +47,7 @@ from dcs_mission_creator.core.placement import (
 from dcs_mission_creator.core.tasking import apply_ai_difficulty
 from dcs_mission_creator.core.tts import VoiceSynth
 from dcs_mission_creator.core.visibility import conceal_country
+from dcs_mission_creator.core.weather import Weather, Wind
 from dcs_mission_creator.map_overlay.query import MapOverlay
 from dcs_mission_creator.map_overlay.scene import TacticalScene
 
@@ -271,20 +271,17 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     def _set_weather(self, m: Mission) -> None:
         """Spring scattered cumulus, light NW wind, 18 C, 80 km visibility."""
-        w = m.weather
-        w.season_temperature = 18.0
-        w.qnh = 760
-        w.wind_at_ground.direction = 300
-        w.wind_at_ground.speed = 4
-        w.wind_at_2000.direction = 290
-        w.wind_at_2000.speed = 7
-        w.wind_at_8000.direction = 280
-        w.wind_at_8000.speed = 12
-        w.clouds_base = 2400
-        w.clouds_thickness = 600
-        w.clouds_density = 4
-        w.visibility_distance = 80000
-        w.name = "Spring scattered"
+        Weather(
+            name="Spring scattered",
+            season_temperature=18.0,
+            clouds_base=2400,
+            clouds_thickness=600,
+            clouds_density=4,
+            visibility_distance=80000,
+            wind_at_ground=Wind(300, 4),
+            wind_at_2000=Wind(290, 7),
+            wind_at_8000=Wind(280, 12),
+        ).apply(m)
 
     def _setup_airports(self, m: Mission) -> _Scene:
         """Claim Batumi/Kutaisi for blue, Sukhumi for red, derive AO center."""
@@ -713,26 +710,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Generate the Caucasus 'Coastal Cover' mix mission."
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=Path("out/coastal_cover"),
-        help="Output directory for the .miz and README.md (default: out/coastal_cover)",
-    )
-    parser.add_argument(
-        "--players",
-        type=int,
-        default=1,
-        choices=[1, 2, 3, 4],
-        help="Number of coop client slots in Dodge flight (default: 1)",
-    )
-    args = parser.parse_args()
-    miz, readme = CoastalCover(players=args.players).generate(args.output_dir)
-    print(f"wrote {miz}")
-    print(f"wrote {readme}")
+    run_cli(CoastalCover)
 
 
 if __name__ == "__main__":
