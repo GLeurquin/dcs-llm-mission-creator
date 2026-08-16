@@ -30,8 +30,6 @@ from dcs.unit import Skill
 from dcs.unitgroup import VehicleGroup
 from dcs.vehicles import AirDefence
 
-from dcs_mission_creator.core.placement import snap_units_clear
-
 if TYPE_CHECKING:
     from dcs.country import Country
     from dcs.mapping import Point
@@ -127,6 +125,12 @@ def _finish(
     """Set uniform skill and, if an overlay is given, snap units off canopy."""
     set_skill(vg, skill)
     if overlay is not None and terrain is not None:
+        # Imported here, not at module scope: core.placement reaches into
+        # map_overlay.query, which pulls in numpy and the whole raster stack.
+        # A module about SAM component layouts should not cost that to import
+        # when the caller never asks for snapping.
+        from dcs_mission_creator.core.placement import snap_units_clear
+
         snap_units_clear(overlay, terrain, vg)
     elif overlay is not None or terrain is not None:
         # Snapping needs both. Passing one alone used to skip it in silence,
