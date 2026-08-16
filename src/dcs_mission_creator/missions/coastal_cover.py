@@ -45,7 +45,10 @@ from dcs_mission_creator.core.placement import (
     load_scene,
     sam_site_on_ridge,
 )
-from dcs_mission_creator.core.tasking import apply_ai_difficulty
+from dcs_mission_creator.core.tasking import (
+    apply_ai_difficulty,
+    apply_threat_reaction,
+)
 from dcs_mission_creator.core.tts import VoiceSynth
 from dcs_mission_creator.core.visibility import conceal_country
 from dcs_mission_creator.core.weather import Weather, Wind
@@ -543,6 +546,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             group_size=2,
         )
         set_skill(hog, Skill.High)
+        apply_threat_reaction(hog)
         return hog
 
     def _spawn_cap(
@@ -572,6 +576,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             group_size=2,
         )
         set_skill(eagle, Skill.High)
+        apply_threat_reaction(eagle)
         return p1, p2
 
     def _spawn_player(
