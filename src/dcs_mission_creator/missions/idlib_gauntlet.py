@@ -61,7 +61,7 @@ from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.emcon import ArmSite, arm_emcon_reaction
 from dcs_mission_creator.core.map_draw import PlanOverlay
 from dcs_mission_creator.core.mission_builder import MissionBuilder
-from dcs_mission_creator.core.mission_kit import mark_clients
+from dcs_mission_creator.core.mission_kit import arm, mark_clients
 from dcs_mission_creator.core.placement import (
     convoy_spawn,
     find_clear_spot,
@@ -714,7 +714,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             scene.convoy_destination, altitude=6000, speed=800, name="CONVOY"
         )
         migs.land_at(scene.bassel)
-        self._arm(
+        arm(
             migs,
             planes.MiG_29S,
             [
@@ -732,31 +732,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         return migs
 
     # -- loadouts ------------------------------------------------------------
-
-    def _arm(
-        self,
-        group: FlyingGroup,
-        plane_type: type,
-        stores: list[tuple[int, str]],
-    ) -> None:
-        """Load `stores` — `(pylon, weapon attribute)` — as the whole loadout.
-
-        Every flight in this mission spells its loadout out: the package the
-        briefing promises (HARM + HTS Weasel, buddy-lase Hornet) is not what
-        the DCS task defaults hand out. Stations are cleared first because
-        `Mission.flight_group_*` already ran `load_task_default_loadout`, which
-        fills pylons from the installed game once `DCS_INSTALL_DIR` is set (see
-        `core/dcs_install.py`) — without the clear the defaults survive on
-        every station this list skips, e.g. two extra tanks on `Eagle`.
-
-        The `PylonN` classes on each `PlaneType` enumerate what a station
-        legally accepts, so these pairs are checked against pydcs rather than
-        guessed.
-        """
-        for unit in group.units:
-            unit.pylons.clear()
-        for pylon, weapon in stores:
-            group.load_pylon(getattr(getattr(plane_type, f"Pylon{pylon}"), weapon))
 
     # -- blue side -----------------------------------------------------------
 
@@ -852,7 +827,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             group_size=2,
         )
         amraam = "AIM_120C_AMRAAM___Active_Radar_AAM"
-        self._arm(
+        arm(
             eagle,
             planes.F_15C,
             [
@@ -986,7 +961,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         pontiac.late_activation = True
         lgb = "BRU_33_with_2_x_GBU_12___500lb_Laser_Guided_Bomb"
         tank = "FPU_8A_Fuel_Tank_330_gallons"
-        self._arm(
+        arm(
             pontiac,
             planes.FA_18C_hornet,
             [
@@ -1117,7 +1092,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         # for the column, HTS to find the emitters, LITENING to find the trucks.
         harm = "AGM_88C_HARM___High_Speed_Anti_Radiation_Missile_"
         sfw = "CBU_97___10_x_SFW_Cluster_Bomb"
-        self._arm(
+        arm(
             player,
             planes.F_16C_50,
             [

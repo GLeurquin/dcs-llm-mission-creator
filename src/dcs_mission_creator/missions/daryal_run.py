@@ -43,7 +43,7 @@ from dcs_mission_creator.core.cli import run_cli
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.map_draw import PlanOverlay
 from dcs_mission_creator.core.mission_builder import MissionBuilder
-from dcs_mission_creator.core.mission_kit import mark_clients, offset, set_skill
+from dcs_mission_creator.core.mission_kit import arm, mark_clients, offset, set_skill
 from dcs_mission_creator.core.placement import load_scene
 from dcs_mission_creator.core.tasking import apply_ai_difficulty
 from dcs_mission_creator.core.tts import VoiceSynth
@@ -502,6 +502,21 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             group_size=self.players,
         )
         mark_clients(player)
+        arm(
+            player,
+            planes.F_16C_50,
+            [
+                (1, "AIM_9X_Sidewinder_IR_AAM"),
+                (2, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+                (3, "AGM_88C_HARM___High_Speed_Anti_Radiation_Missile_"),
+                (4, "Fuel_tank_370_gal"),
+                (6, "Fuel_tank_370_gal"),
+                (7, "AGM_88C_HARM___High_Speed_Anti_Radiation_Missile_"),
+                (8, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+                (9, "AIM_9X_Sidewinder_IR_AAM"),
+                (10, "AN_ASQ_213_HTS___HARM_Targeting_System"),
+            ],
+        )
 
         t = self._terrain
         v = scene.vaziani.position

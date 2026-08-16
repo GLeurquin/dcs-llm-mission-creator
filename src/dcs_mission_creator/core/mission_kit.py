@@ -11,7 +11,7 @@ the opinionated core helpers, not here.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Sequence
 
 from dcs.unit import Skill
 
@@ -22,9 +22,9 @@ from dcs_mission_creator.core.air_defense import set_skill
 
 if TYPE_CHECKING:
     from dcs.mapping import Point
-    from dcs.unitgroup import Group
+    from dcs.unitgroup import FlyingGroup, Group
 
-__all__ = ["mark_clients", "offset", "set_skill"]
+__all__ = ["arm", "mark_clients", "offset", "set_skill"]
 
 
 def offset(origin: Point, *, east_m: float = 0.0, north_m: float = 0.0) -> Point:
@@ -43,3 +43,30 @@ def mark_clients(group: Group) -> None:
     """Mark every unit in `group` as a coop client slot."""
     for u in group.units:
         u.skill = Skill.Client
+
+
+def arm(
+    group: FlyingGroup,
+    plane_type: type,
+    stores: Sequence[tuple[int, str]],
+) -> None:
+    """Load `stores` — `(pylon, weapon attribute)` — as the flight's whole loadout.
+
+    Spell a loadout out whenever the briefing promises specific stores. pydcs
+    fills pylons from `load_task_default_loadout`, which reads the *installed
+    game* — so with `DCS_INSTALL_DIR` unset every flight launches clean, and
+    with it set the flight carries whatever DCS's task default happens to be
+    rather than what the briefing said.
+
+    Stations are cleared first: `Mission.flight_group_*` has already run the
+    task default, and without the clear those weapons survive on every station
+    this list skips.
+
+    The `PylonN` classes on each `PlaneType` enumerate what a station legally
+    accepts, so these pairs are checked against pydcs rather than guessed —
+    a wrong name is an `AttributeError` at build time, not a silent empty rail.
+    """
+    for unit in group.units:
+        unit.pylons.clear()
+    for pylon, weapon in stores:
+        group.load_pylon(getattr(getattr(plane_type, f"Pylon{pylon}"), weapon))

@@ -40,7 +40,7 @@ from dcs_mission_creator.core.cli import run_cli
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.map_draw import PlanOverlay
 from dcs_mission_creator.core.mission_builder import MissionBuilder
-from dcs_mission_creator.core.mission_kit import mark_clients, offset, set_skill
+from dcs_mission_creator.core.mission_kit import arm, mark_clients, offset, set_skill
 from dcs_mission_creator.core.placement import (
     load_scene,
     sam_site_on_ridge,
@@ -546,6 +546,18 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             group_size=2,
         )
         set_skill(hog, Skill.High)
+        arm(
+            hog,
+            planes.A_10C,
+            [
+                (1, "ALQ_184"),
+                (2, "Mk_82___500lb_GP_Bomb_LD"),
+                (3, "LAU_117_AGM_65G"),
+                (9, "LAU_117_AGM_65G"),
+                (10, "Mk_82___500lb_GP_Bomb_LD"),
+                (11, "LAU_105_1_AIM_9M_R"),
+            ],
+        )
         apply_threat_reaction(hog)
         return hog
 
@@ -576,6 +588,21 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             group_size=2,
         )
         set_skill(eagle, Skill.High)
+        arm(
+            eagle,
+            planes.F_15C,
+            [
+                (1, "AIM_9M_Sidewinder_IR_AAM"),
+                (3, "AIM_9M_Sidewinder_IR_AAM"),
+                (4, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+                (5, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+                (7, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+                (8, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+                (9, "AIM_9M_Sidewinder_IR_AAM"),
+                (10, "Fuel_tank_610_gal"),
+                (11, "AIM_9M_Sidewinder_IR_AAM"),
+            ],
+        )
         apply_threat_reaction(eagle)
         return p1, p2
 
@@ -598,6 +625,20 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             group_size=self.players,
         )
         mark_clients(player)
+        arm(
+            player,
+            planes.F_16C_50,
+            [
+                (1, "AIM_9X_Sidewinder_IR_AAM"),
+                (2, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+                (3, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+                (4, "Fuel_tank_370_gal"),
+                (6, "Fuel_tank_370_gal"),
+                (7, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+                (8, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+                (9, "AIM_9X_Sidewinder_IR_AAM"),
+            ],
+        )
         player.add_runway_waypoint(scene.batumi)
         push = offset(scene.batumi.position, east_m=5_000, north_m=25_000)
         corridor = scene.overlay.place_ingress_corridor(
