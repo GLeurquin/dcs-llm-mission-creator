@@ -119,7 +119,8 @@ MISSION (Springfield — F-16C-50, Incirlik)
 
 PACKAGE
   Springfield 1 (you): F-16C-50, Incirlik, hot ramp,
-        HARM + AIM-120/9X loadout (planner default).
+        2x AGM-88C, HTS pod, AIM-120C / AIM-9X,
+        two wing tanks.
   Hawg 1-2 : A-10C, Incirlik, strike on depot. Holds
         west of the AO until Springfield calls SAM safe.
   Eagle 1-2: F-15C TARCAP, Incirlik, race-track east
