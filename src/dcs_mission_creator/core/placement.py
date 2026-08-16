@@ -2,8 +2,8 @@
 
 Mission builders import these instead of constructing `Placement` filters by
 hand. Each helper applies sane defaults for one unit archetype (convoy spawn,
-SAM site, EWR, AAA, MANPADS, infantry) and falls back to a deterministic seed
-so tests stay reproducible.
+SAM site, EWR, AAA, MANPADS, infantry). Sampling is reproducible because the
+`MapOverlay` behind the scene carries the seed — see `MapOverlay.seed`.
 
 The helpers do not touch DCS objects — they only return `Point` instances.
 Mission builders thread the points into `vehicle_group(..., position=p)` /
@@ -158,7 +158,6 @@ def ewr_high_ground(
     radius_m: float = 10_000.0,
     min_elevation_m: float = 300.0,
     min_prominence_m: float = 60.0,
-    seed: int = 0,
 ) -> Point:
     """Single EWR location: high absolute + relative elevation, open terrain."""
     require = Placement(
@@ -169,9 +168,7 @@ def ewr_high_ground(
         min_relative_height_m=min_prominence_m,
         relative_height_radius_m=3_000.0,
     )
-    spots = scene.overlay.find_placement(
-        near, radius_m=radius_m, require=require, seed=seed
-    )
+    spots = scene.overlay.find_placement(near, radius_m=radius_m, require=require)
     if not spots:
         raise LookupError(
             f"no EWR spot within {radius_m:.0f} m of {near.x:.0f},{near.y:.0f}"
@@ -194,7 +191,6 @@ def manpads_in_valley(
     near: Point,
     *,
     radius_m: float = 5_000.0,
-    seed: int = 0,
 ) -> Point:
     """MANPADS team hidden in low ground along an ingress route."""
     require = Placement.in_valley(
@@ -203,9 +199,7 @@ def manpads_in_valley(
         not_in=(Vegetation.WATER,),
         not_in_built_up=True,
     )
-    spots = scene.overlay.find_placement(
-        near, radius_m=radius_m, require=require, seed=seed
-    )
+    spots = scene.overlay.find_placement(near, radius_m=radius_m, require=require)
     if not spots:
         raise LookupError("no MANPADS spot found")
     return spots[0]
@@ -216,7 +210,6 @@ def infantry_treeline(
     near: Point,
     *,
     radius_m: float = 2_000.0,
-    seed: int = 0,
 ) -> Point:
     """Infantry concealed at a forest edge — light forest OK."""
     require = Placement.near_treeline(
@@ -225,9 +218,7 @@ def infantry_treeline(
         max_slope_deg=30,
         not_in_built_up=True,
     )
-    spots = scene.overlay.find_placement(
-        near, radius_m=radius_m, require=require, seed=seed
-    )
+    spots = scene.overlay.find_placement(near, radius_m=radius_m, require=require)
     if not spots:
         raise LookupError("no infantry treeline spot found")
     return spots[0]

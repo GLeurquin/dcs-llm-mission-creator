@@ -13,17 +13,47 @@ without re-deriving anything from pydcs at runtime:
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
 MANIFEST_VERSION = 1
 
 
-@dataclass
+@dataclass(frozen=True)
 class LayerSpec:
     cell_size_m: int
     dtype: str  # "uint8", "uint16", "int16"
+
+
+@dataclass
+class LayerSet:
+    """The v1 raster layers, one named field each.
+
+    A dataclass rather than a `dict[str, LayerSpec]` so a typo in a layer name
+    is a type error at the call site instead of a `KeyError` at runtime. The
+    field defaults *are* the v1 plan spec (every layer at 50 m); the JSON shape
+    stays a `{name: spec}` object, so on-disk manifests are unchanged.
+    """
+
+    vegetation: LayerSpec = LayerSpec(cell_size_m=50, dtype="uint8")
+    elevation: LayerSpec = LayerSpec(cell_size_m=50, dtype="int16")
+    slope: LayerSpec = LayerSpec(cell_size_m=50, dtype="uint8")
+    buildings: LayerSpec = LayerSpec(cell_size_m=50, dtype="uint8")
+    roads_dt: LayerSpec = LayerSpec(cell_size_m=50, dtype="uint16")
+    rivers_dt: LayerSpec = LayerSpec(cell_size_m=50, dtype="uint16")
+
+    def as_dict(self) -> dict[str, LayerSpec]:
+        """Layer name → spec, for iteration and serialization."""
+        return {f.name: getattr(self, f.name) for f in fields(self)}
+
+    @staticmethod
+    def from_dict(d: dict[str, Any]) -> LayerSet:
+        known = {f.name for f in fields(LayerSet)}
+        unknown = set(d) - known
+        if unknown:
+            raise ValueError(f"unknown overlay layer(s): {sorted(unknown)}")
+        return LayerSet(**{k: LayerSpec(**v) for k, v in d.items()})
 
 
 @dataclass
@@ -82,7 +112,7 @@ class Manifest:
     version: int
     theater: str  # e.g. "caucasus"
     bounds: XZBounds
-    layers: dict[str, LayerSpec]
+    layers: LayerSet
     osm_filters: OsmFilters
     build_timestamp: str = ""
     git_sha: str = ""
@@ -90,19 +120,11 @@ class Manifest:
     @staticmethod
     def default_for(theater: str, bounds: XZBounds) -> Manifest:
         """Manifest with v1 defaults: all layers at 50 m, plan-spec dtypes."""
-        layers = {
-            "vegetation": LayerSpec(cell_size_m=50, dtype="uint8"),
-            "elevation": LayerSpec(cell_size_m=50, dtype="int16"),
-            "slope": LayerSpec(cell_size_m=50, dtype="uint8"),
-            "buildings": LayerSpec(cell_size_m=50, dtype="uint8"),
-            "roads_dt": LayerSpec(cell_size_m=50, dtype="uint16"),
-            "rivers_dt": LayerSpec(cell_size_m=50, dtype="uint16"),
-        }
         return Manifest(
             version=MANIFEST_VERSION,
             theater=theater,
             bounds=bounds,
-            layers=layers,
+            layers=LayerSet(),
             osm_filters=OsmFilters(),
         )
 
@@ -111,7 +133,7 @@ class Manifest:
             "version": self.version,
             "theater": self.theater,
             "bounds": asdict(self.bounds),
-            "layers": {k: asdict(v) for k, v in self.layers.items()},
+            "layers": {k: asdict(v) for k, v in self.layers.as_dict().items()},
             "osm_filters": asdict(self.osm_filters),
             "build_timestamp": self.build_timestamp,
             "git_sha": self.git_sha,
@@ -127,7 +149,7 @@ class Manifest:
             version=d["version"],
             theater=d["theater"],
             bounds=XZBounds(**d["bounds"]),
-            layers={k: LayerSpec(**v) for k, v in d["layers"].items()},
+            layers=LayerSet.from_dict(d["layers"]),
             osm_filters=OsmFilters(**d["osm_filters"]),
             build_timestamp=d.get("build_timestamp", ""),
             git_sha=d.get("git_sha", ""),

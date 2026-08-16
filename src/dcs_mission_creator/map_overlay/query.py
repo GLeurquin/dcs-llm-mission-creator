@@ -10,9 +10,10 @@ Phase 4: find_placement + LOS + relative-prominence become real.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib.resources import files
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 from dcs.mapping import Point
@@ -20,6 +21,18 @@ from dcs.mapping import Point
 from dcs_mission_creator import resources
 from dcs_mission_creator.map_overlay.manifest import Manifest
 from dcs_mission_creator.map_overlay.placement import Placement, Vegetation
+
+if TYPE_CHECKING:
+    from shapely.geometry import LineString
+    from shapely.strtree import STRtree
+
+DEFAULT_SEED = 0
+"""Sampling seed used when a caller does not ask for a different one.
+
+Placement sampling is random, so an unseeded overlay would put the SAM belt
+somewhere new on every build. Fixing it here makes a mission reproducible:
+same overlay, same query, same answer.
+"""
 
 
 def _resources_root() -> Path:
@@ -55,14 +68,21 @@ class MapOverlay:
     theater: str
     manifest: Manifest
     root: Path
+    seed: int = DEFAULT_SEED
+
+    #: Lazily built road index — `(STRtree, lines)`, see `_road_lines`.
+    _road_index: tuple[STRtree, list[LineString]] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     @staticmethod
-    def load(theater: str) -> MapOverlay:
+    def load(theater: str, *, seed: int = DEFAULT_SEED) -> MapOverlay:
         root = overlay_root(theater)
         return MapOverlay(
             theater=theater,
             manifest=Manifest.read(root / "manifest.json"),
             root=root,
+            seed=seed,
         )
 
     def _xz_to_cell(self, point: Point, cell_size_m: int) -> tuple[int, int]:
@@ -80,31 +100,31 @@ class MapOverlay:
     # ---------------------------------------------------------- point queries
     def vegetation_at(self, point: Point) -> Vegetation:
         z = self._open_layer("vegetation")
-        spec = self.manifest.layers["vegetation"]
+        spec = self.manifest.layers.vegetation
         row, col = self._xz_to_cell(point, spec.cell_size_m)
         return Vegetation(int(z[row, col]))
 
     def elevation_at(self, point: Point) -> int:
         z = self._open_layer("elevation")
-        spec = self.manifest.layers["elevation"]
+        spec = self.manifest.layers.elevation
         row, col = self._xz_to_cell(point, spec.cell_size_m)
         return int(z[row, col])
 
     def slope_at(self, point: Point) -> float:
         z = self._open_layer("slope")
-        spec = self.manifest.layers["slope"]
+        spec = self.manifest.layers.slope
         row, col = self._xz_to_cell(point, spec.cell_size_m)
         return float(z[row, col])
 
     def distance_to_road_m(self, point: Point) -> float:
         z = self._open_layer("roads_dt")
-        spec = self.manifest.layers["roads_dt"]
+        spec = self.manifest.layers.roads_dt
         row, col = self._xz_to_cell(point, spec.cell_size_m)
         return float(z[row, col]) * spec.cell_size_m
 
     def distance_to_river_m(self, point: Point) -> float:
         z = self._open_layer("rivers_dt")
-        spec = self.manifest.layers["rivers_dt"]
+        spec = self.manifest.layers.rivers_dt
         row, col = self._xz_to_cell(point, spec.cell_size_m)
         return float(z[row, col]) * spec.cell_size_m
 
@@ -120,7 +140,7 @@ class MapOverlay:
         """
         from scipy.ndimage import distance_transform_edt
 
-        spec = self.manifest.layers["vegetation"]
+        spec = self.manifest.layers.vegetation
         z = self._open_layer("vegetation")
         h, w = z.shape
         row, col = self._xz_to_cell(point, spec.cell_size_m)
@@ -140,13 +160,13 @@ class MapOverlay:
 
     def is_built_up(self, point: Point) -> bool:
         z = self._open_layer("buildings")
-        spec = self.manifest.layers["buildings"]
+        spec = self.manifest.layers.buildings
         row, col = self._xz_to_cell(point, spec.cell_size_m)
         return int(z[row, col]) > 0
 
     def local_prominence_m(self, point: Point, radius_m: float = 2_000.0) -> float:
         """Elevation at point minus mean elevation in the radius window."""
-        spec = self.manifest.layers["elevation"]
+        spec = self.manifest.layers.elevation
         row, col = self._xz_to_cell(point, spec.cell_size_m)
         z = self._open_layer("elevation")
         win_cells = int(radius_m / spec.cell_size_m)
@@ -162,7 +182,7 @@ class MapOverlay:
     ) -> bool:
         from dcs_mission_creator.map_overlay.los import line_of_sight_cells
 
-        spec = self.manifest.layers["elevation"]
+        spec = self.manifest.layers.elevation
         z = self._open_layer("elevation")
         ra, ca = self._xz_to_cell(a, spec.cell_size_m)
         rb, cb = self._xz_to_cell(b, spec.cell_size_m)
@@ -188,7 +208,6 @@ class MapOverlay:
         radius_m: float,
         require: Placement,
         count: int = 1,
-        seed: int | None = None,
     ) -> list[Point]:
         """Sample up to `count` cells in radius around `near` matching all filters.
 
@@ -197,13 +216,17 @@ class MapOverlay:
         sample candidate cells uniformly, then apply expensive per-candidate
         criteria (LOS, road-reachability) one at a time until `count` cells
         pass or the candidate pool is exhausted.
+
+        Sampling is seeded from the overlay's `seed`, so the same query always
+        gives the same answer and a mission regenerates identically. To draw a
+        different sample, build the overlay with a different seed.
         """
-        rng = np.random.default_rng(seed)
+        rng = np.random.default_rng(self.seed)
 
         # Window in elevation/slope coords — they share 50m and define the
         # bounding box for the search. Other layers' cell sizes may differ but
         # default v1 has all layers at 50m so we treat them uniformly.
-        cell = self.manifest.layers["elevation"].cell_size_m
+        cell = self.manifest.layers.elevation.cell_size_m
         cr, cc = self._xz_to_cell(near, cell)
         win = int(radius_m / cell)
         elev_zarr = self._open_layer("elevation")
@@ -371,6 +394,26 @@ class MapOverlay:
                 break
         return results
 
+    def _road_lines(self) -> tuple[STRtree, list[LineString]]:
+        """Road polylines + their spatial index, read from disk once.
+
+        `roads.geojson` is megabytes of vertices, so the parse and the STRtree
+        build happen on first use and are cached on the instance for every
+        later `find_road_spawn` call.
+        """
+        from shapely.geometry import LineString
+        from shapely.strtree import STRtree
+
+        if self._road_index is None:
+            data = json.loads((self.root / "roads.geojson").read_text())
+            lines = [
+                LineString(feat["geometry"]["coordinates"])
+                for feat in data["features"]
+                if feat["geometry"]["type"] == "LineString"
+            ]
+            self._road_index = (STRtree(lines), lines)
+        return self._road_index
+
     def find_road_spawn(
         self,
         near: Point,
@@ -382,21 +425,9 @@ class MapOverlay:
         Reads `roads.geojson` once (lazily); subsequent calls reuse the cached
         STRtree spatial index.
         """
-        from shapely.geometry import LineString, Point as ShPoint
-        from shapely.strtree import STRtree
+        from shapely.geometry import Point as ShPoint
 
-        cache_key = "_road_index"
-        idx_pair = getattr(self, cache_key, None)
-        if idx_pair is None:
-            data = json.loads((self.root / "roads.geojson").read_text())
-            lines: list[LineString] = []
-            for feat in data["features"]:
-                geom = feat["geometry"]
-                if geom["type"] == "LineString":
-                    lines.append(LineString(geom["coordinates"]))
-            idx_pair = (STRtree(lines), lines)
-            object.__setattr__(self, cache_key, idx_pair)
-        tree, lines = idx_pair
+        tree, lines = self._road_lines()
 
         # Sidecar geojson stores shapes in (east, north) = (y_dcs, x_dcs) so
         # rasterize and the geojson agree; query in the same convention.

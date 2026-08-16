@@ -29,7 +29,7 @@ def test_default_for_has_six_layers_at_50m():
     m = Manifest.default_for("caucasus", _sample_bounds())
     assert m.version == MANIFEST_VERSION
     assert m.theater == "caucasus"
-    assert set(m.layers) == {
+    assert set(m.layers.as_dict()) == {
         "vegetation",
         "elevation",
         "slope",
@@ -37,9 +37,16 @@ def test_default_for_has_six_layers_at_50m():
         "roads_dt",
         "rivers_dt",
     }
-    for spec in m.layers.values():
+    for spec in m.layers.as_dict().values():
         assert isinstance(spec, LayerSpec)
         assert spec.cell_size_m == 50
+
+
+def test_layer_set_rejects_unknown_layer_name():
+    payload = Manifest.default_for("caucasus", _sample_bounds()).to_dict()
+    payload["layers"]["treeline"] = {"cell_size_m": 50, "dtype": "uint8"}
+    with pytest.raises(ValueError, match="unknown overlay layer"):
+        Manifest.from_dict(payload)
 
 
 def test_roundtrip_to_dict_from_dict():

@@ -44,6 +44,12 @@ dev = [
     "pytest>=8.0",
 ]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "slow: needs the built map overlay and/or a DCS install; skipped in CI",
+]
+
 [tool.ruff.lint]
 extend-select = ["I"]
 

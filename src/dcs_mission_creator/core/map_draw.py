@@ -19,7 +19,7 @@ choice, difficulty policy, and the offset math the point-list drawings need.
 
 from __future__ import annotations
 
-import math
+import random
 from enum import Enum
 from typing import TYPE_CHECKING, Optional, Sequence, Union
 
@@ -189,9 +189,14 @@ class PlanOverlay:
         )
 
     def _offset(self, center: Point, distance: float) -> Point:
-        """Offset a point NE by `distance` m so estimates don't pinpoint truth."""
-        d = distance / math.sqrt(2.0)
-        return center.new_in_same_map(center.x + d, center.y + d)
+        """Offset a point on a random bearing so estimates don't pinpoint truth.
+
+        The bearing comes from the stdlib `random` module, which
+        `MissionBuilder._seed_rng` seeds from the mission slug — so the error
+        is unpredictable to the player but identical between two builds of the
+        same mission, and it no longer biases every estimate to the NE.
+        """
+        return center.point_from_heading(random.uniform(0.0, 360.0), distance)
 
 
 def conceal(*groups: Optional["Group"]) -> None:
