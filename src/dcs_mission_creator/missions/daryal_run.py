@@ -41,32 +41,16 @@ from dcs.unitgroup import VehicleGroup
 from dcs.unittype import VehicleType
 
 from dcs_mission_creator.core import waypoints
+from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.map_draw import PlanOverlay
 from dcs_mission_creator.core.mission_builder import MissionBuilder
+from dcs_mission_creator.core.mission_kit import mark_clients, offset, set_skill
 from dcs_mission_creator.core.placement import load_scene
 from dcs_mission_creator.core.tasking import apply_ai_difficulty
 from dcs_mission_creator.core.tts import VoiceSynth
 from dcs_mission_creator.core.visibility import conceal_country
+from dcs_mission_creator.map_overlay.query import MapOverlay
 from dcs_mission_creator.map_overlay.scene import TacticalScene
-
-
-def _offset(
-    origin: Point, terrain: Caucasus, *, east_m: float = 0, north_m: float = 0
-) -> Point:
-    """Return a point offset from `origin` in DCS world meters (east/north)."""
-    return Point(origin.x + north_m, origin.y + east_m, terrain)
-
-
-def _mark_clients(group) -> None:
-    """Mark every unit in `group` as a coop client slot."""
-    for u in group.units:
-        u.skill = Skill.Client
-
-
-def _set_skill(group, skill: Skill) -> None:
-    """Apply `skill` to every unit of `group`."""
-    for u in group.units:
-        u.skill = skill
 
 
 @dataclass
@@ -91,7 +75,7 @@ class _Scene:
 class DaryalRun(MissionBuilder):
     name = "daryal_run"
     title = "Daryal Run"
-    difficulty = "ace"
+    difficulty = Difficulty.ACE
 
     def __init__(self, *, players: int = 1) -> None:
         super().__init__(players=players)
@@ -288,10 +272,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     # -- top-level orchestration --------------------------------------------
 
-    def build_miz(self, miz_path: Path) -> None:
+    def _assemble(self, m: Mission) -> MapOverlay:
         """Assemble the mission by calling each step in package order."""
-        m = Mission(self._terrain)
-
         self._set_time(m)
         self._set_weather(m)
         scene = self._setup_airports(m)
@@ -307,10 +289,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self._conceal_red(russia)
         self._draw_plan(m, scene, route=route)
         self._add_briefing(m)
-        waypoints.snap_base_waypoints(m, scene.overlay.overlay)
-
-        miz_path.parent.mkdir(parents=True, exist_ok=True)
-        m.save(str(miz_path))
+        return scene.overlay.overlay
 
     # -- time, weather, airports --------------------------------------------
 
@@ -351,9 +330,9 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
         # SA-10 cluster sits ~12 km south of Beslan, in the open ground east
         # of Vladikavkaz where the SR has a clear horizon to the south.
-        sa10_site = _offset(beslan.position, t, east_m=2_000, north_m=-12_000)
-        shorad = _offset(sa10_site, t, east_m=-1_200, north_m=-600)
-        ewr_pos = _offset(mozdok.position, t, east_m=-8_000, north_m=-6_000)
+        sa10_site = offset(beslan.position, east_m=2_000, north_m=-12_000)
+        shorad = offset(sa10_site, east_m=-1_200, north_m=-600)
+        ewr_pos = offset(mozdok.position, east_m=-8_000, north_m=-6_000)
 
         # Valley waypoints: Stepantsminda → mid-gorge → Vladikavkaz south.
         # Caucasus convention: Point(x = north, y = east), Vaziani sits at
@@ -363,8 +342,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         valley_exit = Point(-170000, 851000, t)
         ip = Point(-158000, 846000, t)
 
-        awacs_anchor = _offset(vaziani.position, t, east_m=-25_000, north_m=15_000)
-        intrusion_center = _offset(beslan.position, t, east_m=0, north_m=-8_000)
+        awacs_anchor = offset(vaziani.position, east_m=-25_000, north_m=15_000)
+        intrusion_center = offset(beslan.position, east_m=0, north_m=-8_000)
 
         return _Scene(
             vaziani=vaziani,
@@ -417,7 +396,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             heading=180,
             formation=VehicleGroup.Formation.Scattered,
         )
-        _set_skill(sa10, Skill.Excellent)
+        set_skill(sa10, Skill.Excellent)
         return sa10
 
     def _spawn_shorad(self, m: Mission, russia: Country, pos: Point):
@@ -429,12 +408,12 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             position=pos,
             heading=180,
         )
-        _set_skill(tor, Skill.Excellent)
+        set_skill(tor, Skill.Excellent)
         return tor
 
     def _spawn_shilkas(self, m: Mission, russia: Country, site: Point):
         """2x ZSU-23-4 inside the SAM perimeter — close-in AAA pop-up coverage."""
-        pos = _offset(site, self._terrain, east_m=-300, north_m=400)
+        pos = offset(site, east_m=-300, north_m=400)
         shilkas = m.vehicle_group(
             russia,
             "AAA Bear-23",
@@ -443,7 +422,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             heading=180,
             group_size=2,
         )
-        _set_skill(shilkas, Skill.High)
+        set_skill(shilkas, Skill.High)
         return shilkas
 
     def _spawn_ewr(self, m: Mission, russia: Country, pos: Point):
@@ -455,7 +434,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             position=pos,
             heading=180,
         )
-        _set_skill(ewr, Skill.Excellent)
+        set_skill(ewr, Skill.Excellent)
         return ewr
 
     def _spawn_red_intercept(self, m: Mission, russia: Country, scene: _Scene):
@@ -479,7 +458,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             max_engage_distance=110_000,
             group_size=2,
         )
-        _set_skill(boris, Skill.Excellent)
+        set_skill(boris, Skill.Excellent)
         apply_ai_difficulty(boris, self.difficulty)
         announce = triggers.TriggerOnce(comment="MiG launch announcement")
         announce.add_condition(
@@ -526,13 +505,13 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             start_type=StartType.Warm,
             group_size=self.players,
         )
-        _mark_clients(player)
+        mark_clients(player)
 
         t = self._terrain
         v = scene.vaziani.position
 
-        push = _offset(v, t, east_m=-8_000, north_m=25_000)
-        descend = _offset(v, t, east_m=-13_000, north_m=60_000)
+        push = offset(v, east_m=-8_000, north_m=25_000)
+        descend = offset(v, east_m=-13_000, north_m=60_000)
         egress_w = Point(-165000, 815000, t)
         egress_s = Point(-240000, 830000, t)
 

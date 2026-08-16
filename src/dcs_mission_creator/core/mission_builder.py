@@ -1,10 +1,15 @@
 """Common base class for mission builders.
 
 Concrete missions subclass `MissionBuilder`, set the class attributes `name`
-(filesystem slug) and `title` (display name), and implement `build_miz` and
-`readme`. The `dcs-mission-creator` CLI discovers concrete subclasses under
-`dcs_mission_creator.missions.*` and calls `.generate(output_dir)` to produce
-both the `.miz` and a `README.md` in the same folder.
+(filesystem slug), `title` (display name) and `difficulty`, and implement
+`_assemble` and `readme`. The `dcs-mission-creator` CLI discovers concrete
+subclasses under `dcs_mission_creator.missions.*` and calls
+`.generate(output_dir)` to produce both the `.miz` and a `README.md`.
+
+The base owns the parts of the build that are the *same* for every mission and
+that used to be documented conventions each mission re-implemented: seeding for
+reproducibility, snapping take-off and landing waypoints to field elevation
+once every flight exists, and saving. A mission supplies the middle.
 """
 
 from __future__ import annotations
@@ -13,13 +18,30 @@ import hashlib
 import random
 from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from dcs_mission_creator.core import dcs_install
+from dcs.mission import Mission
+
+from dcs_mission_creator.core import dcs_install, waypoints
+from dcs_mission_creator.core.difficulty import Difficulty
+
+if TYPE_CHECKING:
+    from dcs.terrain.terrain import Terrain
+
+    from dcs_mission_creator.map_overlay.query import MapOverlay
 
 
 class MissionBuilder(ABC):
     name: str
     title: str
+
+    #: Sets both how much of the enemy picture the F10 plan reveals and how the
+    #: enemy AI fights. Declared here so it is part of the contract rather than
+    #: an untyped string each mission happens to define.
+    difficulty: Difficulty = Difficulty.TRAINED
+
+    #: The theater, set by the subclass `__init__`.
+    _terrain: Terrain
 
     def __init__(self, *, players: int = 1) -> None:
         if players < 1 or players > 4:
@@ -31,12 +53,31 @@ class MissionBuilder(ABC):
         self._pin_onboard_numbers()
 
     @abstractmethod
-    def build_miz(self, miz_path: Path) -> None:
-        """Write the `.miz` file at `miz_path`."""
+    def _assemble(self, m: Mission) -> MapOverlay:
+        """Build the whole mission into `m`.
+
+        Returns the overlay the mission's positions came from, which the base
+        uses to put take-off and landing waypoints on the terrain.
+        """
 
     @abstractmethod
     def readme(self) -> str:
         """Return the README.md content (markdown) describing this mission."""
+
+    def build_miz(self, miz_path: Path) -> None:
+        """Assemble the mission, then finish and save it.
+
+        Concrete on purpose. Base-waypoint snapping has to happen after the last
+        flight exists and before the save — pydcs hard-codes those altitudes to
+        zero, which buries them under any field above sea level. That ordering
+        used to live in CLAUDE.md as prose, with all six missions ending in the
+        same three lines; a mission that forgot them shipped a broken jet.
+        """
+        m = Mission(self._terrain)
+        overlay = self._assemble(m)
+        waypoints.snap_base_waypoints(m, overlay)
+        miz_path.parent.mkdir(parents=True, exist_ok=True)
+        m.save(str(miz_path))
 
     @staticmethod
     def _pin_runway_waypoint_distance(distance_m: int = 7_000) -> None:

@@ -45,32 +45,16 @@ from dcs.unitgroup import VehicleGroup
 from dcs.unittype import VehicleType
 
 from dcs_mission_creator.core import waypoints
+from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.map_draw import PlanOverlay
 from dcs_mission_creator.core.mission_builder import MissionBuilder
+from dcs_mission_creator.core.mission_kit import mark_clients, offset, set_skill
 from dcs_mission_creator.core.placement import load_scene, sam_site_on_ridge
 from dcs_mission_creator.core.tasking import apply_ai_difficulty
 from dcs_mission_creator.core.tts import VoiceSynth
 from dcs_mission_creator.core.visibility import conceal_country
+from dcs_mission_creator.map_overlay.query import MapOverlay
 from dcs_mission_creator.map_overlay.scene import TacticalScene
-
-
-def _offset(
-    origin: Point, terrain: Syria, *, east_m: float = 0, north_m: float = 0
-) -> Point:
-    """Return a point offset from `origin` in DCS world meters (east/north)."""
-    return Point(origin.x + north_m, origin.y + east_m, terrain)
-
-
-def _mark_clients(group) -> None:
-    """Mark every unit in `group` as a coop client slot."""
-    for u in group.units:
-        u.skill = Skill.Client
-
-
-def _set_skill(group, skill: Skill) -> None:
-    """Apply `skill` to every unit of `group`."""
-    for u in group.units:
-        u.skill = skill
 
 
 @dataclass
@@ -90,7 +74,7 @@ class _Scene:
 class EasternShield(MissionBuilder):
     name = "eastern_shield"
     title = "Eastern Shield"
-    difficulty = "trained"
+    difficulty = Difficulty.TRAINED
 
     def __init__(self, *, players: int = 1) -> None:
         super().__init__(players=players)
@@ -283,10 +267,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     # -- top-level orchestration --------------------------------------------
 
-    def build_miz(self, miz_path: Path) -> None:
+    def _assemble(self, m: Mission) -> MapOverlay:
         """Assemble the mission by calling each step in package order."""
-        m = Mission(self._terrain)
-
         self._set_time(m)
         self._set_weather(m)
         scene = self._setup_airports(m)
@@ -333,10 +315,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             reserve=reserve,
         )
         self._add_briefing(m)
-        waypoints.snap_base_waypoints(m, scene.overlay.overlay)
-
-        miz_path.parent.mkdir(parents=True, exist_ok=True)
-        m.save(str(miz_path))
+        return scene.overlay.overlay
 
     # -- time, weather, airports --------------------------------------------
 
@@ -374,10 +353,10 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         incirlik.set_blue()
         bassel.set_red()
         kuweires.set_red()
-        sa6_anchor = _offset(kuweires.position, t, east_m=0, north_m=8_000)
-        depot_anchor = _offset(kuweires.position, t, east_m=600, north_m=400)
-        reserve_origin = _offset(kuweires.position, t, east_m=22_000, north_m=-2_000)
-        reserve_destination = _offset(kuweires.position, t, east_m=2_000, north_m=-500)
+        sa6_anchor = offset(kuweires.position, east_m=0, north_m=8_000)
+        depot_anchor = offset(kuweires.position, east_m=600, north_m=400)
+        reserve_origin = offset(kuweires.position, east_m=22_000, north_m=-2_000)
+        reserve_destination = offset(kuweires.position, east_m=2_000, north_m=-500)
         overlay = load_scene("syria")
         return _Scene(
             incirlik=incirlik,
@@ -437,7 +416,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             heading=315,
             formation=VehicleGroup.Formation.Scattered,
         )
-        _set_skill(sa6, Skill.High)
+        set_skill(sa6, Skill.High)
         aaa_offset = Point(ridge.x + 250, ridge.y - 150, self._terrain)
         aaa = m.vehicle_group(
             russia,
@@ -448,7 +427,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             group_size=2,
             formation=VehicleGroup.Formation.Scattered,
         )
-        _set_skill(aaa, Skill.Average)
+        set_skill(aaa, Skill.Average)
         return sa6
 
     def _spawn_red_ewr_chain(
@@ -456,12 +435,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
     ) -> list[Point]:
         """2x 55G6 EWR chain north-east of Bassel feeding GCI to Kuweires."""
         frontier = [
-            _offset(
-                scene.bassel.position, self._terrain, east_m=10_000, north_m=20_000
-            ),
-            _offset(
-                scene.kuweires.position, self._terrain, east_m=-15_000, north_m=10_000
-            ),
+            offset(scene.bassel.position, east_m=10_000, north_m=20_000),
+            offset(scene.kuweires.position, east_m=-15_000, north_m=10_000),
         ]
         try:
             positions = scene.overlay.place_ewr_chain(
@@ -480,7 +455,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                 position=pos,
                 heading=270,
             )
-            _set_skill(grp, Skill.High)
+            set_skill(grp, Skill.High)
         return positions
 
     # -- red side: depot, reserve, intercept --------------------------------
@@ -511,7 +486,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             heading=0,
             formation=VehicleGroup.Formation.Scattered,
         )
-        _set_skill(depot, Skill.Average)
+        set_skill(depot, Skill.Average)
         shorad_pos = Point(depot_pos.x + 400, depot_pos.y - 200, self._terrain)
         shorad = m.vehicle_group(
             russia,
@@ -520,7 +495,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             position=shorad_pos,
             heading=315,
         )
-        _set_skill(shorad, Skill.High)
+        set_skill(shorad, Skill.High)
         depot_aaa = m.vehicle_group(
             russia,
             "Depot AAA",
@@ -530,7 +505,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             group_size=2,
             formation=VehicleGroup.Formation.Scattered,
         )
-        _set_skill(depot_aaa, Skill.Average)
+        set_skill(depot_aaa, Skill.Average)
         return depot, shorad_pos
 
     def _spawn_red_reserve(
@@ -574,7 +549,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             move_formation=PointAction.OnRoad,
             speed=40,
         )
-        _set_skill(reserve, Skill.Average)
+        set_skill(reserve, Skill.Average)
         return reserve
 
     def _spawn_red_intercept(self, m: Mission, russia: Country, scene: _Scene):
@@ -604,7 +579,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             max_engage_distance=90_000,
             group_size=2,
         )
-        _set_skill(migs, Skill.High)
+        set_skill(migs, Skill.High)
         apply_ai_difficulty(migs, self.difficulty)
         return migs
 
@@ -691,7 +666,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             max_engage_distance=90_000,
             group_size=2,
         )
-        _set_skill(eagle, Skill.High)
+        set_skill(eagle, Skill.High)
         return p1, p2
 
     def _spawn_strike(self, m: Mission, usa: Country, scene: _Scene, *, target_unit):
@@ -712,7 +687,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             start_type=StartType.Warm,
             group_size=2,
         )
-        _set_skill(hog, Skill.High)
+        set_skill(hog, Skill.High)
         return hog
 
     def _spawn_player(
@@ -733,11 +708,9 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             start_type=StartType.Warm,
             group_size=self.players,
         )
-        _mark_clients(player)
+        mark_clients(player)
         player.add_runway_waypoint(scene.incirlik)
-        push = _offset(
-            scene.incirlik.position, self._terrain, east_m=20_000, north_m=-25_000
-        )
+        push = offset(scene.incirlik.position, east_m=20_000, north_m=-25_000)
         corridor = scene.overlay.place_ingress_corridor(
             ip=push,
             target=scene.sa6_anchor,

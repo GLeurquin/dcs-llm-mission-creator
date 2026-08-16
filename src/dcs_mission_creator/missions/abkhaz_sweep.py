@@ -48,33 +48,16 @@ from dcs.unit import Skill
 from dcs.unitgroup import VehicleGroup
 from dcs.unittype import VehicleType
 
-from dcs_mission_creator.core import waypoints
+from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.map_draw import PlanOverlay
 from dcs_mission_creator.core.mission_builder import MissionBuilder
+from dcs_mission_creator.core.mission_kit import mark_clients, offset, set_skill
 from dcs_mission_creator.core.placement import load_scene
 from dcs_mission_creator.core.tasking import apply_ai_difficulty
 from dcs_mission_creator.core.tts import VoiceSynth
 from dcs_mission_creator.core.visibility import conceal_country
+from dcs_mission_creator.map_overlay.query import MapOverlay
 from dcs_mission_creator.map_overlay.scene import TacticalScene
-
-
-def _offset(
-    origin: Point, terrain: Caucasus, *, east_m: float = 0, north_m: float = 0
-) -> Point:
-    """Return a point offset from `origin` in DCS world meters (east/north)."""
-    return Point(origin.x + north_m, origin.y + east_m, terrain)
-
-
-def _mark_clients(group) -> None:
-    """Mark every unit in `group` as a coop client slot."""
-    for u in group.units:
-        u.skill = Skill.Client
-
-
-def _set_skill(group, skill: Skill) -> None:
-    """Apply `skill` to every unit of `group`."""
-    for u in group.units:
-        u.skill = skill
 
 
 @dataclass
@@ -102,7 +85,7 @@ class _Scene:
 class AbkhazSweep(MissionBuilder):
     name = "abkhaz_sweep"
     title = "Abkhaz Sweep"
-    difficulty = "ace"
+    difficulty = Difficulty.ACE
 
     def __init__(self, *, players: int = 1) -> None:
         super().__init__(players=players)
@@ -299,10 +282,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     # -- top-level orchestration --------------------------------------------
 
-    def build_miz(self, miz_path: Path) -> None:
+    def _assemble(self, m: Mission) -> MapOverlay:
         """Assemble the mission by calling each step in package order."""
-        m = Mission(self._terrain)
-
         self._set_time(m)
         self._set_weather(m)
         scene = self._setup_airports(m)
@@ -319,10 +300,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self._conceal_red(russia)
         self._draw_plan(m, scene)
         self._add_briefing(m)
-        waypoints.snap_base_waypoints(m, scene.overlay.overlay)
-
-        miz_path.parent.mkdir(parents=True, exist_ok=True)
-        m.save(str(miz_path))
+        return scene.overlay.overlay
 
     # -- time, weather, airports --------------------------------------------
 
@@ -364,20 +342,20 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         sukhumi.set_red()
         # SA-6 on a coastal ridge ~10 km north of Sukhumi, with LOS over the
         # AO offshore. Launchers a few hundred metres south of the radar.
-        sa6_site = _offset(sukhumi.position, t, east_m=-2_000, north_m=10_000)
-        shilka_pos = _offset(sa6_site, t, east_m=300, north_m=300)
+        sa6_site = offset(sukhumi.position, east_m=-2_000, north_m=10_000)
+        shilka_pos = offset(sa6_site, east_m=300, north_m=300)
         # EWR sites inland of each bandit base.
-        ewr_su27 = _offset(sochi.position, t, east_m=12_000, north_m=4_000)
-        ewr_mig29 = _offset(gudauta.position, t, east_m=8_000, north_m=8_000)
+        ewr_su27 = offset(sochi.position, east_m=12_000, north_m=4_000)
+        ewr_mig29 = offset(gudauta.position, east_m=8_000, north_m=8_000)
         # Sweep stations sit offshore (west of the coast) just outside the
         # SA-6 envelope at altitude (player stays above 4500 m).
-        push = _offset(batumi.position, t, east_m=-15_000, north_m=40_000)
-        station_south = _offset(sukhumi.position, t, east_m=-35_000, north_m=-15_000)
-        station_north = _offset(sukhumi.position, t, east_m=-30_000, north_m=25_000)
-        egress = _offset(batumi.position, t, east_m=-15_000, north_m=20_000)
-        awacs_anchor = _offset(batumi.position, t, east_m=-25_000, north_m=15_000)
-        su27_intrusion = _offset(sukhumi.position, t, east_m=-25_000, north_m=20_000)
-        mig29_intrusion = _offset(sukhumi.position, t, east_m=-20_000, north_m=35_000)
+        push = offset(batumi.position, east_m=-15_000, north_m=40_000)
+        station_south = offset(sukhumi.position, east_m=-35_000, north_m=-15_000)
+        station_north = offset(sukhumi.position, east_m=-30_000, north_m=25_000)
+        egress = offset(batumi.position, east_m=-15_000, north_m=20_000)
+        awacs_anchor = offset(batumi.position, east_m=-25_000, north_m=15_000)
+        su27_intrusion = offset(sukhumi.position, east_m=-25_000, north_m=20_000)
+        mig29_intrusion = offset(sukhumi.position, east_m=-20_000, north_m=35_000)
         return _Scene(
             batumi=batumi,
             sochi=sochi,
@@ -431,7 +409,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             heading=180,
             formation=VehicleGroup.Formation.Scattered,
         )
-        _set_skill(sa6, Skill.Excellent)
+        set_skill(sa6, Skill.Excellent)
         return sa6
 
     def _spawn_shilkas(self, m: Mission, russia: Country, pos: Point):
@@ -445,7 +423,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             group_size=2,
             formation=VehicleGroup.Formation.Scattered,
         )
-        _set_skill(shilkas, Skill.High)
+        set_skill(shilkas, Skill.High)
         return shilkas
 
     def _spawn_ewr(self, m: Mission, russia: Country, pos: Point, name: str, ewr_type):
@@ -457,7 +435,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             position=pos,
             heading=180,
         )
-        _set_skill(ewr, Skill.Excellent)
+        set_skill(ewr, Skill.Excellent)
         return ewr
 
     def _spawn_red_su27(self, m: Mission, russia: Country, scene: _Scene):
@@ -481,7 +459,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             max_engage_distance=120_000,
             group_size=4,
         )
-        _set_skill(ivan, Skill.Excellent)
+        set_skill(ivan, Skill.Excellent)
         apply_ai_difficulty(ivan, self.difficulty)
         announce = triggers.TriggerOnce(comment="Su-27 launch announcement")
         announce.add_condition(condition.PartOfCoalitionInZone("blue", zone.id))
@@ -519,7 +497,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             max_engage_distance=100_000,
             group_size=2,
         )
-        _set_skill(boris, Skill.Excellent)
+        set_skill(boris, Skill.Excellent)
         apply_ai_difficulty(boris, self.difficulty)
         announce = triggers.TriggerOnce(comment="MiG-29 launch announcement")
         announce.add_condition(condition.PartOfCoalitionInZone("blue", zone.id))
@@ -565,7 +543,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             start_type=StartType.Warm,
             group_size=self.players,
         )
-        _mark_clients(player)
+        mark_clients(player)
 
         player.add_runway_waypoint(scene.batumi)
         player.add_waypoint(scene.push, altitude=6000, speed=400, name="PUSH")

@@ -53,9 +53,11 @@ from dcs.unitgroup import FlyingGroup, VehicleGroup
 from dcs.unittype import VehicleType
 
 from dcs_mission_creator.core import air_defense as ad, routing, waypoints
+from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.emcon import ArmSite, arm_emcon_reaction
 from dcs_mission_creator.core.map_draw import PlanOverlay
 from dcs_mission_creator.core.mission_builder import MissionBuilder
+from dcs_mission_creator.core.mission_kit import mark_clients
 from dcs_mission_creator.core.placement import (
     convoy_spawn,
     find_clear_spot,
@@ -72,6 +74,7 @@ from dcs_mission_creator.core.tasking import (
 )
 from dcs_mission_creator.core.tts import VoiceSynth
 from dcs_mission_creator.core.visibility import conceal_country
+from dcs_mission_creator.map_overlay.query import MapOverlay
 from dcs_mission_creator.map_overlay.scene import TacticalScene
 
 # Flag raised when the F/A-18C strike pair is cleared into the AO.
@@ -95,12 +98,6 @@ _FAC_ALT_M = 5_500
 _FAC_SPEED_KPH = 300
 
 
-def _mark_clients(group: FlyingGroup) -> None:
-    """Mark every unit in `group` as a coop client slot."""
-    for u in group.units:
-        u.skill = Skill.Client
-
-
 @dataclass
 class _Scene:
     """Resolved airports + AO geometry + map overlay used by every spawn step."""
@@ -120,7 +117,7 @@ class _Scene:
 class IdlibGauntlet(MissionBuilder):
     name = "idlib_gauntlet"
     title = "Idlib Gauntlet"
-    difficulty = "trained"
+    difficulty = Difficulty.TRAINED
 
     def __init__(self, *, players: int = 1) -> None:
         super().__init__(players=players)
@@ -364,10 +361,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     # -- top-level orchestration --------------------------------------------
 
-    def build_miz(self, miz_path: Path) -> None:
+    def _assemble(self, m: Mission) -> MapOverlay:
         """Assemble the mission by calling each step in package order."""
-        m = Mission(self._terrain)
-
         self._set_time(m)
         self._set_weather(m)
         scene = self._setup_airports(m)
@@ -414,10 +409,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self._add_scramble_trigger(m, convoy=convoy, migs=migs)
         self._add_end_triggers(m, scene, convoy=convoy, migs=migs)
         self._add_briefing(m)
-        waypoints.snap_base_waypoints(m, scene.overlay.overlay)
-
-        miz_path.parent.mkdir(parents=True, exist_ok=True)
-        m.save(str(miz_path))
+        return scene.overlay.overlay
 
     # -- time, weather, airports --------------------------------------------
 
@@ -1118,7 +1110,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             start_type=StartType.Warm,
             group_size=self.players,
         )
-        _mark_clients(player)
+        mark_clients(player)
         # Wild Weasel + interdiction: two HARMs for the belts, two CBU-97 SFW
         # for the column, HTS to find the emitters, LITENING to find the trucks.
         harm = "AGM_88C_HARM___High_Speed_Anti_Radiation_Missile_"

@@ -46,8 +46,10 @@ from dcs.unitgroup import VehicleGroup
 from dcs.unittype import VehicleType
 
 from dcs_mission_creator.core import waypoints
+from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.map_draw import PlanOverlay
 from dcs_mission_creator.core.mission_builder import MissionBuilder
+from dcs_mission_creator.core.mission_kit import mark_clients, offset, set_skill
 from dcs_mission_creator.core.placement import (
     FOREST_BUFFER_M as _FOREST_BUFFER_M,
     NO_FOREST as _NO_FOREST,
@@ -59,26 +61,8 @@ from dcs_mission_creator.core.tasking import apply_ai_difficulty
 from dcs_mission_creator.core.tts import VoiceSynth
 from dcs_mission_creator.core.visibility import conceal_country
 from dcs_mission_creator.map_overlay.placement import Placement
+from dcs_mission_creator.map_overlay.query import MapOverlay
 from dcs_mission_creator.map_overlay.scene import TacticalScene
-
-
-def _offset(
-    origin: Point, terrain: Caucasus, *, east_m: float = 0, north_m: float = 0
-) -> Point:
-    """Return a point offset from `origin` in DCS world meters (east/north)."""
-    return Point(origin.x + north_m, origin.y + east_m, terrain)
-
-
-def _mark_clients(group) -> None:
-    """Mark every unit in `group` as a coop client slot."""
-    for u in group.units:
-        u.skill = Skill.Client
-
-
-def _set_skill(group, skill: Skill) -> None:
-    """Apply `skill` to every unit of `group`."""
-    for u in group.units:
-        u.skill = skill
 
 
 @dataclass
@@ -96,7 +80,7 @@ class _Scene:
 class KodoriStrike(MissionBuilder):
     name = "kodori_strike"
     title = "Kodori Strike"
-    difficulty = "trained"
+    difficulty = Difficulty.TRAINED
 
     def __init__(self, *, players: int = 1) -> None:
         super().__init__(players=players)
@@ -278,10 +262,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     # -- top-level orchestration --------------------------------------------
 
-    def build_miz(self, miz_path: Path) -> None:
+    def _assemble(self, m: Mission) -> MapOverlay:
         """Assemble the mission by calling each step in package order."""
-        m = Mission(self._terrain)
-
         self._set_time(m)
         self._set_weather(m)
         scene = self._setup_airports(m)
@@ -318,10 +300,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             tanker_track=tanker_track,
         )
         self._add_briefing(m)
-        waypoints.snap_base_waypoints(m, scene.overlay.overlay)
-
-        miz_path.parent.mkdir(parents=True, exist_ok=True)
-        m.save(str(miz_path))
+        return scene.overlay.overlay
 
     # -- time, weather, airports --------------------------------------------
 
@@ -367,7 +346,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         senaki.set_blue()  # divert field
         sukhumi.set_red()
         gudauta.set_red()
-        ao_seed = _offset(sukhumi.position, t, east_m=22_000, north_m=12_000)
+        ao_seed = offset(sukhumi.position, east_m=22_000, north_m=12_000)
         overlay = load_scene("caucasus")
         ao_center = find_clear_spot(
             overlay.overlay,
@@ -432,7 +411,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             heading=180,
             formation=VehicleGroup.Formation.Scattered,
         )
-        _set_skill(fob, Skill.Average)
+        set_skill(fob, Skill.Average)
         snap_units_clear(scene.overlay.overlay, self._terrain, fob)
         return fob
 
@@ -500,7 +479,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             heading=180,
             formation=VehicleGroup.Formation.Scattered,
         )
-        _set_skill(sa6, Skill.High)
+        set_skill(sa6, Skill.High)
         snap_units_clear(scene.overlay.overlay, self._terrain, sa6)
         return sa6, sa6_pos
 
@@ -517,7 +496,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         canopy.
         """
         t = self._terrain
-        approach_anchor = _offset(scene.ao_center, t, east_m=6_000, north_m=-15_000)
+        approach_anchor = offset(scene.ao_center, east_m=6_000, north_m=-15_000)
         anchors = [approach_anchor, scene.ao_center]
         placed: list[Point] = []
         for i in range(2):
@@ -563,7 +542,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                 position=pos,
                 heading=180,
             )
-            _set_skill(grp, Skill.High)
+            set_skill(grp, Skill.High)
             snap_units_clear(scene.overlay.overlay, t, grp)
         return placed
 
@@ -576,7 +555,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         `find_clear_spot` so the radar never ends up under canopy.
         """
         t = self._terrain
-        rear_anchor = _offset(scene.sukhumi.position, t, east_m=12_000, north_m=-6_000)
+        rear_anchor = offset(scene.sukhumi.position, east_m=12_000, north_m=-6_000)
         ewr_pos: Point | None = None
         for min_elev, min_prom in ((150.0, 40.0), (50.0, 20.0), (0.0, 0.0)):
             require = Placement(
@@ -614,7 +593,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             position=ewr_pos,
             heading=270,
         )
-        _set_skill(ewr, Skill.High)
+        set_skill(ewr, Skill.High)
         snap_units_clear(scene.overlay.overlay, t, ewr)
         return ewr_pos
 
@@ -639,7 +618,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             max_engage_distance=90_000,
             group_size=2,
         )
-        _set_skill(boris, Skill.High)
+        set_skill(boris, Skill.High)
         apply_ai_difficulty(boris, self.difficulty)
         announce = triggers.TriggerOnce(comment="Su-27 launch announcement")
         announce.add_condition(
@@ -722,7 +701,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             max_engage_distance=40_000,
             group_size=2,
         )
-        _set_skill(weasel, Skill.High)
+        set_skill(weasel, Skill.High)
         return weasel
 
     def _spawn_escort(
@@ -751,7 +730,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             max_engage_distance=90_000,
             group_size=2,
         )
-        _set_skill(eagle, Skill.High)
+        set_skill(eagle, Skill.High)
         return p1, p2
 
     def _spawn_player(
@@ -767,7 +746,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         Route: Kutaisi → PUSH → corridor (terrain-masked legs avoiding LOS to
         SA-6 / EWR / Gudauta / SA-13s) → TGT → EGRESS → Kutaisi.
         """
-        t = self._terrain
         player = m.flight_group_from_airport(
             country=usa,
             name="Dodge",
@@ -777,9 +755,9 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             start_type=StartType.Warm,
             group_size=self.players,
         )
-        _mark_clients(player)
+        mark_clients(player)
         player.add_runway_waypoint(scene.kutaisi)
-        push = _offset(scene.kutaisi.position, t, east_m=-15_000, north_m=12_000)
+        push = offset(scene.kutaisi.position, east_m=-15_000, north_m=12_000)
         corridor = scene.overlay.place_ingress_corridor(
             ip=push,
             target=scene.ao_center,
@@ -795,7 +773,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         waypoints.add_ground_waypoint(
             player, corridor[-1], overlay=scene.overlay.overlay, speed=400, name="TGT"
         )
-        egress = _offset(scene.ao_center, t, east_m=20_000, north_m=-15_000)
+        egress = offset(scene.ao_center, east_m=20_000, north_m=-15_000)
         player.add_waypoint(egress, altitude=6500, speed=420, name="EGRESS")
         player.add_runway_waypoint(scene.kutaisi)
         player.land_at(scene.kutaisi)
