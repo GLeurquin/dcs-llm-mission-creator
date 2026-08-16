@@ -44,6 +44,7 @@ from dcs.unittype import VehicleType
 
 from dcs_mission_creator.core import (
     air_defense as ad,
+    routing,
     triggers as mission_triggers,
     waypoints,
 )
@@ -53,6 +54,7 @@ from dcs_mission_creator.core.map_draw import PlanOverlay
 from dcs_mission_creator.core.mission_builder import MissionBuilder
 from dcs_mission_creator.core.mission_kit import arm, mark_clients, offset, set_skill
 from dcs_mission_creator.core.placement import load_scene, sam_site_on_ridge
+from dcs_mission_creator.core.routing import ThreatRing
 from dcs_mission_creator.core.tasking import (
     apply_ai_difficulty,
     apply_threat_reaction,
@@ -286,10 +288,11 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         reserve = self._spawn_red_reserve(m, russia, scene)
         migs = self._spawn_red_intercept(m, russia, scene)
 
+        threats = self._threat_rings(sa6_pos=scene.sa6_anchor, shorad_pos=shorad_pos)
         awacs_track = self._spawn_awacs(m, usa, scene)
         tanker_track = self._spawn_tanker(m, usa, scene)
         tarcap_track = self._spawn_tarcap(m, usa, scene)
-        hog = self._spawn_strike(m, usa, scene, target_unit=depot.units[0])
+        hog = self._spawn_strike(m, usa, scene, depot=depot, threats=threats)
         corridor = self._spawn_player(
             m,
             usa,
@@ -680,21 +683,32 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         apply_threat_reaction(eagle)
         return p1, p2
 
-    def _spawn_strike(self, m: Mission, usa: Country, scene: _Scene, *, target_unit):
-        """A-10C 2-ship Hawg from Incirlik, fragged on the depot lead vehicle.
+    def _spawn_strike(
+        self,
+        m: Mission,
+        usa: Country,
+        scene: _Scene,
+        *,
+        depot: VehicleGroup,
+        threats: tuple[ThreatRing, ...],
+    ):
+        """A-10C 2-ship Hawg from Incirlik, routed onto the depot.
 
-        Hawg's onboard route is the pydcs default IP/Attack/Fence-out
-        sequence — they will push on take-off. The package design relies on
-        the player getting the SAM down before they enter the MEZ; for a
-        trained mission we accept the AI's eagerness rather than gating the
-        push behind a flag (the player has Magic and Eagle to call SAM safe).
+        Built by hand rather than with `Mission.strike_flight`, whose attack
+        waypoint pydcs hard-codes to `alt = 0` — the pair descended to sea level
+        over the depot's IR launcher and its guns. The run-in is flown above
+        that, and the transit bends around the SA-6 rather than crossing it.
+
+        The pair still pushes on take-off; the depot sits under the SA-6
+        umbrella, so the player is expected to put the search radar down before
+        they arrive. That is the mission, and Magic calls it when it happens.
         """
-        hog = m.strike_flight(
-            usa,
-            "Hawg",
-            planes.A_10C,
-            target=target_unit,
+        hog = m.flight_group_from_airport(
+            country=usa,
+            name="Hawg",
+            aircraft_type=planes.A_10C,
             airport=scene.incirlik,
+            maintask=task.CAS,
             start_type=StartType.Warm,
             group_size=2,
         )
@@ -712,7 +726,54 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             ],
         )
         apply_threat_reaction(hog)
+        self._route_strike(hog, scene, depot=depot, threats=threats)
         return hog
+
+    def _route_strike(
+        self,
+        hog,
+        scene: _Scene,
+        *,
+        depot: VehicleGroup,
+        threats: tuple[ThreatRing, ...],
+    ) -> None:
+        """Incirlik → IP → run-in on the depot → egress → Incirlik."""
+        target = scene.depot_anchor
+        hog.add_runway_waypoint(scene.incirlik)
+        ip = routing.standoff_point(
+            target,
+            toward=scene.incirlik.position,
+            threats=threats,
+            min_distance_m=20_000.0,
+            clearance_m=3_000.0,
+        )
+        for i, pt in enumerate(
+            routing.avoid_threats(
+                scene.incirlik.position, ip, threats, clearance_m=4_000.0
+            )[1:],
+            start=1,
+        ):
+            hog.add_waypoint(pt, altitude=4_600, speed=400, name=f"INGRESS-{i}")
+        # Above the SA-13 sitting inside the depot wire, and inside Maverick
+        # range of it. pydcs's own attack waypoint would have been at zero.
+        attack = hog.add_waypoint(target, altitude=4_000, speed=400, name="ATTACK")
+        attack.tasks.append(
+            task.AttackGroup(
+                depot.id,
+                weapon_type=task.WeaponType.Auto,
+                group_attack=True,
+                expend=task.Expend.All,
+            )
+        )
+        for i, pt in enumerate(
+            routing.avoid_threats(
+                target, scene.incirlik.position, threats, clearance_m=4_000.0
+            )[1:-1],
+            start=1,
+        ):
+            hog.add_waypoint(pt, altitude=4_600, speed=430, name=f"EGRESS-{i}")
+        hog.add_runway_waypoint(scene.incirlik)
+        hog.land_at(scene.incirlik)
 
     def _spawn_player(
         self,
@@ -783,6 +844,19 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         would spoil its own counter-push before it ever rolls.
         """
         conceal_country(russia)
+
+    def _threat_rings(
+        self, *, sa6_pos: Point, shorad_pos: Point
+    ) -> tuple[ThreatRing, ...]:
+        """The two shooting envelopes, for both the drawn plan and AI routing.
+
+        Same radii `_draw_plan` paints, so the briefing and the friendly flight
+        plan come from one number. The EWRs are not here — they cannot shoot.
+        """
+        return (
+            ThreatRing(sa6_pos, 12_000.0, "SA-6"),
+            ThreatRing(shorad_pos, 6_000.0, "SA-13"),
+        )
 
     def _draw_plan(
         self,

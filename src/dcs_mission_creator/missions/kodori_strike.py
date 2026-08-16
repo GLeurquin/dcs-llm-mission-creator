@@ -43,7 +43,7 @@ from dcs.unit import Skill
 from dcs.unitgroup import VehicleGroup
 from dcs.unittype import VehicleType
 
-from dcs_mission_creator.core import triggers as mission_triggers, waypoints
+from dcs_mission_creator.core import routing, triggers as mission_triggers, waypoints
 from dcs_mission_creator.core.cli import run_cli
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.map_draw import PlanOverlay
@@ -56,6 +56,7 @@ from dcs_mission_creator.core.placement import (
     load_scene,
     snap_units_clear,
 )
+from dcs_mission_creator.core.routing import ThreatRing
 from dcs_mission_creator.core.tasking import (
     apply_ai_difficulty,
     apply_threat_reaction,
@@ -277,7 +278,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         )
         awacs_track = self._spawn_awacs(m, usa, scene)
         tanker_track = self._spawn_tanker(m, usa, scene)
-        weasel = self._spawn_sead(m, usa, scene, sa6_pos=sa6_pos)
+        weasel = self._spawn_sead(m, usa, scene, sa6_pos=sa6_pos, sa6=sa6)
         escort_track = self._spawn_escort(m, usa, scene)
         self._spawn_red_intercept(m, russia, scene)
         corridor = self._spawn_player(
@@ -688,16 +689,30 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         )
         return p1, p2
 
-    def _spawn_sead(self, m: Mission, usa: Country, scene: _Scene, *, sa6_pos: Point):
-        """F-16C Weasel 2-ship from Kutaisi, fragged on the placed SA-6 site."""
-        weasel = m.sead_flight(
-            usa,
-            "Weasel",
-            planes.F_16C_50,
-            target_pos=sa6_pos,
+    def _spawn_sead(
+        self,
+        m: Mission,
+        usa: Country,
+        scene: _Scene,
+        *,
+        sa6_pos: Point,
+        sa6: VehicleGroup,
+    ):
+        """F-16C Weasel 2-ship from Kutaisi, routed onto the placed SA-6 site.
+
+        Built by hand rather than with `Mission.sead_flight`, whose attack
+        waypoint pydcs hard-codes to `alt = 0` — a Weasel descending to sea
+        level onto a live SA-6 is the opposite of how the shot is taken. The
+        pair now runs in high, where a HARM has the energy to reach the site
+        from outside its envelope.
+        """
+        weasel = m.flight_group_from_airport(
+            country=usa,
+            name="Weasel",
+            aircraft_type=planes.F_16C_50,
             airport=scene.kutaisi,
+            maintask=task.SEAD,
             start_type=StartType.Warm,
-            max_engage_distance=40_000,
             group_size=2,
         )
         set_skill(weasel, Skill.High)
@@ -715,7 +730,51 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             ],
         )
         apply_threat_reaction(weasel)
+        self._route_sead(weasel, scene, sa6_pos=sa6_pos, sa6=sa6)
         return weasel
+
+    def _route_sead(
+        self,
+        weasel,
+        scene: _Scene,
+        *,
+        sa6_pos: Point,
+        sa6: VehicleGroup,
+    ) -> None:
+        """Kutaisi → high IP outside the ring → HARM shot → egress → Kutaisi.
+
+        The IP is the whole point of a SEAD route: it sits *outside* the SA-6's
+        envelope, so the pair shoots from standoff instead of flying into the
+        engagement zone the briefing tells the player to respect. The shot
+        waypoint is placed on the ring edge rather than over the site.
+        """
+        ring = ThreatRing(sa6_pos, 10_000.0, "SA-6")
+        weasel.add_runway_waypoint(scene.kutaisi)
+        ip = routing.standoff_point(
+            sa6_pos,
+            toward=scene.kutaisi.position,
+            threats=(ring,),
+            min_distance_m=28_000.0,
+            clearance_m=6_000.0,
+        )
+        for i, pt in enumerate(
+            routing.avoid_threats(
+                scene.kutaisi.position, ip, (ring,), clearance_m=5_000.0
+            )[1:],
+            start=1,
+        ):
+            weasel.add_waypoint(pt, altitude=7_600, speed=800, name=f"INGRESS-{i}")
+        shot = weasel.add_waypoint(ip, altitude=7_600, speed=800, name="HARM")
+        shot.tasks.append(
+            task.AttackGroup(
+                sa6.id,
+                weapon_type=task.WeaponType.Missiles,
+                group_attack=True,
+                expend=task.Expend.Two,
+            )
+        )
+        weasel.add_runway_waypoint(scene.kutaisi)
+        weasel.land_at(scene.kutaisi)
 
     def _spawn_escort(
         self, m: Mission, usa: Country, scene: _Scene

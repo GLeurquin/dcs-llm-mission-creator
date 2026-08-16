@@ -288,7 +288,7 @@ tasking.scramble_on_trigger(m, reserve,               # cold-ramp alert-5
 - `apply_threat_reaction(flight, *, reaction=ByPassAndEscape, …)` — the
   friendly counterpart: `OptReactOnThreat` (fly around a threat zone rather
   than through it), `OptChaffFlareUsing` inside a SAM WEZ, `OptECMUsing` on
-  lock, RTB on bingo. Every AI flight in a blue package gets it; escalate to
+  lock, RTB on bingo. Every AI flight in a blue package gets it (except AWACS and Tanker because `ByPassAndEscape` on an orbiting tanker pulls it off station); escalate to
   `AllowAbortMission` for one that should turn around rather than press a live
   belt. Pair it with `core/routing.py` — the option only covers the site the
   planner did not know about.

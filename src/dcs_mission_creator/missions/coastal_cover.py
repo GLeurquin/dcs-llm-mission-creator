@@ -35,7 +35,11 @@ from dcs.unit import Skill
 from dcs.unitgroup import VehicleGroup
 from dcs.unittype import VehicleType
 
-from dcs_mission_creator.core import air_defense as ad, triggers as mission_triggers
+from dcs_mission_creator.core import (
+    air_defense as ad,
+    routing,
+    triggers as mission_triggers,
+)
 from dcs_mission_creator.core.cli import run_cli
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.map_draw import PlanOverlay
@@ -45,6 +49,7 @@ from dcs_mission_creator.core.placement import (
     load_scene,
     sam_site_on_ridge,
 )
+from dcs_mission_creator.core.routing import ThreatRing
 from dcs_mission_creator.core.tasking import (
     apply_ai_difficulty,
     apply_threat_reaction,
@@ -240,8 +245,9 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         usa, russia = m.country("USA"), m.country("Russia")
 
         convoy, sa13_pos, ewr_positions = self._spawn_red_ground(m, russia, scene)
+        threats = self._threat_rings(sa13_pos=sa13_pos)
         awacs_track = self._spawn_awacs(m, usa, scene)
-        hog = self._spawn_strike(m, usa, scene, target_unit=convoy.units[4])
+        hog = self._spawn_strike(m, usa, scene, convoy=convoy, threats=threats)
         cap_track = self._spawn_cap(m, usa, scene)
         self._spawn_red_intercept(m, russia, scene)
         corridor = self._spawn_player(m, usa, scene, threats=(sa13_pos, *ewr_positions))
@@ -526,14 +532,29 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         )
         return p1, p2
 
-    def _spawn_strike(self, m: Mission, usa: Country, scene: _Scene, *, target_unit):
-        """A-10C 2-ship Hawg from Kutaisi, fragged on the convoy."""
-        hog = m.strike_flight(
-            usa,
-            "Hawg",
-            planes.A_10C,
-            target=target_unit,
+    def _spawn_strike(
+        self,
+        m: Mission,
+        usa: Country,
+        scene: _Scene,
+        *,
+        convoy: VehicleGroup,
+        threats: tuple[ThreatRing, ...],
+    ):
+        """A-10C 2-ship Hawg from Kutaisi, routed onto the convoy.
+
+        Built by hand rather than with `Mission.strike_flight`, which drops an
+        attack waypoint pydcs hard-codes to `alt = 0`: the pair descended to sea
+        level directly over the column's SA-13 and its gun vehicles, which is
+        the one place an A-10 must not be. The run-in is flown at a height the
+        Mavericks reach from and the IR SHORAD does not.
+        """
+        hog = m.flight_group_from_airport(
+            country=usa,
+            name="Hawg",
+            aircraft_type=planes.A_10C,
             airport=scene.kutaisi,
+            maintask=task.CAS,
             start_type=StartType.Warm,
             group_size=2,
         )
@@ -551,7 +572,62 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             ],
         )
         apply_threat_reaction(hog)
+        self._route_strike(hog, scene, convoy=convoy, threats=threats)
         return hog
+
+    def _route_strike(
+        self,
+        hog,
+        scene: _Scene,
+        *,
+        convoy: VehicleGroup,
+        threats: tuple[ThreatRing, ...],
+    ) -> None:
+        """Kutaisi → IP → run-in on the column → egress → Kutaisi.
+
+        The column is the target and its SHORAD travels with it, so that ring
+        covers the target and `avoid_threats` rightly leaves it alone — the
+        exposure on the run-in is the mission. What routing buys here is the
+        transit: the EWR-covered ground and the SA-13's hilltop are bent around
+        on the way in and out instead of flown over.
+        """
+        target = scene.ao_center
+        hog.add_runway_waypoint(scene.kutaisi)
+        ip = routing.standoff_point(
+            target,
+            toward=scene.kutaisi.position,
+            threats=threats,
+            min_distance_m=18_000.0,
+            clearance_m=3_000.0,
+        )
+        for i, pt in enumerate(
+            routing.avoid_threats(
+                scene.kutaisi.position, ip, threats, clearance_m=4_000.0
+            )[1:],
+            start=1,
+        ):
+            hog.add_waypoint(pt, altitude=4_600, speed=400, name=f"INGRESS-{i}")
+        # 4,000 m keeps the pair inside Maverick range of the column and above
+        # the Strela-10 and the gun vehicles riding with it. pydcs's own attack
+        # waypoint would have put this at zero.
+        attack = hog.add_waypoint(target, altitude=4_000, speed=400, name="ATTACK")
+        attack.tasks.append(
+            task.AttackGroup(
+                convoy.id,
+                weapon_type=task.WeaponType.Auto,
+                group_attack=True,
+                expend=task.Expend.All,
+            )
+        )
+        for i, pt in enumerate(
+            routing.avoid_threats(
+                target, scene.kutaisi.position, threats, clearance_m=4_000.0
+            )[1:-1],
+            start=1,
+        ):
+            hog.add_waypoint(pt, altitude=4_600, speed=430, name=f"EGRESS-{i}")
+        hog.add_runway_waypoint(scene.kutaisi)
+        hog.land_at(scene.kutaisi)
 
     def _spawn_cap(
         self, m: Mission, usa: Country, scene: _Scene
@@ -660,6 +736,16 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         `_draw_plan` chooses to show — never a stock unit icon.
         """
         conceal_country(russia)
+
+    def _threat_rings(self, *, sa13_pos: Point) -> tuple[ThreatRing, ...]:
+        """The convoy's SHORAD as an envelope, for the plan and the AI route.
+
+        One radius, two consumers: what `_draw_plan` paints as the estimated
+        ring is what the strike pair flies around, so the briefing and the
+        friendly flight plan cannot disagree. The EWRs are not here — they
+        cannot shoot, so nothing needs to route around them.
+        """
+        return (ThreatRing(sa13_pos, 8_000.0, "SA-13"),)
 
     def _draw_plan(
         self,
