@@ -560,9 +560,32 @@ export DCS_INSTALL_DIR="/mnt/e/Games/DCS World OpenBeta"   # 'E:\Games\…' also
 export DCS_SAVED_GAMES_DIR="/mnt/c/Users/<user>/Saved Games/DCS.openbeta"
 ```
 
-Unset, the helper logs a warning and every generated flight flies clean.
+Unset, the helper logs a warning and the DCS task defaults come back empty.
 Liveries stay at the DCS default even when set — pydcs's livery scanner splits
 paths on `\` and cannot be used off Windows (see the docstring).
+
+**Arm every blue flight explicitly — never rely on the task default.** It is
+sourced from the installed game, so it is empty without `DCS_INSTALL_DIR` and
+is whatever DCS happens to frag with it. Either way it is not what the briefing
+promised, and five of the six missions once shipped with entirely empty pylons
+while their briefings named specific stores. Use
+[`mission_kit.arm`](src/dcs_mission_creator/core/mission_kit.py), which clears
+the stations first so no default survives on a station the list skips:
+
+```python
+arm(player, planes.F_16C_50, [
+    (1, "AIM_9X_Sidewinder_IR_AAM"),
+    (3, "AGM_88C_HARM___High_Speed_Anti_Radiation_Missile_"),
+    (4, "Fuel_tank_370_gal"),
+    (10, "AN_ASQ_213_HTS___HARM_Targeting_System"),
+])
+```
+
+Write the list at the spawn site, not in a shared catalogue — a loadout is
+force composition, and one mission's package should not constrain another's.
+The `PylonN` classes on each `PlaneType` enumerate what a station legally
+takes, so read the names off pydcs rather than guessing; a wrong one is an
+`AttributeError` at build time instead of a silent empty rail.
 
 ## Running
 
