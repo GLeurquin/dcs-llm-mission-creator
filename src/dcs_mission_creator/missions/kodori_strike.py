@@ -267,7 +267,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self._set_time(m)
         self._set_weather(m)
         scene = self._setup_airports(m)
-        self._scene = scene
         usa, russia = m.country("USA"), m.country("Russia")
 
         fob, sa6, sa6_pos, sa13_positions, ewr_pos = self._spawn_red_ground(

@@ -272,7 +272,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self._set_time(m)
         self._set_weather(m)
         scene = self._setup_airports(m)
-        self._scene = scene
         usa, russia = m.country("USA"), m.country("Russia")
 
         sa6, ewr_positions = self._spawn_red_air_defence(m, russia, scene)
@@ -925,22 +924,25 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             seconds=25,
         )
 
-        partial = triggers.TriggerOnce(comment="Primary objectives met")
-        partial.add_condition(condition.GroupDead(sa6.id))
-        partial.add_condition(condition.GroupDead(depot.id))
-        partial_call = (
-            "Magic: the ridge and the depot are down. Deal with the fighters "
-            "and that column, then RTB."
+        # Gated on the search radar, exactly as the "all objectives" rule above
+        # and `_add_sa6_radar_down_trigger` are. It used to ask for GroupDead —
+        # every launcher and the command post as well — which is strictly more
+        # than the success rule needs, so "primary objectives met" could arrive
+        # *after* "all objectives met", or never, with the site already blind.
+        mission_triggers.message_to_coalition(
+            m,
+            comment="Primary objectives met",
+            conditions=(
+                condition.UnitDead(sa6.units[0].id),
+                condition.GroupDead(depot.id),
+            ),
+            voice=self._voice,
+            text=(
+                "Magic: the ridge and the depot are down. Deal with the fighters "
+                "and that column, then RTB."
+            ),
+            seconds=20,
         )
-        partial.add_action(
-            action.MessageToCoalition(
-                action.Coalition.Blue,
-                m.string(partial_call),
-                seconds=20,
-            )
-        )
-        self._voice.attach_to_coalition(m, partial, partial_call, coalition="blue")
-        m.triggerrules.triggers.append(partial)
 
         mission_triggers.message_to_all(
             m,
