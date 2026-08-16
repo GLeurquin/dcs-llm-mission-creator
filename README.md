@@ -78,7 +78,7 @@ The intended workflow is to open this repo in [Claude Code](https://claude.com/c
 
 ## Bundled mission examples
 
-Five worked missions ship under [src/dcs_mission_creator/missions/](src/dcs_mission_creator/missions/) — read them as templates for what a generator does with the overlay, flight packages, threats, triggers, and TTS. All are single-seat F-16C-50 sorties (coop-scalable via `--players`); every ground placement comes from the `map_overlay` tactical-scene helpers, not hand-tuned offsets.
+Six worked missions ship under [src/dcs_mission_creator/missions/](src/dcs_mission_creator/missions/) — read them as templates for what a generator does with the overlay, flight packages, threats, triggers, and TTS. All are single-seat F-16C-50 sorties (coop-scalable via `--players`); every ground placement comes from the `map_overlay` tactical-scene helpers, not hand-tuned offsets.
 
 | Slug | Theater | Difficulty | Sortie |
 |------|---------|-----------|--------|
@@ -227,10 +227,10 @@ Placement.near_treeline(within_m=80, light_forest_ok=True, not_in_built_up=True)
 
 ## Tactical scenes for mission generators
 
-Mission code rarely calls `find_placement` directly — it calls [`TacticalScene`](src/dcs_mission_creator/map_overlay/scene.py) or the archetype shortcuts in [`missions/_placement.py`](src/dcs_mission_creator/missions/_placement.py) instead:
+Mission code rarely calls `find_placement` directly — it calls [`TacticalScene`](src/dcs_mission_creator/map_overlay/scene.py) or the archetype shortcuts in [`core/placement.py`](src/dcs_mission_creator/core/placement.py) instead:
 
 ```python
-from dcs_mission_creator.missions._placement import (
+from dcs_mission_creator.core.placement import (
     load_scene, convoy_spawn, sam_site_on_ridge, ewr_high_ground,
 )
 

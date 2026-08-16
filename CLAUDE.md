@@ -9,7 +9,7 @@ This is a pydcs-based DCS mission generator. Three docs, one job each:
   — **the pydcs API**: terrain, flight / ground helpers, tasks, triggers,
   weather, F10 drawings, coordinates, save, and every gotcha — signatures
   verified against the installed source under
-  [.venv/lib/python3.12/site-packages/dcs/](.venv/lib/python3.12/site-packages/dcs/).
+  [.venv/lib/python3.14/site-packages/dcs/](.venv/lib/python3.14/site-packages/dcs/).
   Consult it before guessing any API shape.
 - **This file** — **project conventions**: package layout, the
   `MissionBuilder` contract, the project-owned `VoiceSynth` / `PlanOverlay`
@@ -22,30 +22,37 @@ This is a pydcs-based DCS mission generator. Three docs, one job each:
   `<scenario_slug>.py`. Each module defines **one** concrete subclass of
   `MissionBuilder` (from
   [core/mission_builder.py](src/dcs_mission_creator/core/mission_builder.py)) with:
-  - class attributes `name: str` (filesystem slug, matches the filename) and
-    `title: str` (display name);
-  - `def build_miz(self, miz_path: Path) -> None` — writes the `.miz`. Use
+  - class attributes `name: str` (filesystem slug, matches the filename),
+    `title: str` (display name), and `difficulty: Difficulty` (the enum from
+    [core/difficulty.py](src/dcs_mission_creator/core/difficulty.py), **not**
+    a string) — it drives both the F10 reveal and the enemy ROE;
+  - `def _assemble(self, m: Mission) -> MapOverlay` — builds the whole mission
+    into `m` and returns the overlay its positions came from. Use
     `self.players` (1–4, validated by the base class) for client-slot counts;
   - `def readme(self) -> str` — returns the README.md content (markdown,
     the mission briefing).
-- The base class provides
-  `generate(output_dir: Path) -> tuple[Path, Path]` which creates
-  `output_dir`, calls `build_miz(output_dir / f"{name}.miz")`, then writes
-  `output_dir / "README.md"`. **Do not override `generate`.**
-- Each module also exposes an argparse `main()` so the script remains
-  runnable via `python -m`. Pattern at the bottom of the file:
+- The base class owns everything around that, and **a mission overrides none
+  of it**:
+  - `build_miz` constructs the `Mission`, calls `_assemble`, snaps every
+    flight's take-off/landing waypoints to field elevation, makes the output
+    directory and saves. Snapping has to happen after the last flight exists
+    and before the save — pydcs hard-codes those altitudes to zero, so a
+    mission that skipped it shipped a jet spawned underground. It is in the
+    base precisely so it cannot be forgotten.
+  - `generate(output_dir) -> tuple[Path, Path]` seeds the RNG, then writes
+    `<name>.miz` and `README.md`.
+- Each module also exposes a one-line `main()` so the script stays runnable
+  via `python -m`. The argparse lives in
+  [core/cli.py](src/dcs_mission_creator/core/cli.py), which takes the slug and
+  title off the class, so the two cannot drift:
 
   ```python
   def main() -> None:
-      parser = argparse.ArgumentParser(description="…")
-      parser.add_argument("--output-dir", type=Path,
-                          default=Path("out") / "<slug>",
-                          help="Output directory for the .miz and README.md")
-      parser.add_argument("--players", type=int, default=1, choices=[1, 2, 3, 4])
-      args = parser.parse_args()
-      miz, readme = <ClassName>(players=args.players).generate(args.output_dir)
-      print(f"wrote {miz}")
-      print(f"wrote {readme}")
+      run_cli(CoastalCover)
+
+
+  if __name__ == "__main__":
+      main()
   ```
 - `out/` is gitignored; `*.miz` is also gitignored.
 - [src/dcs_mission_creator/__main__.py](src/dcs_mission_creator/__main__.py)
@@ -124,17 +131,20 @@ tightens/loosens the same way. Friendly-plan calls (`route`, `orbit`,
 per label) live in the `dcs-mission` skill; the underlying pydcs drawing API
 lives in PYDCS_REFERENCE.md.
 
-Missions call this in a `_draw_plan` step near the end of `build_miz` (after
-triggers, before `_add_briefing`). Spawn helpers that own friendly geometry
+Missions call this in a `_draw_plan` step near the end of `_assemble`, before
+`_add_briefing`. Whether it runs before or after the trigger steps does not
+matter — drawing reads no trigger state, and the two most complex missions
+(`eastern_shield`, `idlib_gauntlet`) draw first. Spawn helpers that own friendly geometry
 (the ingress corridor, AWACS/tanker/CAP tracks) return their `Point`s so
 `_draw_plan` can annotate them.
 
-The same module owns the other half of that policy — **what the map does not
-show**. Enemy groups never appear as stock unit icons; the player's picture is
-the briefing plus what `PlanOverlay` deliberately draws:
+[`core/visibility.py`](src/dcs_mission_creator/core/visibility.py) owns the
+other half of that policy — **what the map does not show**. Enemy groups never
+appear as stock unit icons; the player's picture is the briefing plus what
+`PlanOverlay` deliberately draws:
 
 ```python
-from dcs_mission_creator.core.map_draw import conceal, conceal_country
+from dcs_mission_creator.core.visibility import conceal, conceal_country
 
 conceal_country(russia, syria)   # every group those countries own
 conceal(convoy, sa6, reserve)    # or a hand-picked list; None entries skipped
@@ -142,8 +152,9 @@ conceal(convoy, sa6, reserve)    # or a hand-picked list; None entries skipped
 
 Both set `hidden` / `hidden_on_planner` / `hidden_on_mfd` (F10 map, briefing
 mission-planner map, datalink) — cosmetic only, the group still spawns,
-radiates and shoots. Missions call `conceal_country` from a `_conceal_red`
-step placed right before `_draw_plan`; prefer it over `conceal` so a
+radiates and shoots. They live outside `map_draw.py` because they never touch
+a drawing. Missions call `conceal_country` from a `_conceal_red` step placed
+right before `_draw_plan`; prefer it over `conceal` so a
 late-activated reserve or a newly added EWR cannot be forgotten. Design rules
 live in the `dcs-mission` skill; the raw pydcs attributes in
 PYDCS_REFERENCE.md §5.
@@ -169,8 +180,13 @@ sa5 = ad.build_sa5_site(m, russia, hill, heading=180,
 
 Builders: `build_sa2/sa3/sa5/sa8/sa13/sa15/sa19_site`,
 `build_nasams/irist/roland/rapier/hq7_site`
-`(m, country, position, heading, *, launchers=…, prefix="", skill=Skill.Average,
-overlay=None, terrain=None) -> VehicleGroup`. Like the other core helpers:
+`(m, country, position, heading, *, launchers=None, prefix="", skill=Skill.Average,
+overlay=None, terrain=None) -> VehicleGroup` — the shared `SiteBuilder`
+signature; `launchers=None` means "whatever this system normally fields". Each
+site is a `_SiteSpec` table entry (leader, components, launcher type) assembled
+by one engine, so **adding a system is a table entry, not a new function**.
+Pass `overlay` *and* `terrain` together or neither — one alone used to skip
+snapping in silence and now warns. Like the other core helpers:
 absolute world `Point` in, raw pydcs `Country` in (no faction abstraction), a
 built group out. `set_skill(group, skill)` is exported too (replaces the
 per-mission `_set_skill`). Get the `position` from the `core/placement.py`
@@ -199,8 +215,10 @@ waypoints.ground_elevation_m(ov, point)        # raw lookup, 0.0 outside the ove
 ```
 
 `snap_base_waypoints` walks every flying group in the mission, so it cannot
-miss a flight added later — missions call it as the **last** `build_miz` step
-before `m.save(...)`. `add_ground_waypoint` is for **client** routes only: an
+miss a flight added later. **Missions no longer call it** —
+`MissionBuilder.build_miz` runs it after `_assemble` returns and before the
+save, which is why `_assemble` returns the overlay.
+`add_ground_waypoint` is for **client** routes only: an
 AI flight flies its route altitudes, so a deck-level turning point flies it
 into the terrain. Missions with no other overlay need (`daryal_run`,
 `abkhaz_sweep`) carry a `load_scene(<theater>)` handle in their `_Scene` for
@@ -282,50 +300,6 @@ tasking.scramble_on_trigger(m, reserve,               # cold-ramp alert-5
   with a queued `StartCommand` and pushes it on the condition(s); generalizes
   pydcs `FlyingGroup.delay_start` (time-only) to any condition.
 
-## Threat-aware routing helper (project-owned)
-
-[`routing`](src/dcs_mission_creator/core/routing.py) plans AI routes *around*
-the threat rings. pydcs plans them as straight lines — `Mission.strike_flight`
-joins base → IP → target with no idea a SAM belt sits on that line — so a
-friendly package flown on the pydcs default bores straight into the MEZ the
-briefing told the player to work around, which reads as the friendly package
-being stupid rather than the enemy being dangerous. **Never task an AI flight
-into a defended AO with `strike_flight`;** build the group with
-`flight_group_from_airport` and route it here.
-
-```python
-from dcs_mission_creator.core import routing
-from dcs_mission_creator.core.routing import ThreatRing
-
-belts = (ThreatRing(sa2_pos, 40_000.0, "SA-2 belt"),      # same radii the
-         ThreatRing(sa6_pos, 25_000.0, "SA-6 belt"),      # F10 plan paints
-         ThreatRing(sa8_pos, 10_000.0, "SA-8 belt"))
-ip  = routing.standoff_point(target, toward=hatay.position, threats=belts,
-                             min_distance_m=25_000.0)
-legs = routing.avoid_threats(hatay.position, ip, belts, clearance_m=5_000.0)
-```
-
-- `ThreatRing(position, radius_m, label)` — a circular no-go envelope. Use the
-  **briefed** radius, i.e. the number `PlanOverlay.threat()` draws, so the plan
-  the player reads and the route the AI flies come from one constant. Build
-  them in a small `_threat_rings` step and feed both `_draw_plan` and the spawn
-  helpers from it. EWRs do not belong in the list — they cannot shoot.
-- `avoid_threats(start, target, rings, *, clearance_m)` — bends each leg around
-  the deepest ring it cuts, on the cheaper side, until the route is clean.
-  Rings that cover `start` or `target` are skipped: a target parked inside an
-  envelope cannot be detoured out of, and that exposure is the mission.
-- `standoff_point(target, *, toward, threats, …)` — an IP / hold point,
-  nearest-first and preferring the `toward` (friendly) side, swinging round the
-  flank only when the direct side is inside an envelope.
-
-Geometry only — the module never touches a group, task or waypoint; the caller
-turns the `Point`s into waypoints. Its behavioural other half is
-`tasking.apply_threat_reaction`. Design rules (how much exposure a package
-should accept per difficulty) live in the `dcs-mission` skill.
-[idlib_gauntlet.py](src/dcs_mission_creator/missions/idlib_gauntlet.py)'s
-`_route_strike` is the reference use: ingress, run-in and egress all routed,
-the SA-8 avoided outright, the SA-2/SA-6 umbrellas over the target accepted.
-
 ## SAM EMCON / HARM-reaction helper (project-owned)
 
 [`emcon`](src/dcs_mission_creator/core/emcon.py) gives radar sites the one
@@ -394,15 +368,14 @@ returns the raw text. New `.lua` files are picked up automatically; the
 
 ## Script structure: small named functions
 
-`build_miz` is the orchestrator, not the implementation. Each block of the
+`_assemble` is the orchestrator, not the implementation. Each block of the
 mission gets its own method whose name says what the block produces and whose
 docstring states the design intent in one line. Pattern (see
 [coastal_cover.py](src/dcs_mission_creator/missions/coastal_cover.py)):
 
 ```python
-def build_miz(self, miz_path: Path) -> None:
+def _assemble(self, m: Mission) -> MapOverlay:
     """Assemble the mission by calling each step in package order."""
-    m = Mission(self._terrain)
     self._set_time(m)
     self._set_weather(m)
     scene = self._setup_airports(m)
@@ -420,8 +393,7 @@ def build_miz(self, miz_path: Path) -> None:
     self._draw_plan(m, scene, ...)
     self._add_briefing(m)
 
-    miz_path.parent.mkdir(parents=True, exist_ok=True)
-    m.save(str(miz_path))
+    return scene.overlay.overlay   # the base snaps base waypoints, then saves
 ```
 
 Rules:
@@ -437,6 +409,78 @@ Rules:
   downstream calls like `player.land_at(scene.batumi)`.
 - Return the groups the orchestrator still needs (e.g. `convoy`, `hog` for
   end-of-mission triggers); name throwaways with a leading underscore.
+
+## Mission scaffolding helpers (project-owned)
+
+Four small modules hold what every mission used to carry its own copy of. None
+of them holds policy: force composition, timings and text stay in the mission.
+
+- [`core/mission_kit.py`](src/dcs_mission_creator/core/mission_kit.py) —
+  `offset(origin, *, east_m, north_m)` (DCS `x` is north and `y` is east; this
+  is why call sites never say so), `mark_clients(group)`, and a re-export of
+  `set_skill`. Import these rather than redefining them.
+- [`core/weather.py`](src/dcs_mission_creator/core/weather.py) — state the
+  weather as a record instead of fourteen assignments:
+
+  ```python
+  Weather(
+      name="Spring scattered", season_temperature=18.0,
+      clouds_base=2400, clouds_thickness=600, clouds_density=4,
+      visibility_distance=80_000,
+      wind_at_ground=Wind(300, 4), wind_at_2000=Wind(290, 7),
+      wind_at_8000=Wind(280, 12),
+  ).apply(m)
+  ```
+- [`core/triggers.py`](src/dcs_mission_creator/core/triggers.py) — the
+  voice-plus-text radio call. **Use these instead of hand-rolling the rule**:
+  they take one `text` and use it for both the on-screen `MessageTo*` and the
+  TTS render, so the two cannot drift out of sync, which is a convention this
+  project otherwise enforces only by eye.
+
+  ```python
+  from dcs_mission_creator.core import triggers as mission_triggers
+
+  mission_triggers.message_to_all(m, comment="Strike successful", voice=self._voice,
+                                  conditions=(condition.GroupDead(convoy.id),),
+                                  text="Magic: the column is wrecked...")
+  mission_triggers.message_to_coalition(m, ...)   # one coalition only
+  mission_triggers.checkin(m, at_seconds=180, ...)  # support check-in on the clock
+  mission_triggers.intro(m, ...)                    # TriggerStart mission picture
+  ```
+- [`core/cli.py`](src/dcs_mission_creator/core/cli.py) — `run_cli(TheBuilder)`,
+  the whole body of a mission's `main()`.
+
+## Reproducibility
+
+Building the same mission twice produces the same `.miz`, byte for byte. That
+is not free — four separate things had to be pinned, and all four are easy to
+undo by accident:
+
+- `MapOverlay` carries the sampling `seed` (default 0). `find_placement` takes
+  no per-call seed; build the overlay with a different one to resample.
+- `MissionBuilder.generate` seeds the stdlib `random` from the mission slug.
+- `MissionBuilder._pin_runway_waypoint_distance` — pydcs declares
+  `add_runway_waypoint(..., distance=random.randrange(6000, 8000, 100))`, a
+  **default argument**, so the value is drawn once when `dcs.unitgroup` is
+  imported, before any seeding can run. It moved every flight's take-off point.
+- `MissionBuilder._pin_onboard_numbers` — pydcs picks tail numbers with
+  `set.pop()` over a set of strings, which follows string hashing.
+
+If a change makes generation non-deterministic, the smoke test catches it.
+
+## Tests
+
+`tests/` runs without a DCS installation **and** without the built map overlay,
+because CI has neither. That is a hard constraint on anything committed here:
+
+- Default selection (`pytest -m "not slow"`) is what CI and pre-commit run.
+- `@pytest.mark.slow` is for anything needing the overlay — currently only
+  `tests/test_mission_smoke.py`, which skips itself when the overlay is absent.
+- A `Mission(Caucasus())` is cheap and needs neither, so core helpers that take
+  a mission (`air_defense`, `triggers`, `weather`) are tested normally.
+- **Do not assert on mission content.** The smoke test checks that every
+  mission builds a readable `.miz` and builds reproducibly, not what is in it;
+  freezing composition would make every balance tweak look like a regression.
 
 ## Briefings read as intel, not as the mission file
 
@@ -539,9 +583,11 @@ Always run both after editing Python under `src/` (and fix what they flag
 before reporting a task done):
 
 ```bash
-uv run ruff check src/                 # lint
-uv run ruff format --check src/        # formatting check (use `format` to apply)
+uv run ruff check src/ tests/          # lint
+uv run ruff format --check src/ tests/ # formatting check (use `format` to apply)
 uv run ty check src/                   # static type check (astral ty)
+uv run pytest -m "not slow"            # what CI and pre-commit run
+uv run pytest                          # adds the overlay-dependent smoke test
 ```
 
 `ruff` and `ty` are pinned in `pyproject.toml`'s `[dependency-groups].dev` and
@@ -561,5 +607,6 @@ prek install                  # wire .git/hooks/pre-commit
 prek run --all-files          # manual full run
 ```
 
-The hook fails the commit if `ruff check`, `ruff format`, or `ty check`
-reports anything. Fix the diagnostic, re-stage, commit again.
+The hook fails the commit if `ruff check`, `ruff format`, `ty check` or the
+fast test selection reports anything. `.github/workflows/ci.yml` runs the same
+four on every push. Fix the diagnostic, re-stage, commit again.
