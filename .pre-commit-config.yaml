@@ -17,3 +17,13 @@ repos:
         types: [python]
         pass_filenames: false
         require_serial: true
+
+      # Only the fast tests: the `slow` ones need the built map overlay, which
+      # not every checkout has. CI runs the same selection.
+      - id: pytest
+        name: pytest (fast tests)
+        entry: uv run pytest -q -m "not slow"
+        language: system
+        types: [python]
+        pass_filenames: false
+        require_serial: true
