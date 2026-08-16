@@ -48,7 +48,13 @@ from dcs_mission_creator.core.cli import run_cli
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.map_draw import PlanOverlay
 from dcs_mission_creator.core.mission_builder import MissionBuilder
-from dcs_mission_creator.core.mission_kit import arm, mark_clients, offset, set_skill
+from dcs_mission_creator.core.mission_kit import (
+    arm,
+    mark_clients,
+    offset,
+    race_track,
+    set_skill,
+)
 from dcs_mission_creator.core.placement import (
     FOREST_BUFFER_M as _FOREST_BUFFER_M,
     NO_FOREST as _NO_FOREST,
@@ -637,14 +643,15 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             standoff_m=100_000.0,
             track_length_m=80_000.0,
         )
+        track = race_track(p1, p2)
         m.awacs_flight(
             usa,
             "Magic",
             plane_type=planes.E_3A,
             airport=scene.kutaisi,
-            position=p1,
-            race_distance=int(p1.distance_to_point(p2)),
-            heading=int(p1.heading_between_point(p2)),
+            position=track.position,
+            race_distance=track.race_distance,
+            heading=track.heading,
             altitude=8500,
             speed=410,
             start_type=StartType.Warm,
@@ -662,14 +669,15 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             standoff_m=70_000.0,
             track_length_m=60_000.0,
         )
+        track = race_track(p1, p2)
         m.refuel_flight(
             usa,
             "Texaco",
             plane_type=planes.KC_135,
             airport=scene.kutaisi,
-            position=p1,
-            race_distance=int(p1.distance_to_point(p2)),
-            heading=int(p1.heading_between_point(p2)),
+            position=track.position,
+            race_distance=track.race_distance,
+            heading=track.heading,
             altitude=4500,
             speed=380,
             start_type=StartType.Warm,

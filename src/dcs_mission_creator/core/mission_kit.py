@@ -11,6 +11,7 @@ the opinionated core helpers, not here.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Sequence
 
 from dcs.unit import Skill
@@ -26,7 +27,15 @@ if TYPE_CHECKING:
     from dcs.unit import Unit
     from dcs.unitgroup import FlyingGroup, Group
 
-__all__ = ["arm", "mark_clients", "offset", "set_skill", "unit_of_type"]
+__all__ = [
+    "arm",
+    "mark_clients",
+    "offset",
+    "RaceTrack",
+    "race_track",
+    "set_skill",
+    "unit_of_type",
+]
 
 
 def offset(origin: Point, *, east_m: float = 0.0, north_m: float = 0.0) -> Point:
@@ -89,4 +98,32 @@ def unit_of_type(group: Group, vehicle_type: type[UnitType]) -> Unit:
     raise LookupError(
         f"{group.name} has no {vehicle_type.id}; it has "
         f"{sorted({u.type for u in group.units})}"
+    )
+
+
+@dataclass(frozen=True)
+class RaceTrack:
+    """An orbit leg as pydcs wants it: one end, a length, and a bearing.
+
+    `Mission.awacs_flight` and `Mission.refuel_flight` do not take the two ends
+    of the track. Every AWACS and tanker in the project converted them the same
+    way, and the conversion has two easy mistakes in it — dropping the `int()`,
+    and swapping the ends so the aircraft flies the leg backwards.
+    """
+
+    position: Point
+    race_distance: int
+    heading: int
+
+
+def race_track(p1: Point, p2: Point) -> RaceTrack:
+    """The orbit from `p1` to `p2`, in the terms pydcs asks for.
+
+    Altitude, speed, frequency and TACAN stay at the call site — those are
+    per-mission decisions, and this only converts the geometry.
+    """
+    return RaceTrack(
+        position=p1,
+        race_distance=int(p1.distance_to_point(p2)),
+        heading=int(p1.heading_between_point(p2)),
     )

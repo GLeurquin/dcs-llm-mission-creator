@@ -61,7 +61,7 @@ from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.emcon import ArmSite, arm_emcon_reaction
 from dcs_mission_creator.core.map_draw import PlanOverlay
 from dcs_mission_creator.core.mission_builder import MissionBuilder
-from dcs_mission_creator.core.mission_kit import arm, mark_clients
+from dcs_mission_creator.core.mission_kit import arm, mark_clients, race_track
 from dcs_mission_creator.core.placement import (
     convoy_spawn,
     find_clear_spot,
@@ -746,14 +746,15 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             standoff_m=90_000.0,
             track_length_m=120_000.0,
         )
+        track = race_track(p1, p2)
         m.awacs_flight(
             usa,
             "Magic",
             plane_type=planes.E_3A,
             airport=scene.incirlik,
-            position=p1,
-            race_distance=int(p1.distance_to_point(p2)),
-            heading=int(p1.heading_between_point(p2)),
+            position=track.position,
+            race_distance=track.race_distance,
+            heading=track.heading,
             altitude=9000,
             speed=410,
             start_type=StartType.Warm,
@@ -776,14 +777,15 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             standoff_m=55_000.0,
             track_length_m=60_000.0,
         )
+        track = race_track(p1, p2)
         m.refuel_flight(
             usa,
             "Texaco",
             plane_type=planes.KC_135,
             airport=scene.incirlik,
-            position=p1,
-            race_distance=int(p1.distance_to_point(p2)),
-            heading=int(p1.heading_between_point(p2)),
+            position=track.position,
+            race_distance=track.race_distance,
+            heading=track.heading,
             altitude=6500,
             speed=407,
             start_type=StartType.Warm,
