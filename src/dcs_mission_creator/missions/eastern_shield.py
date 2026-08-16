@@ -42,7 +42,7 @@ from dcs.unit import Skill
 from dcs.unitgroup import VehicleGroup
 from dcs.unittype import VehicleType
 
-from dcs_mission_creator.core import waypoints
+from dcs_mission_creator.core import triggers as mission_triggers, waypoints
 from dcs_mission_creator.core.cli import run_cli
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.map_draw import PlanOverlay
@@ -787,52 +787,42 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         names the threat, and reminds them of tanker frequency / TACAN so
         they don't have to dig into the kneeboard during taxi.
         """
-        intro = triggers.TriggerStart(comment="Magic mission-start picture")
-        call = (
-            "Springfield, Magic on station. Picture: clean cold east, "
-            "MiG-29S parked at Bassel Al-Assad. SA-6 search radar lit "
-            "north of Kuweires. Texaco on tap, 270.0, TACAN 10X."
+        mission_triggers.intro(
+            m,
+            comment="Magic mission-start picture",
+            voice=self._voice,
+            text=(
+                "Springfield, Magic on station. Picture: clean cold east, "
+                "MiG-29S parked at Bassel Al-Assad. SA-6 search radar lit "
+                "north of Kuweires. Texaco on tap, 270.0, TACAN 10X."
+            ),
         )
-        intro.add_action(
-            action.MessageToCoalition(action.Coalition.Blue, m.string(call), seconds=25)
-        )
-        self._voice.attach_to_coalition(m, intro, call, coalition="blue")
-        m.triggerrules.triggers.append(intro)
 
     def _add_support_checkins(self, m: Mission) -> None:
         """Staged support check-ins across the early sortie (TimeAfter)."""
-        self._add_checkin(
+        mission_triggers.checkin(
             m,
-            seconds=180,
+            voice=self._voice,
+            at_seconds=180,
             comment="Texaco check-in",
-            call="Springfield, Texaco established overhead, 6500 feet, "
+            text="Springfield, Texaco established overhead, 6500 feet, "
             "ready for receivers. 270.0, TACAN 10X.",
         )
-        self._add_checkin(
+        mission_triggers.checkin(
             m,
-            seconds=360,
+            voice=self._voice,
+            at_seconds=360,
             comment="Eagle TARCAP on station",
-            call="Magic, Eagle TARCAP on station east of the AO, fuel state plus one.",
+            text="Magic, Eagle TARCAP on station east of the AO, fuel state plus one.",
         )
-        self._add_checkin(
+        mission_triggers.checkin(
             m,
-            seconds=540,
+            voice=self._voice,
+            at_seconds=540,
             comment="Hawg holding",
-            call="Magic, Hawg holding west of the AO, ready for SAM safe "
+            text="Magic, Hawg holding west of the AO, ready for SAM safe "
             "call from Springfield.",
         )
-
-    def _add_checkin(
-        self, m: Mission, *, seconds: int, comment: str, call: str
-    ) -> None:
-        """Wire a single TimeAfter coalition voice call."""
-        rule = triggers.TriggerOnce(comment=comment)
-        rule.add_condition(condition.TimeAfter(seconds=seconds))
-        rule.add_action(
-            action.MessageToCoalition(action.Coalition.Blue, m.string(call), seconds=15)
-        )
-        self._voice.attach_to_coalition(m, rule, call, coalition="blue")
-        m.triggerrules.triggers.append(rule)
 
     def _add_layered_triggers(
         self,
@@ -919,17 +909,21 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     def _add_end_triggers(self, m: Mission, *, sa6, depot, hog, migs) -> None:
         """Success when primary + secondary objectives complete; failure on Hawg loss."""
-        success = triggers.TriggerOnce(comment="All objectives met")
-        success.add_condition(condition.UnitDead(sa6.units[0].id))
-        success.add_condition(condition.GroupDead(depot.id))
-        success.add_condition(condition.GroupDead(migs.id))
-        success_call = (
-            "Magic: the ridge is quiet, the depot is burning and the sky is "
-            "clear. Springfield, RTB Incirlik. Texaco available north for fuel."
+        mission_triggers.message_to_all(
+            m,
+            comment="All objectives met",
+            conditions=(
+                condition.UnitDead(sa6.units[0].id),
+                condition.GroupDead(depot.id),
+                condition.GroupDead(migs.id),
+            ),
+            voice=self._voice,
+            text=(
+                "Magic: the ridge is quiet, the depot is burning and the sky is "
+                "clear. Springfield, RTB Incirlik. Texaco available north for fuel."
+            ),
+            seconds=25,
         )
-        success.add_action(action.MessageToAll(m.string(success_call), seconds=25))
-        self._voice.attach_to_all(m, success, success_call)
-        m.triggerrules.triggers.append(success)
 
         partial = triggers.TriggerOnce(comment="Primary objectives met")
         partial.add_condition(condition.GroupDead(sa6.id))
@@ -948,16 +942,19 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self._voice.attach_to_coalition(m, partial, partial_call, coalition="blue")
         m.triggerrules.triggers.append(partial)
 
-        failure = triggers.TriggerOnce(comment="Strike package down")
-        failure.add_condition(condition.GroupDead(hog.id))
-        failure.add_condition(condition.GroupAlive(depot.id))
-        failure_call = (
-            "Magic: we have lost Hawg and the depot is untouched. There is "
-            "nothing left to run the strike with. Springfield, RTB Incirlik."
+        mission_triggers.message_to_all(
+            m,
+            comment="Strike package down",
+            conditions=(
+                condition.GroupDead(hog.id),
+                condition.GroupAlive(depot.id),
+            ),
+            voice=self._voice,
+            text=(
+                "Magic: we have lost Hawg and the depot is untouched. There is "
+                "nothing left to run the strike with. Springfield, RTB Incirlik."
+            ),
         )
-        failure.add_action(action.MessageToAll(m.string(failure_call), seconds=20))
-        self._voice.attach_to_all(m, failure, failure_call)
-        m.triggerrules.triggers.append(failure)
 
     def _add_briefing(self, m: Mission) -> None:
         """Wire the in-game description, side tasks, and sortie name."""

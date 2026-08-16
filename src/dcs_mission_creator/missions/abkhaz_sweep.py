@@ -46,6 +46,7 @@ from dcs.unit import Skill
 from dcs.unitgroup import VehicleGroup
 from dcs.unittype import VehicleType
 
+from dcs_mission_creator.core import triggers as mission_triggers
 from dcs_mission_creator.core.cli import run_cli
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.map_draw import PlanOverlay
@@ -588,27 +589,33 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     def _add_end_triggers(self, m: Mission, *, su27, mig29, player) -> None:
         """Success when both bandit flights dead; failure when Dodge dies first."""
-        success = triggers.TriggerOnce(comment="Bandits all dead")
-        success.add_condition(condition.GroupDead(su27.id))
-        success.add_condition(condition.GroupDead(mig29.id))
-        success_call = (
-            "Magic: picture is clean, nothing flying between Sukhumi and "
-            "Gudauta. Dodge, return to base, Batumi. Magic is pushing the "
-            "track north."
+        mission_triggers.message_to_all(
+            m,
+            comment="Bandits all dead",
+            conditions=(
+                condition.GroupDead(su27.id),
+                condition.GroupDead(mig29.id),
+            ),
+            voice=self._voice,
+            text=(
+                "Magic: picture is clean, nothing flying between Sukhumi and "
+                "Gudauta. Dodge, return to base, Batumi. Magic is pushing the "
+                "track north."
+            ),
+            seconds=25,
         )
-        success.add_action(action.MessageToAll(m.string(success_call), seconds=25))
-        self._voice.attach_to_all(m, success, success_call)
-        m.triggerrules.triggers.append(success)
 
-        failure = triggers.TriggerOnce(comment="Dodge lost")
-        failure.add_condition(condition.GroupDead(player.id))
-        failure_call = (
-            "Magic: Dodge is down and the corridor is still theirs. Holding "
-            "the southern track. First-light packages are aborting."
+        mission_triggers.message_to_all(
+            m,
+            comment="Dodge lost",
+            conditions=(condition.GroupDead(player.id),),
+            voice=self._voice,
+            text=(
+                "Magic: Dodge is down and the corridor is still theirs. Holding "
+                "the southern track. First-light packages are aborting."
+            ),
+            seconds=25,
         )
-        failure.add_action(action.MessageToAll(m.string(failure_call), seconds=25))
-        self._voice.attach_to_all(m, failure, failure_call)
-        m.triggerrules.triggers.append(failure)
 
     def _add_briefing(self, m: Mission) -> None:
         """Wire the in-game description, side tasks, and sortie name."""

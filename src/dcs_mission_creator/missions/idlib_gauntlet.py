@@ -50,7 +50,12 @@ from dcs.unit import Skill
 from dcs.unitgroup import FlyingGroup, VehicleGroup
 from dcs.unittype import VehicleType
 
-from dcs_mission_creator.core import air_defense as ad, routing, waypoints
+from dcs_mission_creator.core import (
+    air_defense as ad,
+    routing,
+    triggers as mission_triggers,
+    waypoints,
+)
 from dcs_mission_creator.core.cli import run_cli
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.emcon import ArmSite, arm_emcon_reaction
@@ -1291,57 +1296,47 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     def _add_intro_voice(self, m: Mission) -> None:
         """Mission-start AWACS picture: the column, the belts, the clock."""
-        intro = triggers.TriggerStart(comment="Magic mission-start picture")
-        call = (
-            "Uzi, Magic on station. Syrian column rolling north-west out of "
-            "Abu al-Duhur, forty minutes from the Taftanaz off-load. Three SAM "
-            "belts on your nose, SA-6 owns the route. Texaco is 270.0, TACAN 10X."
+        mission_triggers.intro(
+            m,
+            comment="Magic mission-start picture",
+            voice=self._voice,
+            text=(
+                "Uzi, Magic on station. Syrian column rolling north-west out of "
+                "Abu al-Duhur, forty minutes from the Taftanaz off-load. Three SAM "
+                "belts on your nose, SA-6 owns the route. Texaco is 270.0, TACAN 10X."
+            ),
         )
-        intro.add_action(
-            action.MessageToCoalition(action.Coalition.Blue, m.string(call), seconds=25)
-        )
-        self._voice.attach_to_coalition(m, intro, call, coalition="blue")
-        m.triggerrules.triggers.append(intro)
 
     def _add_support_checkins(self, m: Mission) -> None:
         """Staged support check-ins across the early sortie (TimeAfter)."""
-        self._add_checkin(
+        mission_triggers.checkin(
             m,
-            seconds=180,
+            voice=self._voice,
+            at_seconds=180,
             comment="Texaco check-in",
-            call="Uzi, Texaco established, 270.0, TACAN 10X, ready for receivers.",
+            text="Uzi, Texaco established, 270.0, TACAN 10X, ready for receivers.",
         )
-        self._add_checkin(
+        mission_triggers.checkin(
             m,
-            seconds=300,
+            voice=self._voice,
+            at_seconds=300,
             comment="Hammer FAC(A) check-in",
-            call=(
+            text=(
                 f"Uzi, Hammer overhead the corridor, {_FREQ_FAC}.0 victor, "
                 f"{_PRESET_FAC}. I have the column visual, eleven vehicles, "
                 f"laser code {_LASER_CODE} on call."
             ),
         )
-        self._add_checkin(
+        mission_triggers.checkin(
             m,
-            seconds=480,
+            voice=self._voice,
+            at_seconds=480,
             comment="SEAD reminder",
-            call=(
+            text=(
                 "Magic: reminder, Uzi — HARM suppresses those belts, it does not "
                 "kill them. Work the dark window."
             ),
         )
-
-    def _add_checkin(
-        self, m: Mission, *, seconds: int, comment: str, call: str
-    ) -> None:
-        """Wire a single TimeAfter coalition voice call."""
-        rule = triggers.TriggerOnce(comment=comment)
-        rule.add_condition(condition.TimeAfter(seconds=seconds))
-        rule.add_action(
-            action.MessageToCoalition(action.Coalition.Blue, m.string(call), seconds=15)
-        )
-        self._voice.attach_to_coalition(m, rule, call, coalition="blue")
-        m.triggerrules.triggers.append(rule)
 
     def _add_strike_release_triggers(
         self, m: Mission, *, sa6: VehicleGroup, pontiac: FlyingGroup
@@ -1410,26 +1405,31 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self, m: Mission, scene: _Scene, *, convoy: VehicleGroup, migs: FlyingGroup
     ) -> None:
         """Primary / full success on convoy attrition, failure if it off-loads."""
-        primary = triggers.TriggerOnce(comment="Convoy combat-ineffective")
-        primary.add_condition(condition.GroupLifeLess(convoy.id, 30))
-        primary_call = (
-            "Magic: that column is finished as a fighting unit, nothing left "
-            "worth off-loading. Uzi, work what is left and RTB Hatay."
+        mission_triggers.message_to_all(
+            m,
+            comment="Convoy combat-ineffective",
+            conditions=(condition.GroupLifeLess(convoy.id, 30),),
+            voice=self._voice,
+            text=(
+                "Magic: that column is finished as a fighting unit, nothing left "
+                "worth off-loading. Uzi, work what is left and RTB Hatay."
+            ),
         )
-        primary.add_action(action.MessageToAll(m.string(primary_call), seconds=20))
-        self._voice.attach_to_all(m, primary, primary_call)
-        m.triggerrules.triggers.append(primary)
 
-        full = triggers.TriggerOnce(comment="Convoy destroyed, air threat cleared")
-        full.add_condition(condition.GroupDead(convoy.id))
-        full.add_condition(condition.GroupDead(migs.id))
-        full_call = (
-            "Magic: column destroyed, sky is clear over the corridor. "
-            "Uzi, Pontiac, RTB Hatay. Texaco is on tap."
+        mission_triggers.message_to_all(
+            m,
+            comment="Convoy destroyed, air threat cleared",
+            conditions=(
+                condition.GroupDead(convoy.id),
+                condition.GroupDead(migs.id),
+            ),
+            voice=self._voice,
+            text=(
+                "Magic: column destroyed, sky is clear over the corridor. "
+                "Uzi, Pontiac, RTB Hatay. Texaco is on tap."
+            ),
+            seconds=25,
         )
-        full.add_action(action.MessageToAll(m.string(full_call), seconds=25))
-        self._voice.attach_to_all(m, full, full_call)
-        m.triggerrules.triggers.append(full)
 
         offload_zone = m.triggers.add_triggerzone(
             position=scene.convoy_destination,
@@ -1437,16 +1437,17 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             hidden=True,
             name="Taftanaz off-load",
         )
-        failure = triggers.TriggerOnce(comment="Convoy reached the off-load")
-        failure.add_condition(condition.PartOfGroupInZone(convoy.id, offload_zone.id))
-        failure_call = (
-            "Magic: the column made the Taftanaz off-load, they are unloading "
-            "under the revetments. We missed the window. Uzi, egress west and "
-            "RTB Hatay."
+        mission_triggers.message_to_all(
+            m,
+            comment="Convoy reached the off-load",
+            conditions=(condition.PartOfGroupInZone(convoy.id, offload_zone.id),),
+            voice=self._voice,
+            text=(
+                "Magic: the column made the Taftanaz off-load, they are unloading "
+                "under the revetments. We missed the window. Uzi, egress west and "
+                "RTB Hatay."
+            ),
         )
-        failure.add_action(action.MessageToAll(m.string(failure_call), seconds=20))
-        self._voice.attach_to_all(m, failure, failure_call)
-        m.triggerrules.triggers.append(failure)
 
     def _add_briefing(self, m: Mission) -> None:
         """Wire the in-game description, side tasks, and sortie name."""

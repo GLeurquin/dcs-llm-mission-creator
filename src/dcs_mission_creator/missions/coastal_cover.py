@@ -35,6 +35,7 @@ from dcs.unit import Skill
 from dcs.unitgroup import VehicleGroup
 from dcs.unittype import VehicleType
 
+from dcs_mission_creator.core import triggers as mission_triggers
 from dcs_mission_creator.core.cli import run_cli
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.map_draw import PlanOverlay
@@ -673,26 +674,29 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     def _add_end_triggers(self, m: Mission, *, convoy, hog) -> None:
         """Success when convoy dead; failure when Hawg dies while convoy lives."""
-        success = triggers.TriggerOnce(comment="Strike successful")
-        success.add_condition(condition.GroupDead(convoy.id))
-        success_call = (
-            "Magic: the column is wrecked and off the road, nothing is moving "
-            "toward Senaki. Dodge, RTB Batumi."
+        mission_triggers.message_to_all(
+            m,
+            comment="Strike successful",
+            conditions=(condition.GroupDead(convoy.id),),
+            voice=self._voice,
+            text=(
+                "Magic: the column is wrecked and off the road, nothing is moving "
+                "toward Senaki. Dodge, RTB Batumi."
+            ),
         )
-        success.add_action(action.MessageToAll(m.string(success_call), seconds=20))
-        self._voice.attach_to_all(m, success, success_call)
-        m.triggerrules.triggers.append(success)
-
-        failure = triggers.TriggerOnce(comment="Strike failed")
-        failure.add_condition(condition.GroupDead(hog.id))
-        failure.add_condition(condition.GroupAlive(convoy.id))
-        failure_call = (
-            "Magic: we have lost Hawg and the column is still rolling south. "
-            "Nothing more we can do here. Dodge, RTB Batumi."
+        mission_triggers.message_to_all(
+            m,
+            comment="Strike failed",
+            conditions=(
+                condition.GroupDead(hog.id),
+                condition.GroupAlive(convoy.id),
+            ),
+            voice=self._voice,
+            text=(
+                "Magic: we have lost Hawg and the column is still rolling south. "
+                "Nothing more we can do here. Dodge, RTB Batumi."
+            ),
         )
-        failure.add_action(action.MessageToAll(m.string(failure_call), seconds=20))
-        self._voice.attach_to_all(m, failure, failure_call)
-        m.triggerrules.triggers.append(failure)
 
     def _add_briefing(self, m: Mission) -> None:
         """Wire the in-game description, side tasks, and sortie name."""

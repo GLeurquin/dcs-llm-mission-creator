@@ -38,7 +38,7 @@ from dcs.unit import Skill
 from dcs.unitgroup import VehicleGroup
 from dcs.unittype import VehicleType
 
-from dcs_mission_creator.core import waypoints
+from dcs_mission_creator.core import triggers as mission_triggers, waypoints
 from dcs_mission_creator.core.cli import run_cli
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.map_draw import PlanOverlay
@@ -586,28 +586,36 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         """
         big_bird = sa10.units[0].id
         flap_lid = sa10.units[1].id
-        success = triggers.TriggerOnce(comment="SA-10 radars destroyed")
-        success.add_condition(condition.UnitDead(big_bird))
-        success.add_condition(condition.UnitDead(flap_lid))
-        success_call = (
-            "Magic: Big Bird and Flap Lid are off the air, that battery is "
-            "blind. Dodge, egress west and return to base, Vaziani. Do not "
-            "re-cross Daryal."
+        mission_triggers.message_to_all(
+            m,
+            comment="SA-10 radars destroyed",
+            conditions=(
+                condition.UnitDead(big_bird),
+                condition.UnitDead(flap_lid),
+            ),
+            voice=self._voice,
+            text=(
+                "Magic: Big Bird and Flap Lid are off the air, that battery is "
+                "blind. Dodge, egress west and return to base, Vaziani. Do not "
+                "re-cross Daryal."
+            ),
+            seconds=25,
         )
-        success.add_action(action.MessageToAll(m.string(success_call), seconds=25))
-        self._voice.attach_to_all(m, success, success_call)
-        m.triggerrules.triggers.append(success)
 
-        failure = triggers.TriggerOnce(comment="Dodge lost before kill")
-        failure.add_condition(condition.GroupDead(player.id))
-        failure.add_condition(condition.UnitAlive(flap_lid))
-        failure_call = (
-            "Magic: Dodge is down and that battery is still radiating. "
-            "The North Caucasus stays closed to us tonight."
+        mission_triggers.message_to_all(
+            m,
+            comment="Dodge lost before kill",
+            conditions=(
+                condition.GroupDead(player.id),
+                condition.UnitAlive(flap_lid),
+            ),
+            voice=self._voice,
+            text=(
+                "Magic: Dodge is down and that battery is still radiating. "
+                "The North Caucasus stays closed to us tonight."
+            ),
+            seconds=25,
         )
-        failure.add_action(action.MessageToAll(m.string(failure_call), seconds=25))
-        self._voice.attach_to_all(m, failure, failure_call)
-        m.triggerrules.triggers.append(failure)
 
     def _add_briefing(self, m: Mission) -> None:
         """Wire the in-game description, side tasks, and sortie name."""

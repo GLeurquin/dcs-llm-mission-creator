@@ -43,7 +43,7 @@ from dcs.unit import Skill
 from dcs.unitgroup import VehicleGroup
 from dcs.unittype import VehicleType
 
-from dcs_mission_creator.core import waypoints
+from dcs_mission_creator.core import triggers as mission_triggers, waypoints
 from dcs_mission_creator.core.cli import run_cli
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.map_draw import PlanOverlay
@@ -826,15 +826,16 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     def _add_end_triggers(self, m: Mission, *, fob, sa6, weasel) -> None:
         """Success when FOB dead; failure when Weasel dies while FOB lives."""
-        success = triggers.TriggerOnce(comment="Strike successful")
-        success.add_condition(condition.GroupDead(fob.id))
-        success_call = (
-            "Magic: the FOB is wrecked, armour and stores burning in the "
-            "valley. Dodge, return to base, Kutaisi."
+        mission_triggers.message_to_all(
+            m,
+            comment="Strike successful",
+            conditions=(condition.GroupDead(fob.id),),
+            voice=self._voice,
+            text=(
+                "Magic: the FOB is wrecked, armour and stores burning in the "
+                "valley. Dodge, return to base, Kutaisi."
+            ),
         )
-        success.add_action(action.MessageToAll(m.string(success_call), seconds=20))
-        self._voice.attach_to_all(m, success, success_call)
-        m.triggerrules.triggers.append(success)
 
         sead_done = triggers.TriggerOnce(comment="SEAD complete")
         sead_done.add_condition(condition.GroupDead(sa6.id))
@@ -843,16 +844,19 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self._voice.attach_to_all(m, sead_done, sead_call)
         m.triggerrules.triggers.append(sead_done)
 
-        failure = triggers.TriggerOnce(comment="Strike failed")
-        failure.add_condition(condition.GroupDead(weasel.id))
-        failure.add_condition(condition.GroupAlive(fob.id))
-        failure_call = (
-            "Magic: Weasel is down and the FOB is still standing. Without SEAD "
-            "that valley is closed to us. Dodge, return to base, Kutaisi."
+        mission_triggers.message_to_all(
+            m,
+            comment="Strike failed",
+            conditions=(
+                condition.GroupDead(weasel.id),
+                condition.GroupAlive(fob.id),
+            ),
+            voice=self._voice,
+            text=(
+                "Magic: Weasel is down and the FOB is still standing. Without SEAD "
+                "that valley is closed to us. Dodge, return to base, Kutaisi."
+            ),
         )
-        failure.add_action(action.MessageToAll(m.string(failure_call), seconds=20))
-        self._voice.attach_to_all(m, failure, failure_call)
-        m.triggerrules.triggers.append(failure)
 
     def _add_briefing(self, m: Mission) -> None:
         """Wire the in-game description, side tasks, and sortie name."""
