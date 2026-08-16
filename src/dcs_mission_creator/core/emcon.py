@@ -5,7 +5,7 @@ all the way in: the crew never reacts, so every anti-radiation shot is a
 guaranteed kill and SEAD degenerates into a shooting gallery. Real crews do the
 opposite — the launch is called over the IADS net, the fire-control radar drops
 emissions within seconds, the missile loses its emitter and goes for the last
-known point, and the site comes back up a minute or two later once the shooter
+known point, and the site comes back up several minutes later once the shooter
 is assumed dry.
 
 `arm_emcon_reaction` builds that behaviour as a mission-start `DoScript`: one
@@ -71,12 +71,12 @@ class ArmSite:
     label: str
     probability: float = 0.85
     delay_s: tuple[float, float] = (3.0, 8.0)
-    shutdown_s: tuple[float, float] = (60.0, 120.0)
+    shutdown_s: tuple[float, float] = (240.0, 360.0)
     react_range_m: float = 60_000.0
 
 
 # The Lua handler itself lives in `core/lua/emcon.lua`; the placeholders it
-# declares (`__SITES__` / `__SIDE__` / `__COOLDOWN__`) are filled in below.
+# declares (`__SITES__` / `__SIDE__` / `__SPACING__`) are filled in below.
 _SCRIPT = "emcon.lua"
 
 
@@ -96,7 +96,7 @@ def arm_emcon_reaction(
     coalition: str = "blue",
     down_call: Optional[str] = "Magic: {label} has ceased emissions, site is dark.",
     up_call: Optional[str] = "Magic: {label} radar is radiating again.",
-    announce_cooldown_s: float = 20.0,
+    announce_spacing_s: float = 7.0,
     comment: str = "ARM reaction — SAM EMCON",
 ) -> triggers.TriggerStart:
     """Make `sites` drop emissions when an anti-radiation missile is fired at them.
@@ -104,8 +104,10 @@ def arm_emcon_reaction(
     Pass plain `VehicleGroup`s for default behaviour or `ArmSite` entries to tune
     probability / delay / shutdown per site. `down_call` and `up_call` are
     `{label}` templates announced to `coalition`; with a `VoiceSynth` the same
-    words are also rendered and played from the script. Returns the mission-start
-    trigger carrying the generated `DoScript`.
+    words are also rendered and played from the script. Every site gets its own
+    call — a single shot that darkens a whole belt queues them and plays them
+    `announce_spacing_s` apart rather than dropping the later ones. Returns the
+    mission-start trigger carrying the generated `DoScript`.
     """
     if coalition not in _SIDE:
         raise ValueError(f"coalition must be blue/red, got {coalition!r}")
@@ -142,7 +144,7 @@ def arm_emcon_reaction(
         _SCRIPT,
         SITES="\n".join(rows),
         SIDE=_SIDE[coalition],
-        COOLDOWN=f"{announce_cooldown_s:.1f}",
+        SPACING=f"{announce_spacing_s:.1f}",
     )
     rule = triggers.TriggerStart(comment=comment)
     rule.add_action(lua.InlineDoScript(script))

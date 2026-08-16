@@ -29,7 +29,9 @@ from dcs.drawing.icon import StandardIcon
 from dcs.mapping import Point
 
 if TYPE_CHECKING:
+    from dcs.country import Country
     from dcs.mission import Mission
+    from dcs.unitgroup import Group
 
 
 class Difficulty(Enum):
@@ -190,3 +192,38 @@ class PlanOverlay:
         """Offset a point NE by `distance` m so estimates don't pinpoint truth."""
         d = distance / math.sqrt(2.0)
         return center.new_in_same_map(center.x + d, center.y + d)
+
+
+def conceal(*groups: Optional["Group"]) -> None:
+    """Hide `groups` from the F10 map, the mission planner, and the datalink.
+
+    Purely cosmetic: a concealed group still spawns, radiates, moves and
+    shoots. Every enemy group goes through here — the player's picture of the
+    enemy comes from the briefing and from what `PlanOverlay` deliberately
+    draws, never from stock map icons. `None` entries are skipped so callers
+    can pass optional spawns (a reserve that failed placement) straight in.
+    """
+    for group in groups:
+        if group is None:
+            continue
+        group.hidden = True  # F10 map in game
+        group.hidden_on_planner = True  # briefing / mission-planner map
+        group.hidden_on_mfd = True  # datalink & MFD symbology
+
+
+def conceal_country(*countries: "Country") -> None:
+    """`conceal` every group a country owns — aircraft, vehicles, ships, statics.
+
+    The blanket form, and the one missions should call: it cannot miss the
+    late-activated reserve or the EWR added three months after the briefing
+    was written. Call it once all enemy spawns exist (just before the
+    `_draw_plan` step).
+    """
+    for country in countries:
+        conceal(
+            *country.vehicle_group,
+            *country.ship_group,
+            *country.plane_group,
+            *country.helicopter_group,
+            *country.static_group,
+        )

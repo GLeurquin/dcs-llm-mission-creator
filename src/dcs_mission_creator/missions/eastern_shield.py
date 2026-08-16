@@ -44,7 +44,8 @@ from dcs.unit import Skill
 from dcs.unitgroup import VehicleGroup
 from dcs.unittype import VehicleType
 
-from dcs_mission_creator.core.map_draw import PlanOverlay
+from dcs_mission_creator.core import waypoints
+from dcs_mission_creator.core.map_draw import PlanOverlay, conceal_country
 from dcs_mission_creator.core.mission_builder import MissionBuilder
 from dcs_mission_creator.core.placement import load_scene, sam_site_on_ridge
 from dcs_mission_creator.core.tasking import apply_ai_difficulty
@@ -102,21 +103,25 @@ class EasternShield(MissionBuilder):
         return f"""EASTERN SHIELD — Syria, 21 May 2026, 09:00 local
 ==================================================
 SITUATION
-  Russian expeditionary forces have stood up a forward
-  supply depot at Kuweires, defended by a relocatable
-  SA-6 'Gainful' site on the ridge to the north and a
-  GCI chain feeding MiG-29S out of Bassel Al-Assad.
+  Two weeks of imagery show Russian expeditionary forces
+  standing up a forward supply depot on the Kuweires
+  apron — revetted stores, trucks turning nightly.
+  A Rivet Joint track four days ago picked up a Gainful
+  fire-control radar on the ridge to the north; the site
+  is relocatable, so treat the fix as approximate. The
+  same collection has early-warning radars handing a
+  picture to MiG-29S at Bassel Al-Assad.
   USAF has been tasked to break the depot and degrade
   Russian air defence coverage of the Aleppo corridor.
 
 MISSION (Springfield — F-16C-50, Incirlik)
   Phase 1: Suppress the SA-6 site north of Kuweires.
-  Phase 2: Escort Hawg 1-2 onto the depot after the
-           SA-6 search radar is down.
+  Phase 2: Escort Hawg 1-2 onto the depot once you can
+           call the target box SAM-safe.
   Phase 3: Intercept any Russian fighters that scramble
            out of Bassel Al-Assad in response.
-  Phase 4: Disrupt the armored reserve column pushing
-           west on the Aleppo road if it gets close.
+  Phase 4: Disrupt the armored reserve if it comes west
+           on the Aleppo road to retake the ground.
 
 PACKAGE
   Springfield 1 (you): F-16C-50, Incirlik, hot ramp,
@@ -129,22 +134,28 @@ PACKAGE
   Texaco   : KC-135 tanker, 270.000 AM, TACAN 10X,
         track over the Med west of Latakia.
 
-THREATS
-  Air : 2x MiG-29S (High), R-77 class, late-activated
-        from Bassel Al-Assad on depot destruction.
-        Russian EWR chain (2x 55G6) vectoring them.
-  SAM : SA-6 site (1S91 search + 3x 2P25 TEL) on the
-        ridge north of Kuweires. 25 km envelope.
-        SA-13 SHORAD organic to the depot.
-  AAA : 2x ZU-23 emplaced with the SA-6, 2x ZU-23 in
+INTELLIGENCE
+  Air : ELINT and the AWACS picture put a MiG-29S pair
+        at readiness at Bassel Al-Assad, current
+        missiles, experienced crews. They will launch
+        when the depot is hit. Early-warning radars
+        along the frontier will vector them.
+  SAM : Rivet Joint fix, four days old — an SA-6 site on
+        the ridge north of Kuweires, reach about 25 km.
+        The search radar is what feeds its launchers.
+        Depot imagery also shows a tracked IR launcher
+        parked inside the wire.
+  AAA : Light guns emplaced on the SA-6 ridge and around
         the depot.
-  Land: Russian armored reserve (2x T-72B + 4x BTR-80)
-        late-activated on the Aleppo road east of Kuweires.
+  Land: Ground reporting says an armored reserve sits
+        east of Kuweires on the Aleppo road, held back
+        to retake the site if we hit it.
 
 ROE / FRAGS
-  - Cleared to engage SA-6 site and depot ground units.
+  - Cleared to engage the SA-6 site and depot ground units.
   - Cleared to engage Russian aircraft entering the AO.
-  - Stay above SA-6 MEZ until search radar is destroyed.
+  - Stay out of the SA-6 engagement zone until you have
+    put its search radar down.
   - Tank from Texaco pre-push and post-AO if needed.
   - Bingo fuel: 3500 lb. RTB Incirlik (no divert).
 
@@ -168,33 +179,37 @@ FREQUENCIES
 **Date / time:** 21 May 2026, 09:00 local
 **Player aircraft:** F-16C-50 (`Springfield`), Incirlik, hot ramp
 **Players:** {self.players} coop slot(s)
-**Difficulty:** trained
+**Difficulty:** trained — one radar SAM over the target with SHORAD and guns,
+experienced MiG-29S pair with GCI, an armoured counter-push, full support
+package (AWACS, tanker, TARCAP)
 **Expected sortie length:** ~120 minutes (2 hours)
 
 ## Situation
 
-Russian expeditionary forces have stood up a forward supply depot at Kuweires
-in northern Syria, defended by a relocatable SA-6 'Gainful' site on the ridge
-to the north and a GCI chain feeding MiG-29S out of Bassel Al-Assad. USAF has
-been tasked to break the depot and degrade Russian air defence coverage of the
-Aleppo corridor before the Russian reserve closes the road.
+Two weeks of imagery show Russian expeditionary forces standing up a forward
+supply depot on the Kuweires apron in northern Syria — revetted stores, trucks
+turning nightly. A Rivet Joint track four days ago picked up a Gainful
+fire-control radar on the ridge to the north; the site is relocatable, so
+treat that fix as approximate. The same collection has early-warning radars
+handing a picture to MiG-29S at Bassel Al-Assad. USAF is tasked to break the
+depot and degrade Russian air defence coverage of the Aleppo corridor before
+the Russian reserve can close the road.
 
 ## Mission
 
 `Springfield` flight runs a four-phase package out of Incirlik:
 
-1. **Phase 1 — SEAD.** Suppress the SA-6 site north of Kuweires. The
-   1S91 search radar is the priority target — once it dies, the rest of
-   the package is cleared to push.
+1. **Phase 1 — SEAD.** Suppress the SA-6 site north of Kuweires. Its search
+   radar is the priority target — the launchers on that ridge are blind
+   without it, and the rest of the package waits on your call.
 2. **Phase 2 — Strike escort.** `Hawg 1-2` holds west of the AO until
    `Springfield` calls SAM safe, then runs in on the depot. Stay between
    `Hawg` and the threat axis.
-3. **Phase 3 — DCA.** 2x Russian MiG-29S launch out of Bassel Al-Assad
-   when the depot is destroyed. Sanitize the airspace before they get a
-   shot on the strike package.
-4. **Phase 4 — Convoy interdict.** A Russian armored reserve activates
-   and pushes west on the Aleppo road. `Hawg` re-tasks if it can; otherwise
-   `Springfield` rolls in with AGM-65 / strafe on the BTR/T-72 column.
+3. **Phase 3 — DCA.** The Bassel Al-Assad pair will launch once the depot is
+   hit. Sanitize the airspace before they get a shot on the strike package.
+4. **Phase 4 — Convoy interdict.** The armored reserve is expected to come
+   west on the Aleppo road to retake the site. `Hawg` re-tasks if it can;
+   otherwise `Springfield` rolls in with AGM-65 or guns on the column.
 
 ## Package
 
@@ -206,22 +221,27 @@ Aleppo corridor before the Russian reserve closes the road.
 | Magic       | E-3A    | Incirlik | AWACS, 251.000 AM, Med track north|
 | Texaco      | KC-135  | Incirlik | Tanker, 270.000 AM, TACAN 10X     |
 
-## Threats
+## Intelligence
 
-- **SAM (priority):** SA-6 'Gainful' site — 1x 1S91 search radar + 3x 2P25
-  TEL + 2x ZU-23 AAA on the ridge north of Kuweires. 25 km engagement zone.
-- **SHORAD:** 1x SA-13 organic to the depot, 2x ZU-23 AAA in the depot.
-- **Air:** 2x MiG-29S (Skill High), R-77/R-27 class, late-activated from
-  Bassel Al-Assad on depot destruction. Russian EWR chain (2x 55G6)
-  vectoring them.
-- **Land reserve:** 2x T-72B + 4x BTR-80 activating on the Aleppo road
-  east of Kuweires, pushing west toward the depot site.
+The SAM fix is four days old and the site is relocatable, so the ring on your
+map is an estimate — expect to find it with the HTS, not with the mark.
+
+- **SAM (priority):** SA-6 'Gainful' on the ridge north of Kuweires, reach
+  about 25 km, with light guns emplaced alongside. Its search radar feeds the
+  launchers; put that down and the ridge stops shooting.
+- **SHORAD:** depot imagery shows a tracked IR launcher parked inside the wire
+  and guns around the perimeter.
+- **Air:** a MiG-29S pair at readiness at Bassel Al-Assad — current missiles,
+  experienced crews — expected to launch once the depot is hit, vectored by
+  early-warning radar along the frontier.
+- **Land reserve:** ground reporting places an armoured reserve east of
+  Kuweires on the Aleppo road, held back to retake the site if we strike it.
 
 ## ROE
 
 - Cleared to engage the SA-6 site, depot ground units, and any Russian
   aircraft entering the AO.
-- Stay above the SA-6 MEZ until the 1S91 search radar is destroyed.
+- Stay out of the SA-6 engagement zone until its search radar is down.
 - Tank from `Texaco` pre-push and post-AO; F-16C internal fuel does not
   cover a 2-hour sortie without at least one tanker pass.
 - Bingo fuel: 3500 lb. RTB Incirlik (no divert).
@@ -246,11 +266,12 @@ Visibility 40 km (haze layer). Scattered layer at 2800 m, 400 m thick.
 
 ## Win / loss conditions
 
-- **Primary success:** SA-6 site destroyed *and* depot destroyed.
-- **Full success:** Primary + MiG-29S scramble defeated + reserve convoy
-  destroyed before reaching the depot.
-- **Failure:** `Hawg` is destroyed before the depot is, or the reserve
-  convoy reaches Kuweires.
+- **Primary success:** the SA-6 site is off the air for good and the depot is
+  burning.
+- **Full success:** the above, plus the fighter scramble defeated and the
+  armoured reserve stopped short of Kuweires.
+- **Failure:** `Hawg` is lost with the depot still intact, or the reserve
+  reaches Kuweires and digs in.
 
 ## Re-generate
 
@@ -287,6 +308,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             threats=(scene.sa6_anchor, shorad_pos, *ewr_positions),
         )
 
+        self._conceal_red(russia)
         self._draw_plan(
             m,
             scene,
@@ -310,6 +332,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             reserve=reserve,
         )
         self._add_briefing(m)
+        waypoints.snap_base_waypoints(m, scene.overlay.overlay)
 
         miz_path.parent.mkdir(parents=True, exist_ok=True)
         m.save(str(miz_path))
@@ -517,8 +540,9 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         Snap origin and destination to real roads (wider 15 km search than
         the default `place_convoy_route` because the rolling country east
         of Kuweires is sparse), then pre-load an OnRoad push waypoint west
-        toward Kuweires. The group is dormant until `_add_layered_triggers`
-        flips `ActivateGroup` on depot destruction.
+        toward Kuweires. Spawn waypoint is OnRoad too, or the column would
+        path the leg cross-country. The group is dormant until
+        `_add_layered_triggers` flips `ActivateGroup` on depot destruction.
         """
         spawn = scene.overlay.overlay.find_road_spawn(
             scene.reserve_origin, radius_m=15_000
@@ -541,6 +565,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             cast(list[type[VehicleType]], reserve_types),
             position=spawn,
             heading=heading,
+            move_formation=PointAction.OnRoad,
         )
         reserve.late_activation = True
         reserve.add_waypoint(
@@ -719,20 +744,32 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             waypoints=4,
             leg_search_radius_m=8_000.0,
         )
-        for i, pt in enumerate(corridor):
-            if i == 0:
-                name = "PUSH"
-            elif i == len(corridor) - 1:
-                name = "SA6 IP"
-            else:
-                name = f"INGRESS-{i}"
+        ov = scene.overlay.overlay
+        for i, pt in enumerate(corridor[:-1]):
+            name = "PUSH" if i == 0 else f"INGRESS-{i}"
             player.add_waypoint(pt, altitude=7000, speed=400, name=name)
-        player.add_waypoint(scene.depot_anchor, altitude=6500, speed=400, name="DEPOT")
+        # Both remaining steerpoints mark something on the ground — the SA-6
+        # site the corridor ends on, then the depot — so they sit on the
+        # terrain; the INGRESS legs above carry the run-in altitude.
+        waypoints.add_ground_waypoint(
+            player, corridor[-1], overlay=ov, speed=400, name="SA6 TGT"
+        )
+        waypoints.add_ground_waypoint(
+            player, scene.depot_anchor, overlay=ov, speed=400, name="DEPOT"
+        )
         player.add_runway_waypoint(scene.incirlik)
         player.land_at(scene.incirlik)
         return [*corridor, scene.depot_anchor]
 
     # -- F10 map briefing ---------------------------------------------------
+
+    def _conceal_red(self, russia: Country) -> None:
+        """Keep every Russian group off the F10 map, the planner and the datalink.
+
+        Includes the reserve waiting on the Aleppo road — an unhidden reserve
+        would spoil its own counter-push before it ever rolls.
+        """
+        conceal_country(russia)
 
     def _draw_plan(
         self,
@@ -916,8 +953,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         success.add_condition(condition.GroupDead(depot.id))
         success.add_condition(condition.GroupDead(migs.id))
         success_call = (
-            "Magic: all primary and secondary objectives complete. "
-            "Springfield, RTB Incirlik. Texaco available north for fuel."
+            "Magic: the ridge is quiet, the depot is burning and the sky is "
+            "clear. Springfield, RTB Incirlik. Texaco available north for fuel."
         )
         success.add_action(action.MessageToAll(m.string(success_call), seconds=25))
         self._voice.attach_to_all(m, success, success_call)
@@ -927,7 +964,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         partial.add_condition(condition.GroupDead(sa6.id))
         partial.add_condition(condition.GroupDead(depot.id))
         partial_call = (
-            "Magic: primary targets struck. Mop up the MiGs and the reserve, then RTB."
+            "Magic: the ridge and the depot are down. Deal with the fighters "
+            "and that column, then RTB."
         )
         partial.add_action(
             action.MessageToCoalition(
@@ -943,8 +981,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         failure.add_condition(condition.GroupDead(hog.id))
         failure.add_condition(condition.GroupAlive(depot.id))
         failure_call = (
-            "Hawg flight is down before the depot was hit. "
-            "Mission failed. Springfield, RTB Incirlik."
+            "Magic: we have lost Hawg and the depot is untouched. There is "
+            "nothing left to run the strike with. Springfield, RTB Incirlik."
         )
         failure.add_action(action.MessageToAll(m.string(failure_call), seconds=20))
         self._voice.attach_to_all(m, failure, failure_call)
@@ -962,7 +1000,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         m.set_description_redtask_text(
             "Defend the Kuweires depot with the SA-6 ridge and SHORAD. "
             "Scramble MiG-29S from Bassel Al-Assad on depot strike. "
-            "Push the armored reserve from the Aleppo road on cue."
+            "Push the armored reserve west from the Aleppo road to retake "
+            "the site once it is struck."
         )
         m.set_sortie_text(self.title)
 

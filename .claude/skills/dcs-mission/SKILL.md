@@ -54,6 +54,68 @@ calls (`airport.set_blue()`, `Coalition.Blue`, `bluetask_text`) and code
 comments — never in `readme()`, `set_description_text`, side-task bodies, or
 trigger messages. Full mapping in CLAUDE.md.
 
+## Briefing craft — intel, not implementation
+
+The briefing is an intel product written by a squadron intel officer the
+morning of the sortie. It is **not** a description of how the mission file
+works. Everything the player reads or hears — `readme()`, `set_description_text`,
+`*_bluetask_text`, trigger messages, voice calls — obeys this.
+
+### Never publish the trigger logic
+
+Timers, flag conditions, percentages and unit counts are implementation. State
+the *intent*; let the trigger enforce the exact number silently.
+
+| Don't write                                            | Write                                                             |
+|--------------------------------------------------------|-------------------------------------------------------------------|
+| "Pontiac releases when the SA-6 Flush radar dies or at T+25, whichever comes first" | "Pontiac is held in reserve west of the border and will run the column once the SAM threat is suppressed" |
+| "70% of the column destroyed counts as a win"          | "Render the column combat-ineffective"                            |
+| "Trigger: 4 vehicles remaining → success message"      | "Enough of the column stops rolling that the resupply fails"      |
+| "MiG-29s late-activate 12 minutes into the sortie"     | "Expect a fighter reaction out of Sukhumi once you are committed"  |
+| "The SA-6 crew reacts to HARM launches 85% of the time"| "That crew is disciplined — expect them to go dark under fire"     |
+| "Entering the 8 km zone scrambles the alert pair"      | "Push close to the field and they will scramble the alert pair"    |
+
+Rules:
+
+- No exact figures for **thresholds** — percentages, unit counts, flags, zone
+  radii, countdown timers — and none of the mission-file vocabulary
+  ("trigger", "flag", "zone", "late-activated", "script", "condition",
+  "spawns").
+- Numbers a real briefing *would* carry stay: frequencies, TACAN channels,
+  laser codes, bullseye, altitudes, headings, distances, fuel states, time on
+  target, expected sortie length.
+- Ordering is fine, schedule is not: "once the SAM threat is suppressed",
+  "after you are established overhead", "on your call".
+- Win/loss reads as an outcome the pilot could recognise from the cockpit
+  ("the column is no longer combat-effective", "the bridge is down"), never as
+  a scoring formula. Same for the failure case.
+- In-flight text and voice follow the same rule: "Pontiac pushing, threat is
+  suppressed" — not "release condition met".
+- The difficulty-composition line (*Difficulty*, below) is the one deliberate
+  exception: it lives in the README's own metadata block, not in the narrative
+  briefing.
+
+### Attribute the intel
+
+Every claim about the enemy names a source and an age. It is what makes a
+briefing read real, and it is the honest way to express confidence: the source
+justifies how precise (or vague) the claim is — and the F10 drawing must match
+that precision.
+
+- Collectors: "an RC-135 Rivet Joint track last night fixed two SA-6-class
+  emitters", "this morning's satellite pass", "a Reaper feed at 0430", "ELINT
+  out of Incirlik", "yesterday's E-3 picture".
+- Human / allied sources: "a partner-force report", "the ground unit in
+  contact", "a source in the town", "a defecting crewman".
+- Age and confidence carry the vagueness: "eighteen hours old",
+  "unconfirmed", "last observed", "assessed", "we have no fix on it".
+- Match source → precision → map. An emitter fix gives a ring labelled
+  "(est.)"; imagery gives a position icon; a rumour gives an area. **If the
+  prose has no source for something, don't draw it.**
+- Difficulty is the collection budget: recruit gets a fresh multi-source
+  picture, ace gets one stale line ("nothing since yesterday — build the
+  picture yourself").
+
 ## Realism checklist
 
 A "realistic" mission is more than spawning aircraft. Hit these before done:
@@ -85,11 +147,20 @@ A "realistic" mission is more than spawning aircraft. Hit these before done:
   fine as one type. To make "kill the radar = suppressed" a win condition
   **without** splitting the group, gate on `condition.UnitDead(radar_unit.id)`
   (the radar is `group.units[0]`), not `GroupDead`.
+- **Waypoint altitudes match what the waypoint marks.** Ground-target
+  steerpoints and base (take-off / landing) waypoints sit on the terrain, not
+  at ingress altitude and not at pydcs's default 0; en-route waypoints clear
+  the terrain under them. See *Waypoints that mark the ground*.
 - **JTAC for CAS.** A CAS or CAP-over-ground mission gets a ground or
   airborne FAC that lases targets and talks the player on
   (`tasking.fac_attack_group`). Brief its frequency + designation.
 - **Briefing exists.** `set_description_text`, `*_bluetask_text`,
   `*_redtask_text` with bullseye, AO coords, ROE, callsigns, bingo fuel.
+- **Briefing reads like intel, not like the trigger list.** Sourced enemy
+  claims, intent instead of timers/percentages — see *Briefing craft*.
+- **Enemy groups hidden on the map.** Red never shows up as a unit icon on
+  F10, the mission planner, or the datalink — the player works off the
+  briefing and the drawn plan. See *What the player can see*.
 - **Frequencies + nav aids** in the briefing — AWACS/tanker freqs + TACAN;
   for carrier ops, the boat's TACAN + ICLS and a recovery tanker overhead.
 - **AI skill varied.** Don't set everything Excellent. Mix High / Average
@@ -183,7 +254,9 @@ race_distance_m = max(60_000, L × 1_500)
 
 No `mission.duration` in pydcs. Length is emergent (distances + fuel +
 threats). Let it end naturally — bandits down + bingo fuel → RTB. Always
-print a success/failure message so the player knows the sortie resolved.
+print a success/failure message so the player knows the sortie resolved —
+phrased as an outcome ("the column is combat-ineffective, RTB"), never as a
+score.
 
 ## Difficulty
 
@@ -282,6 +355,9 @@ Guidelines:
 
 - `m.string("…")` wraps the text so it lands in the translation table.
 - Faction names, never `red` / `blue`.
+- Radio phrasing, never trigger phrasing — no thresholds, timers or flags in
+  the call ("Pontiac pushing, threat is suppressed", not "release condition
+  met at 70%"). See *Briefing craft*.
 - One line, ≤ 15 s on screen.
 - `MessageToCoalition` when side-specific (friendly AWACS → blue only).
 - Silent triggers OK for bookkeeping (flag plumbing, internal state) — the
@@ -304,7 +380,110 @@ Single-unit groups (`group_size=1`) ignore the kwarg — spread via separate
 positions instead. Formation enum + spawn / post-spawn API in
 PYDCS_REFERENCE.md.
 
-## F10 map briefing drawings
+## Convoys always follow roads
+
+Any ground group that **moves between two places** — resupply column,
+counterattack reserve, retreating armor — is road-bound. A column that
+drives the straight line through fields, rivers and treelines reads as
+scripted, bogs down, and hands the player a target that never behaves like
+a convoy.
+
+So: **every waypoint of a moving ground group gets
+`move_formation=PointAction.OnRoad`, including the spawn waypoint.** The
+spawn one is the easy miss — pydcs creates waypoint 0 with `OffRoad` and a
+ground waypoint's action governs the leg *leaving* it, so `OnRoad` on the
+destination alone changes nothing about how the column drives there. Pass
+`move_formation=PointAction.OnRoad` to `vehicle_group*` at spawn **and** to
+each `add_waypoint`.
+
+Two things follow from it:
+- Snap origin and destination onto real road with
+  `place_convoy_route` / `convoy_spawn` (see `core/placement.py`) — OnRoad
+  pathing off a seed point in the middle of a field just drives to whatever
+  road the engine finds first.
+- Speed is road speed: 30–45 km/h for a mixed column. Faster and the column
+  strings out and beats the player to the objective.
+
+Static ground — SAM sites, FOB garrisons, depots, AAA on a hilltop — has no
+waypoints at all and is unaffected.
+
+## Waypoints that mark the ground sit on the ground
+
+A waypoint altitude is not decoration: in the cockpit it **is** the steerpoint
+elevation the CCRP/CCIP solution, the HUD and the DED read. So a steerpoint
+that marks something on the surface must carry that surface's elevation, not
+the altitude the flight happens to cross it at.
+
+Two kinds of waypoint are on the ground by definition:
+
+- **Ground-target steerpoints** — the convoy, the depot, the FOB, the SAM
+  site, the JTAC's target box. Altitude = terrain elevation there.
+- **Base waypoints** — the take-off point and the landing point. pydcs writes
+  both as `alt = 0` (it has no height map), which buries them under any field
+  above sea level — Vaziani sits at 464 m, and the jet then aligns to a
+  steerpoint half a kilometre underground.
+
+The run-in altitude belongs on the **preceding IP / ingress waypoint**, which
+is a point in the air and stays there: PUSH and INGRESS legs at 6000–7000 m,
+IP at the pop altitude, then the target steerpoint on the deck. Same for the
+CAP station or the AWACS orbit — those are air points, leave them at altitude.
+
+Mechanically (helpers in CLAUDE.md, API in PYDCS_REFERENCE.md §4.3):
+
+```python
+waypoints.add_ground_waypoint(player, scene.route_mid, overlay=ov,
+                              speed=750, name="CONVOY AO")
+waypoints.snap_base_waypoints(m, ov)   # once, last step before m.save(...)
+```
+
+`snap_base_waypoints` walks every flight in the mission, so a flight added
+later cannot miss it — call it in `build_miz` right after `_add_briefing`.
+
+**Client routes only** for ground-target steerpoints. An AI flight actually
+flies the altitudes on its route, so a deck-level turning point flies it into
+the terrain; give AI a sane crossing altitude and let its attack task handle
+the target. Base waypoints are safe for everyone — take-off and landing are
+ground events already.
+
+While you are checking altitudes, check the *en-route* ones against the
+terrain too: a "valley run" waypoint at 800 m over ground that is 2600 m high
+is inside the mountain. `overlay.elevation_at(point)` is the check.
+
+## What the player can see (F10 map, planner, datalink)
+
+The player's picture of the enemy comes from **the briefing and the drawn
+plan** — never from the map's own unit icons. So: hide every enemy group, then
+deliberately draw back exactly as much as the briefing claims.
+
+### Hide the enemy everywhere
+
+Every red group — aircraft, vehicles, ships, statics, EWR, SAM sites,
+reserves — gets all three map channels turned off. Do it in one
+`_conceal_red` step near the end of `build_miz` (after the spawns, before
+`_draw_plan`), using the project helper so nothing is missed as the mission
+grows:
+
+```python
+from dcs_mission_creator.core.map_draw import conceal_country
+
+def _conceal_red(self, russia: Country) -> None:
+    """Keep every Russian group off the F10 map, the planner and the datalink."""
+    conceal_country(russia)          # or conceal_country(russia, syria)
+```
+
+- `conceal_country(*countries)` sweeps every group the country owns;
+  `conceal(*groups)` does the same for a hand-picked list (and skips `None`).
+  Both set `hidden` / `hidden_on_planner` / `hidden_on_mfd` — see CLAUDE.md
+  for the helper, PYDCS_REFERENCE.md §5 for the raw attributes.
+- Hiding is cosmetic. The group still spawns, radiates, moves and shoots.
+- It covers **late-activated and scrambled groups too** — an unhidden reserve
+  sits on the planner map spoiling the reaction before it ever launches.
+  That's the reason to sweep by country rather than by hand.
+- Friendly groups stay visible — a flight really does see its own package.
+  On veteran / ace you may also pull friendly AI off the planner so the
+  player flies the briefed plan rather than reading it off the map.
+
+### Draw the plan
 
 Draw the **plan** on the F10 map so the player reads the sortie at a glance,
 not just from prose. Annotations complement the briefing text and voice
@@ -323,11 +502,12 @@ secret:
 - Bullseye / reference-point label if the briefing calls bearings off it.
 
 **Enemy positions scale with difficulty** — this is the point of the whole
-section. Lower difficulty = more the player is *shown*; higher = more they
-must *find*. It mirrors the intel a real flight would brief with, and it is
-a difficulty dial in its own right (SA on the enemy picture).
+section. With the units themselves hidden, every enemy mark on the map is one
+you chose to draw. Lower difficulty = more the player is *shown*; higher =
+more they must *find*. It mirrors the intel a real flight would brief with,
+and it is a difficulty dial in its own right (SA on the enemy picture).
 
-| Label    | Enemy reveal on the F10 map                                                          |
+| Label    | Enemy reveal drawn on the F10 map                                                    |
 |----------|--------------------------------------------------------------------------------------|
 | recruit  | Exact icons at true positions. `StandardIcon.AirDefense` / `SearchRadar` on each SAM/EWR, threat rings at true envelope radius, convoy/target marked precisely. Label them plainly ("SA-6"). |
 | trained  | Real threat rings and icons, but coarser — cluster nearby units into one ring, place the icon at the cluster centroid not the exact TEL. Label with type ("SA-6 site"). |
@@ -338,7 +518,9 @@ Rules:
 
 - **Never reveal more than the briefing text claims.** If prose says
   "estimated SA-6, location unconfirmed", the map gets a vague area, not a
-  pinpoint icon — the two channels must agree.
+  pinpoint icon — the two channels must agree. Each enemy mark should trace
+  back to a sourced line in the briefing (*Attribute the intel*): the emitter
+  fix draws a ring, the imagery draws an icon, the rumour draws an area.
 - **Mark estimates as estimates.** On trained+ append "(est.)" to labels
   and offset the mark from the true unit so a precise ring can't be
   reverse-engineered.

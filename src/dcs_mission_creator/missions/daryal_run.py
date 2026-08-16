@@ -40,10 +40,13 @@ from dcs.unit import Skill
 from dcs.unitgroup import VehicleGroup
 from dcs.unittype import VehicleType
 
-from dcs_mission_creator.core.map_draw import PlanOverlay
+from dcs_mission_creator.core import waypoints
+from dcs_mission_creator.core.map_draw import PlanOverlay, conceal_country
 from dcs_mission_creator.core.mission_builder import MissionBuilder
+from dcs_mission_creator.core.placement import load_scene
 from dcs_mission_creator.core.tasking import apply_ai_difficulty
 from dcs_mission_creator.core.tts import VoiceSynth
+from dcs_mission_creator.map_overlay.scene import TacticalScene
 
 
 def _offset(
@@ -81,6 +84,7 @@ class _Scene:
     ip: Point
     awacs_anchor: Point
     intrusion_center: Point
+    overlay: TacticalScene
 
 
 class DaryalRun(MissionBuilder):
@@ -100,11 +104,14 @@ class DaryalRun(MissionBuilder):
         return f"""DARYAL RUN — Caucasus, 12 Oct 2026, 18:15 local (dusk)
 ========================================================
 SITUATION
-  A Russian S-300PS battery has emplaced south of Beslan,
-  shutting down the airspace over the North Caucasus from
-  a ridge that denies any high-altitude push. Command
-  needs the Big Bird and Flap Lid radars off the air
-  tonight, before the layer thickens overnight.
+  ELINT has been reading a Big Bird and a Flap Lid south
+  of Beslan for three days: a Russian S-300PS battery has
+  emplaced on a ridge there and shut down the airspace
+  over the North Caucasus to any high-altitude push. The
+  bearings cross to within a few kilometres — good enough
+  for a target area, not for a pinpoint. Command wants
+  those radars off the air tonight, before the layer
+  thickens overnight.
 
   The only viable ingress is low. You will fly the Georgian
   Military Road north, drop into the Daryal Gorge between
@@ -128,20 +135,25 @@ PACKAGE
                   Georgia. No tanker, no escort, no Weasel
                   wingman. You are alone tonight.
 
-THREATS
-  Air : 2x Russian MiG-29S, Skill Excellent, R-77 class.
-        Mozdok. Late-activated when blue enters the
-        intrusion zone south of Beslan.
-  SAM : 1x S-300PS (SA-10) battery, Skill Excellent.
-        SR 64H6E (Big Bird), TR 30H6 (Flap Lid), CP 54K6,
-        4x 5P85C/D launchers. Engagement envelope ~75 km.
-        1x SA-15 Tor terminal SHORAD, Skill Excellent.
-  AAA : 2x ZSU-23-4 Shilka at the SAM site.
-  EWR : 1x 1L13 on a ridge near Mozdok, Skill Excellent.
+INTELLIGENCE
+  No overhead of the site — cloud for two days. What we
+  have is the ELINT cut and pattern-of-life, so treat
+  every position below as approximate.
+  SAM : S-300PS battery. Search radar, tracking radar,
+        command post and launchers, reach out to about
+        75 km at altitude. Their best crew — assume they
+        are alert and assume terminal SHORAD is sited
+        with them to close the low block, guns as well.
+  Air : Mozdok holds a MiG-29S pair, R-77 shooters,
+        experienced. They will launch once you are
+        detected south of Beslan.
+  EWR : Early-warning radar on a ridge near Mozdok feeds
+        the fighters their picture.
 
 ROE / FRAGS
   - Weapons free on the SA-10 cluster and any Russian
-    aircraft entering the intrusion zone.
+    aircraft that comes up against you north of
+    the border.
   - Keep below 1000 m AGL inside Daryal Gorge until the
     pop-up — Big Bird sees you the moment you crest.
   - Bingo fuel: 2500 lb. RTB Vaziani via the western
@@ -178,10 +190,12 @@ NOTES
 
 ## Situation
 
-A Russian S-300PS (SA-10) battery has emplaced south of Beslan, shutting
-down the North Caucasus airspace from a ridge that denies any high-altitude
-push. Command needs the Big Bird and Flap Lid radars off the air tonight,
-before the cloud layer thickens overnight.
+ELINT has been reading a Big Bird and a Flap Lid south of Beslan for three
+days: a Russian S-300PS (SA-10) battery has emplaced on a ridge there and
+shut the North Caucasus airspace to any high-altitude push. The bearings
+cross to within a few kilometres — good enough for a target area, not for a
+pinpoint. Command wants those radars off the air tonight, before the cloud
+layer thickens overnight.
 
 The only viable ingress is low. `Dodge` flies the Georgian Military Road
 north, drops into the **Daryal Gorge** between Mt Kazbek (5033 m) and the
@@ -206,23 +220,25 @@ will be airborne by then.
 No tanker, no escort, no Weasel wingman — denied support is part of the
 ace composition. Carry externals.
 
-## Threats
+## Intelligence
 
-- **SAM (boss):** 1x S-300PS battery (Skill Excellent). SR 64H6E (Big
-  Bird), TR 30H6 (Flap Lid), CP 54K6, 4x 5P85C/D launchers. Engagement
-  envelope ~75 km against a fast jet at altitude.
-- **Terminal SHORAD:** 1x SA-15 Tor (Skill Excellent) adjacent to the
-  SA-10 cluster — closes the bubble at low altitude.
-- **AAA:** 2x ZSU-23-4 Shilka at the SAM site (Skill High).
-- **EWR:** 1x 1L13 on a ridge near Mozdok (Skill Excellent), feeding GCI
-  to the MiG-29S.
-- **Air:** 2x Russian MiG-29S out of Mozdok (Skill Excellent), R-77 / R-27
-  class, late-activated on an intrusion zone just south of Beslan.
+No overhead of the site — cloud for two days. What we have is the ELINT cut
+and pattern-of-life, so every position below is approximate and your map
+carries a target area rather than icons. Find the radars with the HTS.
+
+- **SAM (boss):** the S-300PS battery — search radar, tracking radar, command
+  post and launchers — reaching out to roughly 75 km against a fast jet at
+  altitude. Their best crew; assume they are alert.
+- **Terminal SHORAD:** assume a point-defence system sited with the battery
+  to close the low block, and guns with it.
+- **EWR:** early-warning radar on a ridge near Mozdok feeding the fighters.
+- **Air:** a MiG-29S pair at Mozdok, R-77 shooters, experienced crews. They
+  will launch once you are detected south of Beslan.
 
 ## ROE
 
-- Weapons free on the SA-10 cluster and any Russian aircraft entering the
-  intrusion zone.
+- Weapons free on the SA-10 cluster and any Russian aircraft that comes up
+  against you north of the border.
 - Stay below 1000 m AGL inside Daryal Gorge until the pop-up — Big Bird
   sees you the moment you crest.
 - Bingo fuel: 2500 lb. RTB Vaziani via the western egress, **not** back
@@ -258,8 +274,9 @@ ingress, west-only viable egress. One mistake ends the sortie.
 
 ## Win / loss conditions
 
-- **Success:** SA-10 SR (Big Bird) and TR (Flap Lid) are both destroyed.
-- **Failure:** `Dodge` flight is dead before the SA-10 radars are.
+- **Success:** the battery's search and tracking radars are both off the air
+  for good — the North Caucasus is open again.
+- **Failure:** `Dodge` goes down with the battery still tracking.
 
 ## Re-generate
 
@@ -286,8 +303,10 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         player, route = self._spawn_player(m, usa, scene)
 
         self._add_end_triggers(m, sa10=sa10, player=player)
+        self._conceal_red(russia)
         self._draw_plan(m, scene, route=route)
         self._add_briefing(m)
+        waypoints.snap_base_waypoints(m, scene.overlay.overlay)
 
         miz_path.parent.mkdir(parents=True, exist_ok=True)
         m.save(str(miz_path))
@@ -359,6 +378,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             ip=ip,
             awacs_anchor=awacs_anchor,
             intrusion_center=intrusion_center,
+            overlay=load_scene("caucasus"),
         )
 
     # -- red side -----------------------------------------------------------
@@ -528,7 +548,15 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             scene.valley_exit, altitude=800, speed=340, name="VALLEY_OUT"
         )
         player.add_waypoint(scene.ip, altitude=600, speed=360, name="IP")
-        player.add_waypoint(scene.sa10_site, altitude=1500, speed=380, name="TARGET")
+        # The target steerpoint marks the SA-10 site on the ground; the pop
+        # altitude is flown off the IP leg above, not written into the target.
+        waypoints.add_ground_waypoint(
+            player,
+            scene.sa10_site,
+            overlay=scene.overlay.overlay,
+            speed=380,
+            name="TARGET",
+        )
         # Egress: west, then south around the western ridges. Do NOT re-cross Daryal.
         player.add_waypoint(egress_w, altitude=1500, speed=400, name="EGRESS_W")
         player.add_waypoint(egress_s, altitude=4500, speed=420, name="EGRESS_S")
@@ -548,6 +576,14 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         return player, route
 
     # -- F10 map briefing ---------------------------------------------------
+
+    def _conceal_red(self, russia: Country) -> None:
+        """Keep every Russian group off the F10 map, the planner and the datalink.
+
+        Ace: the battery is a target area on the map, not a set of icons —
+        the player finds the radars with the HTS and the RWR.
+        """
+        conceal_country(russia)
 
     def _draw_plan(self, m: Mission, scene: _Scene, *, route: list[Point]) -> None:
         """Paint the plan on the F10 map (ace: friendly plan + a vague threat zone).
@@ -577,8 +613,9 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         success.add_condition(condition.UnitDead(big_bird))
         success.add_condition(condition.UnitDead(flap_lid))
         success_call = (
-            "Big Bird and Flap Lid are off the air. Mission successful. "
-            "Dodge, egress west and return to base, Vaziani. Do not re-cross Daryal."
+            "Magic: Big Bird and Flap Lid are off the air, that battery is "
+            "blind. Dodge, egress west and return to base, Vaziani. Do not "
+            "re-cross Daryal."
         )
         success.add_action(action.MessageToAll(m.string(success_call), seconds=25))
         self._voice.attach_to_all(m, success, success_call)
@@ -587,7 +624,10 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         failure = triggers.TriggerOnce(comment="Dodge lost before kill")
         failure.add_condition(condition.GroupDead(player.id))
         failure.add_condition(condition.UnitAlive(flap_lid))
-        failure_call = "Dodge is down and the S-300 is still tracking. Mission failed."
+        failure_call = (
+            "Magic: Dodge is down and that battery is still radiating. "
+            "The North Caucasus stays closed to us tonight."
+        )
         failure.add_action(action.MessageToAll(m.string(failure_call), seconds=25))
         self._voice.attach_to_all(m, failure, failure_call)
         m.triggerrules.triggers.append(failure)
@@ -603,7 +643,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         )
         m.set_description_redtask_text(
             "Hold the S-300PS battery south of Beslan. MiG-29S from Mozdok "
-            "intercept any USAF push entering the intrusion zone."
+            "intercept any USAF push that comes north up the gorge."
         )
         m.set_sortie_text(self.title)
 

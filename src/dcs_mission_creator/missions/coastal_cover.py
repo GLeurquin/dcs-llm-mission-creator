@@ -37,7 +37,8 @@ from dcs.unit import Skill
 from dcs.unitgroup import VehicleGroup
 from dcs.unittype import VehicleType
 
-from dcs_mission_creator.core.map_draw import PlanOverlay
+from dcs_mission_creator.core import waypoints
+from dcs_mission_creator.core.map_draw import PlanOverlay, conceal_country
 from dcs_mission_creator.core.mission_builder import MissionBuilder
 from dcs_mission_creator.core.placement import (
     load_scene,
@@ -96,10 +97,12 @@ class CoastalCover(MissionBuilder):
         return f"""COASTAL COVER — Caucasus, 15 May 2026, 10:00 local
 ========================================================
 SITUATION
-  A Russian mechanised convoy is rolling south on the
-  Inguri valley road toward Senaki. USAF A-10s (Hawg 1-2)
-  out of Kutaisi will engage. Russian MiG-29S out of
-  Sukhumi-Babushara are expected to intercept.
+  A Reaper feed at first light watched a Russian
+  mechanised column form up in the Inguri valley and
+  start south on the valley road toward Senaki. USAF
+  A-10s (Hawg 1-2) out of Kutaisi are fragged against it.
+  Russian fighters at Sukhumi-Babushara went to alert on
+  the same warning — expect them airborne once we commit.
 
 MISSION (Dodge — F-16C-50, Batumi)
   Push north along the terrain-masked ingress corridor,
@@ -109,19 +112,26 @@ MISSION (Dodge — F-16C-50, Batumi)
 
 PACKAGE
   Dodge 1 (you): F-16C-50, Batumi, hot ramp.
-  Hawg 1-2     : A-10C, Kutaisi, strike on convoy lead.
-  Eagle 1-2    : F-15C CAP, overlay race-track toward Sukhumi.
+  Hawg 1-2     : A-10C, Kutaisi, strike on the column.
+  Eagle 1-2    : F-15C CAP, race-track toward Sukhumi.
   Magic        : E-3A AWACS, 251.000 AM, Black Sea track.
 
-THREATS
-  Air : 2x MiG-29S, Skill High, R-77 class.
-        Russian EWR chain (2x 55G6) vectoring them.
-  SAM : 1x SA-13 SHORAD on hill near AO. Stay above
-        4000 m AGL transiting the target box.
-  AAA : ZSU-23-4 organic to the convoy + 2x ZSU-23-4
-        overwatch on hilltops along the convoy axis.
-  Land: 2x T-72B + 2x BTR-80 counterattack reserve
-        concealed in treeline behind the convoy.
+INTELLIGENCE
+  Air : Sukhumi-Babushara holds a MiG-29S pair on alert,
+        current generation missiles. A Rivet Joint track
+        overnight fixed early-warning radars along the
+        frontier — they will see you coming and vector.
+  SAM : The Reaper feed showed a tracked SHORAD launcher
+        moving onto high ground overlooking the road.
+        SA-13 class, IR, short reach. Stay above 4000 m
+        AGL over the target box and it cannot touch you.
+  AAA : Gun vehicles ride with the column, and the same
+        imagery showed dug-in guns on the hills either
+        side of the valley road.
+  Land: Partner-force reporting puts a small armoured
+        reserve laagered in the treeline behind the
+        column, held back to push through if the lead
+        elements are hit. Unconfirmed.
 
 ROE / FRAGS
   - Hold fire on civilian/neutral contacts.
@@ -147,14 +157,17 @@ FREQUENCIES
 **Date / time:** 15 May 2026, 10:00 local
 **Player aircraft:** F-16C-50 (`Dodge`), Batumi, hot ramp
 **Players:** {self.players} coop slot(s)
-**Difficulty:** trained
+**Difficulty:** trained — experienced MiG-29S pair, current-generation
+missiles, GCI vectoring, SHORAD over the target, AWACS support, no tanker
 **Expected sortie length:** ~50 minutes
 
 ## Situation
 
-A Russian mechanised convoy is rolling south on the Inguri valley road toward
-Senaki. USAF A-10s (`Hawg 1-2`) out of Kutaisi will engage. Russian MiG-29S
-out of Sukhumi-Babushara are expected to intercept.
+A Reaper feed at first light watched a Russian mechanised column form up in
+the Inguri valley and start south on the valley road toward Senaki. USAF
+A-10s (`Hawg 1-2`) out of Kutaisi are fragged against it. Russian fighters at
+Sukhumi-Babushara went to alert on the same warning — expect them airborne
+once the package commits.
 
 ## Mission
 
@@ -173,17 +186,22 @@ Russian fighters before they get a shot on the strike.
 
 No tanker — F-16C internal fuel covers the sortie with a ~10 min margin.
 
-## Threats
+## Intelligence
 
-- **Air:** 2x Russian MiG-29S (Skill High), R-77/R-27 class, launched on
-  intrusion trigger and vectored by Russian GCI.
-- **SAM:** 1x SA-13 SHORAD on a hilltop covering the convoy. Stay above
-  4000 m AGL transiting the target box.
-- **AAA:** 1x ZSU-23-4 Shilka organic to the convoy + 2x ZSU-23-4 overwatch
-  on hilltops along the convoy axis.
-- **Land reserve:** 2x T-72B + 2x BTR-80 concealed in treeline behind the
-  convoy (counterattack force).
-- **EWR:** 2x 55G6 chain along the Russian frontier feeding the MiG-29S.
+- **Air:** Sukhumi-Babushara holds a MiG-29S pair on alert, current-generation
+  missiles, flown by an experienced crew. They will come once we are committed
+  over the valley.
+- **EWR:** A Rivet Joint track overnight fixed early-warning radars along the
+  Russian frontier. Assume the pair is vectored onto you from the moment you
+  cross the coast.
+- **SAM:** The Reaper feed showed a tracked SHORAD launcher moving onto high
+  ground overlooking the road — SA-13 class, IR-guided, short reach. Stay
+  above 4000 m AGL over the target box and it cannot reach you.
+- **AAA:** Gun vehicles ride with the column, and the same imagery showed
+  dug-in guns on the hills either side of the valley road.
+- **Land reserve:** Partner-force reporting puts a small armoured reserve
+  laagered in the treeline behind the column, held back to push through if the
+  lead elements are hit. Unconfirmed.
 
 ## ROE
 
@@ -197,8 +215,8 @@ No tanker — F-16C internal fuel covers the sortie with a ~10 min margin.
 - Bullseye (own side): `{bx:.0f}, {by:.0f}` (DCS world m)
 - AO center: ~18 km north-northeast of Senaki.
 - PUSH waypoint: 25 km north of Batumi (corridor IP).
-- Player route is a 3-leg terrain-masked corridor avoiding LOS to the SA-13
-  and the Russian EWR chain.
+- Your route is a terrain-masked corridor that keeps ridgelines between you
+  and the reported launcher and radar positions for as long as it can.
 
 ## Frequencies
 
@@ -212,8 +230,9 @@ Spring scattered cumulus, light NW wind, 18 °C. QNH 760 mmHg. Visibility
 
 ## Win / loss conditions
 
-- **Success:** the Russian convoy is destroyed.
-- **Failure:** `Hawg` is destroyed before the convoy is.
+- **Success:** the Russian column is broken up on the valley road and never
+  reaches Senaki.
+- **Failure:** `Hawg` is shot down with the column still rolling.
 
 ## Re-generate
 
@@ -244,6 +263,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self._add_end_triggers(m, convoy=convoy, hog=hog)
         if self._reserve is not None:
             self._add_reserve_trigger(m, convoy=convoy, reserve=self._reserve)
+        self._conceal_red(russia)
         self._draw_plan(
             m,
             scene,
@@ -255,6 +275,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             awacs_track=awacs_track,
         )
         self._add_briefing(m)
+        waypoints.snap_base_waypoints(m, scene.overlay.overlay)
 
         miz_path.parent.mkdir(parents=True, exist_ok=True)
         m.save(str(miz_path))
@@ -316,7 +337,9 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
         `place_convoy_route` snaps origin and destination to the nearest real
         road; the DCS engine paths the platoon between them. Spawn point is
-        the snapped origin; one OnRoad waypoint sends them toward Senaki.
+        the snapped origin; the spawn waypoint *and* the destination waypoint
+        are OnRoad, so the column follows the valley road all the way to
+        Senaki instead of cutting cross-country.
         """
         origin = _offset(
             scene.senaki.position, self._terrain, east_m=2_000, north_m=22_000
@@ -343,6 +366,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             cast(list[type[VehicleType]], convoy_types),
             position=spawn,
             heading=heading,
+            move_formation=PointAction.OnRoad,
         )
         convoy.add_waypoint(
             route.waypoints[-1],
@@ -423,6 +447,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             cast(list[type[VehicleType]], reserve_types),
             position=pos,
             heading=int((rear_bearing + 180.0) % 360.0),
+            move_formation=PointAction.OnRoad,
         )
         reserve.late_activation = True
         push_target = self._scene.overlay.overlay.find_road_spawn(
@@ -623,6 +648,14 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     # -- F10 map briefing ---------------------------------------------------
 
+    def _conceal_red(self, russia: Country) -> None:
+        """Keep every Russian group off the F10 map, the planner and the datalink.
+
+        The player's picture of the enemy is the briefing plus what
+        `_draw_plan` chooses to show — never a stock unit icon.
+        """
+        conceal_country(russia)
+
     def _draw_plan(
         self,
         m: Mission,
@@ -664,14 +697,12 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         rule = triggers.TriggerOnce(comment="Reserve counterattack")
         rule.add_condition(condition.GroupLifeLess(convoy.id, 50))
         rule.add_action(action.ActivateGroup(reserve.id))
-        rule.add_action(
-            action.MessageToAll(
-                m.string(
-                    "Russian armor reserve has activated and is pushing south toward Senaki."
-                ),
-                seconds=15,
-            )
+        reserve_call = (
+            "Magic: Russian armor is breaking out of the treeline behind the "
+            "column, pushing south toward Senaki."
         )
+        rule.add_action(action.MessageToAll(m.string(reserve_call), seconds=15))
+        self._voice.attach_to_all(m, rule, reserve_call)
         m.triggerrules.triggers.append(rule)
 
     def _add_end_triggers(self, m: Mission, *, convoy, hog) -> None:
@@ -679,8 +710,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         success = triggers.TriggerOnce(comment="Strike successful")
         success.add_condition(condition.GroupDead(convoy.id))
         success_call = (
-            "Strike package destroyed the convoy. "
-            "Mission successful. Dodge, RTB Batumi."
+            "Magic: the column is wrecked and off the road, nothing is moving "
+            "toward Senaki. Dodge, RTB Batumi."
         )
         success.add_action(action.MessageToAll(m.string(success_call), seconds=20))
         self._voice.attach_to_all(m, success, success_call)
@@ -690,8 +721,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         failure.add_condition(condition.GroupDead(hog.id))
         failure.add_condition(condition.GroupAlive(convoy.id))
         failure_call = (
-            "Hawg flight is down and the convoy is still rolling. "
-            "Mission failed. Dodge, RTB Batumi."
+            "Magic: we have lost Hawg and the column is still rolling south. "
+            "Nothing more we can do here. Dodge, RTB Batumi."
         )
         failure.add_action(action.MessageToAll(m.string(failure_call), seconds=20))
         self._voice.attach_to_all(m, failure, failure_call)

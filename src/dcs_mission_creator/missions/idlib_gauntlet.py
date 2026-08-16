@@ -10,7 +10,7 @@ zones long enough to kill it before it reaches Taftanaz.
 The SAM belts react to HARM fire the way real crews do (see
 `core/emcon.py`): the launch goes out over the IADS net, the crew takes a few
 seconds to react, the fire-control radar drops emissions, the missile goes for
-the last known point, and the site comes back up a minute or two later. HARMs
+the last known point, and the site comes back up several minutes later. HARMs
 therefore *suppress* far more often than they *kill*, and the player has to use
 the dark window rather than expect a free radar kill.
 
@@ -52,9 +52,9 @@ from dcs.unit import Skill
 from dcs.unitgroup import FlyingGroup, VehicleGroup
 from dcs.unittype import VehicleType
 
-from dcs_mission_creator.core import air_defense as ad
+from dcs_mission_creator.core import air_defense as ad, routing, waypoints
 from dcs_mission_creator.core.emcon import ArmSite, arm_emcon_reaction
-from dcs_mission_creator.core.map_draw import PlanOverlay
+from dcs_mission_creator.core.map_draw import PlanOverlay, conceal_country
 from dcs_mission_creator.core.mission_builder import MissionBuilder
 from dcs_mission_creator.core.placement import (
     convoy_spawn,
@@ -62,8 +62,11 @@ from dcs_mission_creator.core.placement import (
     load_scene,
     sam_site_on_ridge,
 )
+from dcs_mission_creator.core.routing import ThreatRing
 from dcs_mission_creator.core.tasking import (
+    FacCallsign,
     apply_ai_difficulty,
+    apply_threat_reaction,
     fac_attack_group,
     scramble_on_trigger,
 )
@@ -77,6 +80,18 @@ _FREQ_AWACS = 251
 _FREQ_TANKER = 270
 _FREQ_FAC = 133
 _LASER_CODE = 1688
+# F-16C stock presets carrying those nets, so the briefing can say "channel N"
+# instead of leaving the player to hand-tune and find no JTAC in the menu.
+_PRESET_AWACS = "COMM1 CH 18"
+_PRESET_TANKER = "COMM1 CH 7"
+_PRESET_FAC = "COMM2 CH 10"
+# Hammer's station: a race-track abeam the convoy road, long enough to cover the
+# whole 25 km of it. 5 km cross-track at 18,000 ft holds the column inside about
+# 8 km slant the entire run — a DCS FAC that sits further out never acquires.
+_FAC_OFFSET_M = 5_000.0
+_FAC_LEG_M = 18_000.0
+_FAC_ALT_M = 5_500
+_FAC_SPEED_KPH = 300
 
 
 def _mark_clients(group: FlyingGroup) -> None:
@@ -118,46 +133,55 @@ class IdlibGauntlet(MissionBuilder):
         return f"""IDLIB GAUNTLET — Syria, 12 September 2026, 08:40 local
 =====================================================
 SITUATION
-  A Syrian resupply column left Abu al-Duhur before
-  first light and is running north-west toward the
-  Taftanaz off-load. It carries the ammunition for the
-  next push on the Idlib pocket, and it travels with
-  its own short-range air defence.
-  The corridor is covered by three overlapping Russian
-  -supplied SAM belts. Their crews are trained: they
-  drop emissions when they see an anti-radiation shot
-  and come back up a minute or two later. Expect to
-  suppress, not to sanitize.
+  Overhead imagery before first light caught a Syrian
+  resupply column forming at Abu al-Duhur; a Reaper has
+  been following it since and it is running north-west
+  toward the Taftanaz off-load. Partner-force reporting
+  out of the pocket says it carries the ammunition for
+  the next push. It travels with its own short-range
+  air defence.
+  A Rivet Joint track overnight mapped the corridor it
+  drives through: three overlapping Russian-supplied
+  SAM belts. Those crews are drilled — they drop
+  emissions when they see an anti-radiation shot, and
+  they stay off the air a while before coming back up.
+  Expect to suppress, not to sanitize.
 
 MISSION (Uzi — F-16C-50, Hatay)
-  Destroy the convoy before it reaches Taftanaz.
+  Break the column up before it reaches Taftanaz.
   Suppress whatever belt is holding you off the target.
-  Combat-ineffective (70% of the column dead) meets
-  the frag; the whole column is the full score.
+  Render it combat-ineffective and the ammunition never
+  reaches the pocket; the whole column is better.
 
 PACKAGE
   Uzi 1 (you): F-16C-50, Hatay, hot ramp. 2x AGM-88C,
         2x CBU-97 SFW, 2x AIM-120C, 2x AIM-9X, HTS pod,
         LITENING, 300 gal centerline.
   Pontiac 1-2: F/A-18C, 4x GBU-12 + ATFLIR, Hatay. Held
-        on the ground until the SA-6 is down or 25
-        minutes elapse, then released onto the column.
+        in reserve, pushing onto the column once the
+        SAM threat over the route is suppressed.
   Eagle 1-2  : F-15C TARCAP west of the corridor.
   Hammer     : MQ-9, {_FREQ_FAC}.000 AM, FAC(A) over the
         corridor, lasing the column, code {_LASER_CODE}.
   Magic      : E-3A AWACS, {_FREQ_AWACS}.000 AM.
   Texaco     : KC-135, {_FREQ_TANKER}.000 AM, TACAN 10X.
 
-THREATS
-  SAM : SA-2 belt at Abu al-Duhur (~40 km), SA-6 belt on
-        the high ground over the convoy route (~25 km),
-        mobile SA-8 belt at the Taftanaz off-load
-        (~10 km). 2x 55G6 EWR feeding the network.
-  AAA/SHORAD: organic to the column — 2x SA-13, 1x SA-19
-        Tunguska, 1x ZSU-23-4. None of it shuts down for
-        a HARM; kill it or stay outside 8 km.
-  Air : 2x MiG-29S alert-5 at Bassel Al-Assad, scrambled
-        once the column starts taking losses.
+INTELLIGENCE
+  SAM : From the Rivet Joint cut — an SA-2 belt around
+        Abu al-Duhur, reach out to about 40 km; an SA-6
+        belt on the high ground over the convoy route,
+        about 25 km, and it is the one that owns the
+        road; a mobile SA-8 at the Taftanaz off-load,
+        about 10 km. Early-warning radars behind them
+        feed the whole net. The SA-6 crew is the sharpest
+        of the three; the SA-2 site is conscripts.
+  SHORAD: Reaper imagery shows tracked IR launchers, a
+        gun-missile vehicle and a Shilka riding with the
+        column. None of that shuts down for a HARM —
+        kill it or stay outside 8 km.
+  Air : ELINT has the alert pair at Bassel Al-Assad on
+        cockpit alert. MiG-29S. They will come once the
+        column starts taking losses.
 
 ROE / FRAGS
   - Cleared to engage the convoy and any air defence
@@ -173,13 +197,20 @@ NAV
   Bullseye (own side): {bx:.0f}, {by:.0f} (DCS world m)
   PUSH        : 25 km southeast of Hatay.
   Convoy axis : Abu al-Duhur -> Taftanaz, north-west.
-  Off-load    : Taftanaz. Convoy arrival there = failure.
+  Off-load    : Taftanaz. If the column makes it there,
+                we have missed the window.
 
 FREQUENCIES
-  Magic AWACS   : {_FREQ_AWACS}.000 AM
+  Magic AWACS   : {_FREQ_AWACS}.000 AM ({_PRESET_AWACS})
   Texaco tanker : {_FREQ_TANKER}.000 AM, TACAN 10X
-  Hammer FAC(A) : {_FREQ_FAC}.000 AM, laser {_LASER_CODE}
+                  ({_PRESET_TANKER})
+  Hammer FAC(A) : {_FREQ_FAC}.000 AM ({_PRESET_FAC}),
+                  laser {_LASER_CODE}
   Hatay tower   : per kneeboard
+
+  Hammer is on the VHF radio, not the UHF one you start
+  on. Tune COMM2 before you look for him — the JTAC only
+  shows up in the radio menu on the net he is talking on.
 """
 
     def readme(self) -> str:
@@ -190,22 +221,27 @@ FREQUENCIES
 **Date / time:** 12 September 2026, 08:40 local
 **Player aircraft:** F-16C-50 (`Uzi`), Hatay, hot ramp
 **Players:** {self.players} coop slot(s)
-**Difficulty:** trained (medium)
+**Difficulty:** trained (medium) — three layered SAM belts with drilled
+EMCON-capable crews, organic SHORAD on the target, an alert fighter pair,
+full support package (AWACS, tanker, TARCAP, FAC(A))
 **Expected sortie length:** ~60 minutes
 
 ## Situation
 
-A Syrian resupply column left Abu al-Duhur before first light and is running
-north-west toward the Taftanaz off-load with the ammunition for the next push
-on the Idlib pocket. It travels with its own short-range air defence, and the
-corridor it drives through is covered by three overlapping Russian-supplied SAM
-belts: an SA-2 belt at Abu al-Duhur, an SA-6 belt on the high ground over the
-route, and a mobile SA-8 belt at the off-load — all of it tied together by a
-pair of 55G6 early-warning radars.
+Overhead imagery before first light caught a Syrian resupply column forming at
+Abu al-Duhur; a Reaper has been following it since and it is running
+north-west toward the Taftanaz off-load. Partner-force reporting out of the
+pocket says it carries the ammunition for the next push. It travels with its
+own short-range air defence.
+
+A Rivet Joint track overnight mapped the corridor it drives through: three
+overlapping Russian-supplied SAM belts — an SA-2 belt around Abu al-Duhur, an
+SA-6 belt on the high ground over the route, and a mobile SA-8 at the off-load
+— tied together by early-warning radars sitting behind them.
 
 ## Mission
 
-`Uzi` flight destroys the column before it reaches Taftanaz. The convoy is the
+`Uzi` flight breaks the column up before it reaches Taftanaz. The convoy is the
 objective; the SAM belts are the problem, not the target list. Kill what you
 must, suppress the rest, and get weapons onto the trucks.
 
@@ -214,31 +250,31 @@ must, suppress the rest, and get weapons onto the trucks.
    it down.
 2. **Interdict.** Work the column with the CBU-97s — SFW submunitions are what
    kill a dispersed column in two passes. `Hammer` (MQ-9) is overhead on
-   {_FREQ_FAC}.000 AM for the talk-on, lasing code {_LASER_CODE} for `Pontiac`'s GBU-12s.
-3. **Strike release.** `Pontiac` (2x F/A-18C) launches once the SA-6's Straight
-   Flush radar is destroyed, or 25 minutes into the sortie, whichever comes
-   first.
-4. **DCA.** 2x MiG-29S scramble off the ramp at Bassel Al-Assad once the column
-   has lost about a third of its strength. `Eagle` TARCAP is west of the
-   corridor; back them up.
+   {_FREQ_FAC}.000 AM ({_PRESET_FAC}) for the talk-on, lasing code {_LASER_CODE}
+   for `Pontiac`'s GBU-12s.
+3. **Strike release.** `Pontiac` (2x F/A-18C) is held in reserve at Hatay and
+   will run the column once the SAM threat over the route is suppressed.
+4. **DCA.** The Bassel Al-Assad alert pair will scramble once the column starts
+   taking real losses. `Eagle` TARCAP is west of the corridor; back them up.
 
-## How the SAMs react to HARM
+## How those crews handle a HARM
 
-This mission scripts realistic emissions control for every radar-guided site
-(SA-2, SA-6, SA-8 and both EWRs). When an anti-radiation missile is fired:
+Every radar-guided site in the corridor is drilled in emissions control, and
+the belts are netted — a launch anywhere on the corridor is called down the
+net in seconds. When they see an anti-radiation shot:
 
-- the launch is passed over the IADS net to every site within ~60 km;
-- each crew independently makes the call — most drop emissions, some do not
-  (SA-6 and SA-8 crews react ~85–90% of the time, the SA-2 crew ~70%);
-- reaction takes **3–8 seconds**, so a HARM fired from close in still kills;
-- the site then sits dark for **60–130 seconds** with radars off and weapons
-  hold, and `Magic` calls the shutdown on the radio;
-- a second HARM while a site is dark makes that crew stay off the air longer;
-- when the timer runs out the radar comes back up and `Magic` calls it.
+- the crew that hears the call usually drops emissions; not all of them do,
+  and the SA-2 site is the least disciplined of the three;
+- it takes them a few seconds to react, so a shot from close in still kills;
+- the site then sits dark with radars off and weapons tight for several
+  minutes, and `Magic` calls the shutdown on the radio;
+- keep the pressure on with a second shot and that crew stays off the air
+  longer;
+- when they judge it safe the radar comes back up, and `Magic` calls that too.
 
 Practical consequence: a HARM shot buys you a working window, not a kill.
-Plan the run for the window, and remember the column's own SHORAD (SA-13,
-SA-19, ZSU-23-4) never shuts down — it is optical and IR-guided.
+Plan the run for the window, and remember the column's own launchers and guns
+never shut down — they are optical and IR-guided.
 
 ## Package
 
@@ -256,18 +292,27 @@ defaults: `Uzi` carries 2x AGM-88C, 2x CBU-97 (SFW), 2x AIM-120C, 2x AIM-9X,
 the AN/ASQ-213 HTS pod, a LITENING pod and a 300 gal centerline; `Pontiac`
 carries 4x GBU-12 with ATFLIR — buddy-lase off `Hammer` or self-lase.
 
-## Threats
+## Intelligence
 
-- **Long belt:** SA-2 site at Abu al-Duhur, ~40 km envelope, Skill Average.
-- **Medium belt:** SA-6 site on the high ground over the convoy route, ~25 km
-  envelope, Skill High. The 1S91 Straight Flush is the priority kill — the
-  launchers cannot engage without it.
-- **Short belt:** mobile SA-8 site at the Taftanaz off-load, ~10 km, Skill High.
-- **Organic SHORAD:** 2x SA-13 Strela-10M3, 1x SA-19 Tunguska, 1x ZSU-23-4 in
-  the column itself. Skill High, and immune to HARM suppression.
-- **EWR:** 2x 55G6 feeding the network and GCI.
-- **Air:** 2x MiG-29S (Skill High) alert-5 at Bassel Al-Assad, scrambled cold
-  off the ramp when the column is ~30% attrited.
+Positions below come off last night's Rivet Joint cut and this morning's
+Reaper feed — the belts are located to a few kilometres, not to the metre, and
+the map rings are marked as estimates for that reason.
+
+- **Long belt:** SA-2 around Abu al-Duhur, reach out to roughly 40 km. Poorly
+  drilled crew by the standard of the other two.
+- **Medium belt:** SA-6 on the high ground over the convoy route, roughly
+  25 km, and the belt that actually owns the road. The Straight Flush radar is
+  the priority kill — the launchers are blind without it.
+- **Short belt:** mobile SA-8 at the Taftanaz off-load, roughly 10 km. Sharp
+  crew, and it will relocate.
+- **Organic SHORAD:** the Reaper feed shows tracked IR launchers, a
+  gun-missile vehicle and a Shilka in the column itself. Capable crews, and
+  none of it can be suppressed with a HARM.
+- **EWR:** early-warning radars behind the belts feeding the net and the GCI
+  picture.
+- **Air:** ELINT puts a MiG-29S pair on cockpit alert at Bassel Al-Assad,
+  experienced crews. They will start engines when the column starts taking
+  real losses.
 
 ## ROE
 
@@ -284,14 +329,18 @@ carries 4x GBU-12 with ATFLIR — buddy-lase off `Hammer` or self-lase.
 - Bullseye (own side): `{bx:.0f}, {by:.0f}` (DCS world m)
 - PUSH: 25 km southeast of Hatay.
 - Convoy axis: Abu al-Duhur → Taftanaz, north-west, ~28 km of road.
-- Off-load: Taftanaz. The column reaching it is a mission failure.
+- Off-load: Taftanaz. If the column reaches it, we have missed the window.
 
 ## Frequencies
 
-- Magic AWACS: {_FREQ_AWACS}.000 AM
-- Texaco tanker: {_FREQ_TANKER}.000 AM, TACAN 10X
-- Hammer FAC(A): {_FREQ_FAC}.000 AM, laser code {_LASER_CODE}
+- Magic AWACS: {_FREQ_AWACS}.000 AM — {_PRESET_AWACS}
+- Texaco tanker: {_FREQ_TANKER}.000 AM, TACAN 10X — {_PRESET_TANKER}
+- Hammer FAC(A): {_FREQ_FAC}.000 AM — {_PRESET_FAC}, laser code {_LASER_CODE}
 - Hatay tower: per kneeboard
+
+`Hammer` works the VHF radio, not the UHF one the jet starts on: put COMM2 on
+{_PRESET_FAC} ({_FREQ_FAC}.000 AM) and he appears in the radio menu as
+**Hammer 1-1**. Until COMM2 is on his net there is no JTAC entry to select.
 
 ## Weather
 
@@ -300,9 +349,9 @@ visibility, few clouds at 3000 m.
 
 ## Win / loss conditions
 
-- **Primary success:** the column is combat-ineffective (70% of its vehicles
-  destroyed) before it reaches Taftanaz.
-- **Full success:** the entire column destroyed, MiG-29S scramble defeated.
+- **Primary success:** the column is rendered combat-ineffective short of
+  Taftanaz — enough of it wrecked that the ammunition never gets through.
+- **Full success:** the whole column destroyed and the alert pair defeated.
 - **Failure:** the column reaches the Taftanaz off-load.
 
 ## Re-generate
@@ -330,12 +379,13 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         sa8, sa8_pos = self._spawn_red_sa8_belt(m, russia, scene)
         ewrs, ewr_positions = self._spawn_red_ewr_chain(m, russia, scene)
         migs = self._spawn_red_alert_fighters(m, russia, scene)
+        belts = self._threat_rings(sa2_pos=sa2_pos, sa6_pos=sa6_pos, sa8_pos=sa8_pos)
 
         awacs_track = self._spawn_awacs(m, usa, scene)
         tanker_track = self._spawn_tanker(m, usa, scene)
         tarcap_track = self._spawn_tarcap(m, usa, scene)
         fac_track = self._spawn_fac(m, usa, scene, convoy=convoy)
-        pontiac = self._spawn_strike(m, usa, scene, target_unit=convoy.units[0])
+        pontiac = self._spawn_strike(m, usa, scene, convoy=convoy, threats=belts)
         corridor = self._spawn_player(
             m,
             usa,
@@ -344,12 +394,11 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             threats=(sa2_pos, sa6_pos, sa8_pos, *ewr_positions),
         )
 
+        self._conceal_red(russia, syria)
         self._draw_plan(
             m,
             scene,
-            sa2_pos=sa2_pos,
-            sa6_pos=sa6_pos,
-            sa8_pos=sa8_pos,
+            belts=belts,
             ewr_positions=ewr_positions,
             corridor=corridor,
             tarcap_track=tarcap_track,
@@ -364,6 +413,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self._add_scramble_trigger(m, convoy=convoy, migs=migs)
         self._add_end_triggers(m, scene, convoy=convoy, migs=migs)
         self._add_briefing(m)
+        waypoints.snap_base_waypoints(m, scene.overlay.overlay)
 
         miz_path.parent.mkdir(parents=True, exist_ok=True)
         m.save(str(miz_path))
@@ -455,6 +505,9 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
     ) -> VehicleGroup:
         """Syrian resupply column with organic SHORAD, road-bound for Taftanaz.
 
+        Both waypoints are OnRoad — the spawn one is what makes the column
+        actually follow the highway rather than drive the straight line.
+
         Armor and trucks are Average; the SHORAD riding with them is High —
         they are the reason the player cannot simply orbit overhead with a gun.
         The column is one group so `GroupLifeLess` reads as "combat-effective
@@ -482,6 +535,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             cast(list[type[VehicleType]], convoy_types),
             position=scene.convoy_origin,
             heading=heading,
+            move_formation=PointAction.OnRoad,
         )
         shorad_types = {
             vehicles.AirDefence.X_2S6_Tunguska.id,
@@ -824,32 +878,32 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
     def _spawn_fac(
         self, m: Mission, usa: Country, scene: _Scene, *, convoy: VehicleGroup
     ) -> tuple[Point, Point]:
-        """MQ-9 Hammer holding west of the corridor, lasing the column.
+        """MQ-9 Hammer stacked over the corridor, lasing the column.
 
         Spawns airborne already on station — a Reaper that has been watching
-        this road since before dawn is why the column is a known target at all,
-        and at 300 km/h it would otherwise still be transiting when the sortie
-        ends. Holds on the friendly side of the route at medium altitude,
-        outside the SA-8 ring, giving the player a talk-on and a laser spot
-        while the belts are still up.
+        this road since before dawn is why the column is a known target at all.
+        The racetrack runs parallel to the road and only 5 km off it: a DCS FAC
+        acquires and lases what its own sensor sees, so a stand-off orbit on the
+        far side of the corridor is a FAC that never checks in and never puts a
+        spot on anything. `OrbitAction` keeps it there for the whole sortie
+        instead of running out of route and going home mid-mission.
         """
-        p1 = scene.route_mid.point_from_heading(scene.threat_axis_deg, 28_000.0)
-        p2 = p1.point_from_heading((scene.threat_axis_deg + 90.0) % 360.0, 18_000.0)
+        along = scene.convoy_origin.heading_between_point(scene.convoy_destination)
+        center = self._fac_station(scene, along)
+        p1 = center.point_from_heading((along + 180.0) % 360.0, _FAC_LEG_M / 2)
+        p2 = center.point_from_heading(along, _FAC_LEG_M / 2)
         hammer = m.flight_group(
             country=usa,
             name="Hammer",
             aircraft_type=planes.MQ_9_Reaper,
             airport=None,
-            position=p1,
-            altitude=6000,
-            speed=300,
+            position=p1.point_from_heading((along + 180.0) % 360.0, 2_000.0),
+            altitude=_FAC_ALT_M,
+            speed=_FAC_SPEED_KPH,
             maintask=task.AFAC,
             group_size=1,
         )
-        for i in range(2):
-            hammer.add_waypoint(p1, altitude=6000, speed=300, name=f"FAC-{2 * i + 1}")
-            hammer.add_waypoint(p2, altitude=6000, speed=300, name=f"FAC-{2 * i + 2}")
-        hammer.land_at(scene.hatay)
+        self._task_fac_orbit(hammer, p1, p2)
         ad.set_skill(hammer, Skill.High)
         fac_attack_group(
             hammer,
@@ -857,24 +911,80 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             designation=task.Designation.Laser,
             frequency=_FREQ_FAC,
             modulation=task.Modulation.AM,
+            callsign=FacCallsign.HAMMER,
         )
         return p1, p2
 
+    def _fac_station(self, scene: _Scene, along: float) -> Point:
+        """Centre of Hammer's race-track: abeam the road, on the Hatay flank.
+
+        The offset has to be *cross*-track. Hatay sits almost straight down the
+        convoy axis from the route mid-point, so stepping off along
+        `threat_axis_deg` — the direction every other helper here uses for "the
+        friendly side" — slides the orbit along the road instead of beside it
+        and leaves the Reaper sitting over the column. Take both abeam points
+        and keep the one nearer home.
+        """
+        left = scene.route_mid.point_from_heading((along + 90.0) % 360.0, _FAC_OFFSET_M)
+        right = scene.route_mid.point_from_heading(
+            (along - 90.0) % 360.0, _FAC_OFFSET_M
+        )
+        home = scene.hatay.position
+        return min((left, right), key=home.distance_to_point)
+
+    def _task_fac_orbit(self, hammer: FlyingGroup, p1: Point, p2: Point) -> None:
+        """Park Hammer on an indefinite race-track, on its own radio, unshootable.
+
+        The orbit sits inside the SA-6 MEZ, which is the only place it can see
+        the road from — a Reaper left shootable there is dead in the first two
+        minutes and the laser goes with it, so it is set invisible to enemy AI
+        the way a scripted overwatch asset normally is. `SetFrequencyCommand`
+        moves its own radio onto the FAC net; pydcs otherwise leaves the group
+        on the 251.0 default while the FAC task talks on another frequency.
+        """
+        hammer.points[0].tasks.append(task.SetInvisibleCommand(True))
+        wp = hammer.add_waypoint(p1, altitude=_FAC_ALT_M, speed=_FAC_SPEED_KPH)
+        wp.name = "FAC-1"
+        wp.tasks.append(task.SetFrequencyCommand(_FREQ_FAC, task.Modulation.AM))
+        wp.tasks.append(
+            task.OrbitAction(
+                _FAC_ALT_M, _FAC_SPEED_KPH, task.OrbitAction.OrbitPattern.RaceTrack
+            )
+        )
+        wp2 = hammer.add_waypoint(p2, altitude=_FAC_ALT_M, speed=_FAC_SPEED_KPH)
+        wp2.name = "FAC-2"
+        hammer.frequency = _FREQ_FAC
+        hammer.modulation = task.Modulation.AM.value
+
     def _spawn_strike(
-        self, m: Mission, usa: Country, scene: _Scene, *, target_unit
+        self,
+        m: Mission,
+        usa: Country,
+        scene: _Scene,
+        *,
+        convoy: VehicleGroup,
+        threats: tuple[ThreatRing, ...],
     ) -> FlyingGroup:
         """F/A-18C Pontiac pair, held on the ground until the SEAD phase pays off.
 
         Late-activated so the release trigger (SA-6 radar dead, or the 25 minute
         cut-off) is what puts them in the air — sending Hornets into a live
         SA-6 MEZ on take-off would just feed the site kills.
+
+        Routed by hand rather than by `Mission.strike_flight`: that helper joins
+        Hatay to the column with a straight line and an IP on the reciprocal,
+        which walks the pair straight through the SA-2 and SA-6 belts the
+        briefing tells the player to work around. Instead the run-in starts from
+        a standoff IP on the friendly side of the AO, the transit bends around
+        whatever rings are still up (`core/routing.py`), and the egress leaves
+        the same way — so the only exposure is the attack itself.
         """
-        pontiac = m.strike_flight(
-            usa,
-            "Pontiac",
-            planes.FA_18C_hornet,
-            target=target_unit,
+        pontiac = m.flight_group_from_airport(
+            country=usa,
+            name="Pontiac",
+            aircraft_type=planes.FA_18C_hornet,
             airport=scene.hatay,
+            maintask=task.CAS,
             start_type=StartType.Warm,
             group_size=2,
         )
@@ -896,7 +1006,97 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             ],
         )
         ad.set_skill(pontiac, Skill.High)
+        self._route_strike(pontiac, scene, convoy=convoy, threats=threats)
+        self._limit_strike_engagement(pontiac, scene.route_mid)
         return pontiac
+
+    def _limit_strike_engagement(self, pontiac: FlyingGroup, ao: Point) -> None:
+        """Keep Pontiac hunting the column, not every vehicle in Idlib.
+
+        pydcs's CAS main task queues an unbounded "engage all ground units"
+        enroute task at the spawn point, and an unbounded search is how a
+        carefully routed flight ends up over a SAM site anyway: one truck
+        detected off the corridor and the pair breaks off toward it. Swapping
+        it for a zone-bounded search keeps the route meaningful — anything
+        outside the AO is somebody else's target.
+        """
+        tasks = pontiac.points[0].tasks
+        tasks[:] = [t for t in tasks if t.id != task.CASTaskAction.Id]
+        tasks.insert(
+            0,
+            task.EngageTargetsInZone(
+                position=ao,
+                radius=15_000,
+                targets=cast(
+                    list[type[task.TargetType]], [task.Targets.All.GroundUnits]
+                ),
+            ),
+        )
+
+    def _route_strike(
+        self,
+        pontiac: FlyingGroup,
+        scene: _Scene,
+        *,
+        convoy: VehicleGroup,
+        threats: tuple[ThreatRing, ...],
+    ) -> None:
+        """Plan Pontiac's ingress, attack and egress around the surviving belts.
+
+        The IP sits on the Hatay side of the column, outside every ring the
+        pair can stay out of; transit, run-in and egress all bend around the
+        rings rather than crossing them. The column itself sits inside the SA-2
+        and SA-6 envelopes — that is the mission — so those two are exposure the
+        pair accepts on the run-in, which is exactly what the release trigger
+        buys by holding them on the ramp until the SA-6 is down. The SA-8 at the
+        off-load is not on the accepted list: nothing suppresses it, so the
+        route stays out of it until the bombs are off.
+
+        The attack is an explicit `AttackGroup` on the column — pydcs's Ground
+        Attack default is a waypoint over the target and no tasking at all, so
+        the Hornets would overfly the SHORAD without dropping.
+        """
+        target = scene.route_mid
+        pontiac.add_runway_waypoint(scene.hatay)
+        ip = routing.standoff_point(
+            target,
+            toward=scene.hatay.position,
+            threats=threats,
+            min_distance_m=25_000.0,
+            clearance_m=4_000.0,
+        )
+        ingress = routing.avoid_threats(
+            scene.hatay.position, ip, threats, clearance_m=5_000.0
+        )
+        for i, pt in enumerate(ingress[1:], start=1):
+            name = "IP" if i == len(ingress) - 1 else f"INGRESS-{i}"
+            pontiac.add_waypoint(pt, altitude=6400, speed=800, name=name)
+
+        run_in = routing.avoid_threats(ip, target, threats, clearance_m=3_000.0)
+        for i, pt in enumerate(run_in[1:-1], start=1):
+            pontiac.add_waypoint(pt, altitude=5800, speed=800, name=f"RUN-IN-{i}")
+        # Release from 5,200 m: a GBU-12 reaches the column from there, and it
+        # keeps the pair above the Strela / Tunguska / Shilka ceiling riding
+        # with it — the SHORAD the SEAD phase never touches.
+        attack = pontiac.add_waypoint(target, altitude=5200, speed=750, name="ATTACK")
+        attack.tasks.append(
+            task.AttackGroup(
+                convoy.id,
+                weapon_type=task.WeaponType.GuidedBombs,
+                group_attack=True,
+                expend=task.Expend.All,
+            )
+        )
+        for i, pt in enumerate(
+            routing.avoid_threats(
+                target, scene.hatay.position, threats, clearance_m=5_000.0
+            )[1:-1],
+            start=1,
+        ):
+            pontiac.add_waypoint(pt, altitude=7000, speed=850, name=f"EGRESS-{i}")
+        pontiac.add_runway_waypoint(scene.hatay)
+        pontiac.land_at(scene.hatay)
+        apply_threat_reaction(pontiac)
 
     def _spawn_player(
         self,
@@ -907,7 +1107,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         sead_ip: Point,
         threats: tuple[Point, ...],
     ) -> list[Point]:
-        """Uzi F-16C-50 from Hatay, terrain-masked ingress to the SEAD IP."""
+        """Uzi F-16C-50 from Hatay, terrain-masked ingress to the SA-6 site."""
         player = m.flight_group_from_airport(
             country=usa,
             name="Uzi",
@@ -950,29 +1150,55 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             waypoints=3,
             leg_search_radius_m=8_000.0,
         )
-        for i, pt in enumerate(corridor):
-            if i == 0:
-                name = "PUSH"
-            elif i == len(corridor) - 1:
-                name = "SEAD IP"
-            else:
-                name = f"INGRESS-{i}"
+        ov = scene.overlay.overlay
+        for i, pt in enumerate(corridor[:-1]):
+            name = "PUSH" if i == 0 else f"INGRESS-{i}"
             player.add_waypoint(pt, altitude=7000, speed=800, name=name)
-        player.add_waypoint(scene.route_mid, altitude=6000, speed=750, name="CONVOY AO")
+        # Last corridor point is the SA-6 site itself, and the one after it the
+        # convoy road: both are ground targets, so their steerpoints sit on the
+        # terrain — the ingress altitude is carried by the INGRESS legs above.
+        waypoints.add_ground_waypoint(
+            player, corridor[-1], overlay=ov, speed=800, name="SEAD TGT"
+        )
+        waypoints.add_ground_waypoint(
+            player, scene.route_mid, overlay=ov, speed=750, name="CONVOY AO"
+        )
         player.add_runway_waypoint(scene.hatay)
         player.land_at(scene.hatay)
         return [*corridor, scene.route_mid]
 
     # -- F10 map briefing ---------------------------------------------------
 
+    def _conceal_red(self, *countries: Country) -> None:
+        """Keep every Syrian and Russian group off the map, planner and datalink.
+
+        The belts are an intel problem: the player gets the estimated rings
+        `_draw_plan` paints, not a stock icon on every TEL.
+        """
+        conceal_country(*countries)
+
+    def _threat_rings(
+        self, *, sa2_pos: Point, sa6_pos: Point, sa8_pos: Point
+    ) -> tuple[ThreatRing, ...]:
+        """The three belts as envelopes, for both the drawn plan and AI routing.
+
+        One set of radii, two consumers: what `_draw_plan` paints as the
+        estimated ring is exactly what the AI package flies around, so the
+        briefing and the friendly flight plan can never disagree. The EWRs are
+        not here — they cannot shoot, so nothing needs to route around them.
+        """
+        return (
+            ThreatRing(sa2_pos, 40_000.0, "SA-2 belt"),
+            ThreatRing(sa6_pos, 25_000.0, "SA-6 belt"),
+            ThreatRing(sa8_pos, 10_000.0, "SA-8 belt"),
+        )
+
     def _draw_plan(
         self,
         m: Mission,
         scene: _Scene,
         *,
-        sa2_pos: Point,
-        sa6_pos: Point,
-        sa8_pos: Point,
+        belts: tuple[ThreatRing, ...],
         ewr_positions: list[Point],
         corridor: list[Point],
         tarcap_track: tuple[Point, Point],
@@ -989,15 +1215,13 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         plan.orbit(*awacs_track, "Magic AWACS")
         plan.orbit(*tanker_track, "Texaco tanker")
         plan.waypoint_label(scene.convoy_destination, "Off-load — Taftanaz")
-        plan.threat(
-            sa2_pos, radius=40_000.0, label="SA-2 belt", icon=StandardIcon.AirDefense
-        )
-        plan.threat(
-            sa6_pos, radius=25_000.0, label="SA-6 belt", icon=StandardIcon.AirDefense
-        )
-        plan.threat(
-            sa8_pos, radius=10_000.0, label="SA-8 belt", icon=StandardIcon.AirDefense
-        )
+        for belt in belts:
+            plan.threat(
+                belt.position,
+                radius=belt.radius_m,
+                label=belt.label,
+                icon=StandardIcon.AirDefense,
+            )
         for pos in ewr_positions:
             plan.threat(pos, radius=4_000.0, label="EWR", icon=StandardIcon.SearchRadar)
         plan.threat(
@@ -1022,10 +1246,12 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
         The tuned dials are the difficulty statement for the SEAD half of this
         mission: the SA-6 and SA-8 crews are drilled (react ~9 times in 10,
-        recognise the launch in 3–7 s, stay dark up to ~2 min), the SA-2 crew
-        is a conscript belt that misses the call almost a third of the time,
-        and the EWRs — furthest from the shooter, and not the ones being shot
-        at — react slowest and come back up soonest.
+        recognise the launch in 3–7 s), the SA-2 crew is a conscript belt that
+        misses the call almost a third of the time, and the EWRs — furthest
+        from the shooter, and not the ones being shot at — react slowest and
+        come back up soonest. A suppressed site stays dark ~4–6 min, long
+        enough that a HARM buys the package a real run at the column instead
+        of a one-minute gap.
         """
         sites = [
             ArmSite(
@@ -1033,14 +1259,14 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                 "SA-6",
                 probability=0.9,
                 delay_s=(3.0, 7.0),
-                shutdown_s=(70.0, 130.0),
+                shutdown_s=(280.0, 400.0),
             ),
             ArmSite(
                 sa8,
                 "SA-8",
                 probability=0.85,
                 delay_s=(2.0, 5.0),
-                shutdown_s=(50.0, 90.0),
+                shutdown_s=(220.0, 320.0),
                 react_range_m=40_000.0,
             ),
             ArmSite(
@@ -1048,7 +1274,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                 "SA-2",
                 probability=0.7,
                 delay_s=(5.0, 11.0),
-                shutdown_s=(60.0, 120.0),
+                shutdown_s=(260.0, 380.0),
             ),
             *[
                 ArmSite(
@@ -1056,7 +1282,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                     "early-warning radar",
                     probability=0.75,
                     delay_s=(6.0, 14.0),
-                    shutdown_s=(45.0, 80.0),
+                    shutdown_s=(200.0, 300.0),
                     react_range_m=90_000.0,
                 )
                 for ewr in ewrs
@@ -1100,8 +1326,9 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             seconds=300,
             comment="Hammer FAC(A) check-in",
             call=(
-                f"Uzi, Hammer overhead the corridor on {_FREQ_FAC}.0. I have the "
-                f"column visual, eleven vehicles, laser code {_LASER_CODE} on call."
+                f"Uzi, Hammer overhead the corridor, {_FREQ_FAC}.0 victor, "
+                f"{_PRESET_FAC}. I have the column visual, eleven vehicles, "
+                f"laser code {_LASER_CODE} on call."
             ),
         )
         self._add_checkin(
@@ -1196,8 +1423,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         primary = triggers.TriggerOnce(comment="Convoy combat-ineffective")
         primary.add_condition(condition.GroupLifeLess(convoy.id, 30))
         primary_call = (
-            "Magic: the column is combat-ineffective. Primary objective complete. "
-            "Uzi, finish what you can and RTB Hatay."
+            "Magic: that column is finished as a fighting unit, nothing left "
+            "worth off-loading. Uzi, work what is left and RTB Hatay."
         )
         primary.add_action(action.MessageToAll(m.string(primary_call), seconds=20))
         self._voice.attach_to_all(m, primary, primary_call)
@@ -1207,7 +1434,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         full.add_condition(condition.GroupDead(convoy.id))
         full.add_condition(condition.GroupDead(migs.id))
         full_call = (
-            "Magic: column destroyed, air threat clear. Full mission success. "
+            "Magic: column destroyed, sky is clear over the corridor. "
             "Uzi, Pontiac, RTB Hatay. Texaco is on tap."
         )
         full.add_action(action.MessageToAll(m.string(full_call), seconds=25))
@@ -1223,8 +1450,9 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         failure = triggers.TriggerOnce(comment="Convoy reached the off-load")
         failure.add_condition(condition.PartOfGroupInZone(convoy.id, offload_zone.id))
         failure_call = (
-            "Magic: the column made the Taftanaz off-load. Tasking failed. "
-            "Uzi, egress west and RTB Hatay."
+            "Magic: the column made the Taftanaz off-load, they are unloading "
+            "under the revetments. We missed the window. Uzi, egress west and "
+            "RTB Hatay."
         )
         failure.add_action(action.MessageToAll(m.string(failure_call), seconds=20))
         self._voice.attach_to_all(m, failure, failure_call)
@@ -1234,11 +1462,12 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         """Wire the in-game description, side tasks, and sortie name."""
         m.set_description_text(self._in_game_briefing())
         m.set_description_bluetask_text(
-            "Destroy the Syrian resupply column before it reaches the Taftanaz "
+            "Break up the Syrian resupply column before it reaches the Taftanaz "
             "off-load. Suppress the SA-2, SA-6 and SA-8 belts covering the "
             "corridor — their crews drop emissions when they see a HARM and "
-            "come back up a minute later, so work the window. Pontiac is "
-            "released once the SA-6 radar is dead or at T+25. RTB Hatay."
+            "stay dark for minutes, so work the window. Pontiac is held "
+            "in reserve and will run the column once the SAM threat over the "
+            "route is suppressed. RTB Hatay."
         )
         m.set_description_redtask_text(
             "Run the resupply column from Abu al-Duhur to the Taftanaz "

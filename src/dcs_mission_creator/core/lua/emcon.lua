@@ -3,28 +3,46 @@
 -- Rendered by `core/emcon.py` into a mission-start DoScript. It fills three
 -- placeholders (named here without their underscores so this comment is not
 -- itself substituted): SITES is one `{name=…, prob=…, …}` row per site, SIDE
--- the coalition constant the radio calls go to, COOLDOWN the seconds between
--- two calls of the same kind.
+-- the coalition constant the radio calls go to, SPACING the seconds left
+-- between two consecutive radio calls.
 do
   local sites = {
 __SITES__
   }
   local side = __SIDE__
-  local cooldown = __COOLDOWN__
+  local spacing = __SPACING__
   local armNames = {"AGM_88", "AGM_45", "AGM_122", "ALARM", "Kh-25MP", "Kh-31P", "Kh-58"}
   local state = {}
-  local lastDown, lastUp = -1e6, -1e6
 
-  local function announce(text, sound, time, isDown)
-    if isDown then
-      if time - lastDown < cooldown then return end
-      lastDown = time
-    else
-      if time - lastUp < cooldown then return end
-      lastUp = time
+  -- One HARM shot puts several sites dark at once, so calls are *queued* and
+  -- played `spacing` seconds apart rather than dropped: every site still gets
+  -- its own call, they just do not talk over each other. The queue is capped
+  -- so a busy net cannot back up a minute of stale traffic.
+  local queue, draining = {}, false
+
+  local function playNext(_, time)
+    local item = table.remove(queue, 1)
+    if item == nil then
+      draining = false
+      return nil
     end
-    if text then trigger.action.outTextForCoalition(side, text, 12) end
-    if sound then trigger.action.outSoundForCoalition(side, sound) end
+    if item.text then trigger.action.outTextForCoalition(side, item.text, 12) end
+    if item.sound then trigger.action.outSoundForCoalition(side, item.sound) end
+    return time + spacing
+  end
+
+  local function announce(text, sound, time)
+    if text == nil and sound == nil then return end
+    -- Sites that share wording (the EWR pair) say it once, not once each.
+    for _, q in ipairs(queue) do
+      if q.text == text and q.sound == sound then return end
+    end
+    if #queue >= 8 then table.remove(queue, 1) end
+    queue[#queue + 1] = {text = text, sound = sound}
+    if not draining then
+      draining = true
+      timer.scheduleFunction(playNext, {}, time + 0.1)
+    end
   end
 
   local function emissions(site, on)
@@ -47,7 +65,7 @@ __SITES__
     if st and st.wakeAt > time + 0.5 then return st.wakeAt end
     state[site.name] = nil
     if emissions(site, true) then
-      announce(site.upText, site.upSound, time, false)
+      announce(site.upText, site.upSound, time)
     end
     return nil
   end
@@ -62,7 +80,7 @@ __SITES__
     end
     if not emissions(site, false) then return nil end
     state[site.name] = {wakeAt = time + down}
-    announce(site.downText, site.downSound, time, true)
+    announce(site.downText, site.downSound, time)
     timer.scheduleFunction(wakeUp, site, time + down)
     return nil
   end

@@ -137,10 +137,36 @@ the tasking waypoints — use when you built the group yourself.
 
 ### 4.3 Manual waypoints (`unitgroup.FlyingGroup`)
 ```python
-grp.add_runway_waypoint(airport)
+grp.add_runway_waypoint(airport)          # approach point, alt 300 m RADIO (AGL)
 grp.add_waypoint(position, altitude, speed=600, name=None)   # returns MovingPoint
 grp.land_at(airport)                                          # RTB waypoint
 ```
+
+`altitude` is **metres AMSL** — the point's `alt_type` is `"BARO"` unless you
+set `mp.alt_type = "RADIO"` (AGL) on the returned `MovingPoint` yourself. Speed
+is km/h in, m/s in the file (pydcs divides by 3.6).
+
+> **Gotcha — pydcs has no height map, so ground-level waypoints come out
+> wrong.** `land_at()` writes `alt = 0`, and the take-off point built by
+> `flight_group_from_airport` copies `units[0].alt`, which is also `0`: at
+> Vaziani (464 m) or Kutaisi (44 m) both base waypoints are buried under the
+> field. A steerpoint placed on a ground target has the opposite problem — it
+> inherits whatever ingress altitude the route used and floats kilometres over
+> the target. DCS hands those altitudes to the aircraft as steerpoint
+> elevations (CCRP/CCIP, HUD, DED), so both have to be corrected. Elevation
+> comes from the project's overlay raster; use
+> [`core/waypoints.py`](../../../src/dcs_mission_creator/core/waypoints.py):
+> ```python
+> from dcs_mission_creator.core import waypoints
+>
+> waypoints.add_ground_waypoint(player, target_pos, overlay=ov,
+>                               speed=750, name="CONVOY AO")
+> waypoints.snap_base_waypoints(m, ov)   # every flight's take-off + landing
+> ov.elevation_at(point)                 # raw lookup (int m AMSL)
+> ```
+> Only client-flown routes want a deck-level target steerpoint — an AI flight
+> flies its route altitudes into the terrain. Design rules in SKILL.md
+> (*Waypoints that mark the ground sit on the ground*).
 
 ### 4.4 Skills, clients, callsigns
 ```python
@@ -199,12 +225,52 @@ grp = m.vehicle_group(country, name, _type, position, heading=0, group_size=N,
 # mixed types in one group — use for a convoy
 grp = m.vehicle_group_platoon(country, name, types, position, heading=0, …)
 
+# ground movement: OnRoad on the spawn waypoint too, not just the destination
+grp = m.vehicle_group_platoon(country, name, types, position, heading=hdg,
+                              move_formation=PointAction.OnRoad)
+grp.add_waypoint(destination, move_formation=PointAction.OnRoad, speed=40)  # km/h
+
 # ships
 sg = m.ship_group(country, name, _type, position, heading=0, group_size=1)
 
 # a single static object (building, cargo, dead vehicle)
 st = m.static_group(country, name, _type, position, heading=0, hidden=False, dead=False)
 ```
+
+### Ground movement: `PointAction` / road pathing
+`dcs.point.PointAction` is the *action* of a ground waypoint, and in DCS that
+action governs the leg **leaving** that waypoint — so the last waypoint's
+action is inert and waypoint 0's is what decides how the group drives its
+first (often only) leg.
+
+`vehicle_group`, `vehicle_group_platoon` and `vehicle_group_from_vehicles` all
+create waypoint 0 for you with `move_formation=PointAction.OffRoad`, and
+`VehicleGroup.add_waypoint(position, move_formation=…, speed=…)` defaults the
+same way. **Gotcha:** setting `OnRoad` only on the destination waypoint looks
+right and does nothing — the column still cuts cross-country. Pass
+`move_formation=PointAction.OnRoad` to the group constructor **and** to every
+`add_waypoint`. Project policy (all moving ground groups are road-bound) is in
+SKILL.md.
+
+`speed` on `add_waypoint` is **km/h** (pydcs divides by 3.6 into the m/s the
+`.miz` stores). Other useful actions: `OffRoad` (cross-country),
+`OnRailroads` (trains), and the formation-while-moving values `LineAbreast`
+(serialises as `"Rank"`), `Cone`, `Vee`, `Diamond`, `EchelonLeft`,
+`EchelonRight`.
+
+### Map visibility flags (any `unitgroup.Group`)
+Set on the base `Group`, so flying, vehicle, ship and static groups all have
+them. Purely cosmetic — a hidden group still spawns, radiates and shoots.
+
+```python
+grp.hidden = True             # "Hidden on map" — no F10 icon in game
+grp.hidden_on_planner = True  # no icon on the briefing / mission-planner map
+grp.hidden_on_mfd = True      # excluded from datalink / MFD symbology
+```
+
+Serialize as `hidden` / `hiddenOnPlanner` / `hiddenOnMFD`. `m.static_group(…)`
+also takes `hidden=` as a ctor kwarg. Project policy (hide **all** enemy
+groups, incl. late-activated ones) is in SKILL.md.
 
 ### Formations (`dcs.unitgroup.VehicleGroup.Formation`)
 `Line` (default — 20 m perpendicular row, reads as scripted from the air),
@@ -268,7 +334,37 @@ group.points[0].tasks.append(task.FACAttackGroup(
   **FAC(A)** flight (give the flight `maintask=task.AFAC`). `FACEngageGroup`
   is the fire-and-forget variant.
 - **Project wrapper:** `tasking.fac_attack_group(fac_group, target_group,
-  frequency=…)` derives both id+name from one group and defaults to Laser.
+  frequency=…, callsign=FacCallsign.HAMMER)` derives both id+name from one
+  group and defaults to Laser.
+
+Four things the task does **not** do for you — miss any one and the player
+gets no radio option and no laser spot, with nothing logged:
+
+1. **Range.** The FAC only lases what its own sensor sees. Park an airborne
+   FAC within ~10 km slant of the target (a race-track *abeam* the target's
+   route, ~5 km cross-track, is the reliable shape); a stand-off orbit never
+   acquires. Beware deriving the offset from a "friendly side" heading that
+   happens to run *along* the target's axis — check the cross-track distance.
+2. **Endurance.** A plain waypoint list runs out and the FAC flies home
+   mid-sortie. Hold it with `task.OrbitAction(alt, speed, RaceTrack)` on the
+   first race-track waypoint, the far end as the next waypoint (the shape
+   `mission.awacs_flight` uses). Skip `land_at` — the orbit never ends.
+3. **Callsign.** `callsign=` is an index into the fixed DCS FAC callname table
+   (`Axeman, Darknight, Warrior, Pointer, Eyeball, Moonbeam, Whiplash, Finger,
+   Pinpoint, Ferret, Shaba, Playboy, Hammer, Jaguar, Deathstar, Anvil,
+   Firefly, Mantis, Badger` — see `countries.USA.callsign["GroundUnits"]`),
+   **not** the group name. Default 1 makes a group named `Hammer` check in as
+   *Axeman 1-1*. Use `tasking.FacCallsign`.
+4. **Radio.** The FAC entry appears in the player's menu only on the FAC net.
+   Set the FAC's own radio to match with
+   `task.SetFrequencyCommand(mhz, Modulation.AM)` (pydcs otherwise leaves the
+   group on its 251.0 default) and tell the player which **preset channel**
+   carries it — `planes.<Type>.panel_radio[radio][channel]` lists the stock
+   presets, e.g. the F-16C has 133 on COMM2 CH 10 and 251 on COMM1 CH 18.
+
+A FAC parked close enough to see the target is usually inside a MEZ. Give it
+`task.SetInvisibleCommand(True)` so the sortie's laser does not evaporate in
+the first two minutes.
 
 ### 6.2 AI behaviour options — the difficulty dial
 Each is a `task.Opt*` appended to `points[0].tasks`:

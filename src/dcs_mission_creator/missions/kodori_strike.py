@@ -45,7 +45,8 @@ from dcs.unit import Skill
 from dcs.unitgroup import VehicleGroup
 from dcs.unittype import VehicleType
 
-from dcs_mission_creator.core.map_draw import PlanOverlay
+from dcs_mission_creator.core import waypoints
+from dcs_mission_creator.core.map_draw import PlanOverlay, conceal_country
 from dcs_mission_creator.core.mission_builder import MissionBuilder
 from dcs_mission_creator.core.placement import (
     FOREST_BUFFER_M as _FOREST_BUFFER_M,
@@ -108,13 +109,17 @@ class KodoriStrike(MissionBuilder):
         return f"""KODORI STRIKE — Caucasus, 20 May 2026, 10:00 local
 ========================================================
 SITUATION
-  Russian forces have staged a forward operating base
-  in the Kodori valley NE of Sukhumi-Babushara: armour,
-  supply trucks, organic AAA. An SA-6 (Kub) site sits on
-  a ridge with LOS to the FOB, and SA-13 SHORAD covers
-  the southern approach from hilltops. EWR feed out of
-  the Russian rear is vectoring Su-27s from Gudauta
-  against any package crossing the Inguri.
+  Satellite imagery over three passes this week has
+  watched a Russian forward operating base grow in the
+  Kodori valley NE of Sukhumi-Babushara: armour, supply
+  trucks, dug-in guns. Yesterday's pass caught freshly
+  graded revetments on a ridge overlooking it, and an
+  ELINT cut the same night put an SA-6 fire-control
+  radar in that area — assess the site is now live.
+  SHORAD is reported on the hills covering the southern
+  approach. Early-warning radar in the Russian rear
+  hands the picture to the Su-27s at Gudauta, who launch
+  against anything crossing the Inguri.
 
 MISSION (Dodge — F-16C-50, Kutaisi)
   Lead the strike on the FOB. Weasel rolls back the SA-6
@@ -130,27 +135,32 @@ PACKAGE
   Magic        : E-3A AWACS, 251.000 AM, overlay track.
   Texaco       : KC-135, 252.000 AM, TACAN 10Y, overlay track.
 
-THREATS
-  Air : 2x Su-27, Skill High, R-27/R-77 class. Russian
-        EWR (55G6) vectoring them from prominent ground.
-  SAM : 1x SA-6 (Kub) site on a ridge with LOS to the FOB.
-        2x SA-13 SHORAD on hilltops covering the southern
-        approach. Stay above 4500 m AGL in the target box
-        until Weasel calls SA-6 dead.
-  AAA : ZSU-23-4 Shilka organic to the FOB.
+INTELLIGENCE
+  Air : Gudauta keeps a Su-27 pair ready, current
+        missiles, experienced crews. Early-warning radar
+        in the rear will see you and vector them.
+  SAM : ELINT places an SA-6 fire-control radar on the
+        ridge overlooking the FOB — that is Weasel's
+        problem. Imagery also shows tracked IR launchers
+        on the hills on the southern approach. Stay above
+        4500 m AGL in the target box until Weasel calls
+        the SA-6 cold.
+  AAA : Guns inside the FOB perimeter, seen on every
+        imagery pass this week.
 
 ROE / FRAGS
   - Cleared to engage Russian aircraft entering the AO.
-  - Hold ordnance until Weasel reports SA-6 down or the
-    FOB is the only viable target.
+  - Hold ordnance until Weasel reports the SA-6 down or
+    the FOB is the only viable target.
   - Bingo fuel: 3000 lb. RTB Kutaisi (divert: Senaki).
 
 NAV
   Bullseye (own side): {bx:.0f}, {by:.0f} (DCS world m)
   AO center         : Kodori valley, ~22 km NE Sukhumi.
   PUSH waypoint     : 18 km NW of Kutaisi.
-  Ingress           : terrain-masked corridor, overlay-routed
-                      to break LOS to the SA-6, EWR, and Gudauta.
+  Ingress           : terrain-masked corridor, routed to keep
+                      ridgelines between you and the reported
+                      radars and the Gudauta approach.
 
 FREQUENCIES
   Magic AWACS   : 251.000 AM
@@ -166,16 +176,20 @@ FREQUENCIES
 **Date / time:** 20 May 2026, 10:00 local
 **Player aircraft:** F-16C-50 (`Dodge`), Kutaisi, hot ramp
 **Players:** {self.players} coop slot(s)
-**Difficulty:** trained
+**Difficulty:** trained — experienced Su-27 pair with GCI, one radar SAM plus
+hilltop SHORAD over the target, dedicated SEAD element, AWACS and tanker
 **Expected sortie length:** ~75 minutes
 
 ## Situation
 
-Russian forces have staged a forward operating base in the Kodori valley
-northeast of Sukhumi-Babushara: armour, supply trucks, organic AAA. An SA-6
-(Kub) site sits on a ridge with LOS to the FOB, and SA-13 SHORAD covers the
-southern approach from hilltops. EWR coverage out of the Russian rear is
-vectoring Su-27s from Gudauta against any USAF package crossing the Inguri.
+Satellite imagery over three passes this week has watched a Russian forward
+operating base grow in the Kodori valley northeast of Sukhumi-Babushara:
+armour, supply trucks, dug-in guns. Yesterday's pass caught freshly graded
+revetments on a ridge overlooking it, and an ELINT cut the same night put an
+SA-6 fire-control radar in that area — the site is assessed live. SHORAD is
+reported on the hills covering the southern approach. Early-warning radar in
+the Russian rear hands the picture to the Su-27s at Gudauta, who launch
+against any USAF package crossing the Inguri.
 
 ## Mission
 
@@ -198,21 +212,27 @@ Kutaisi.
 75-minute sortie is well past F-16C internal endurance, so the tanker is
 mandatory — top off pre-strike on the way in, again post-strike if needed.
 
-All ground placements and the player's ingress corridor are picked from the
-Caucasus terrain overlay (road snap, ridges, LOS masking) — they shift each
-run, so re-brief any visual references off the kneeboard, not memory.
+Terrain, not a template, decides where the FOB, the SAM ridge and your
+corridor sit — they are re-derived every time the mission is generated, so
+brief off this sheet rather than off a previous sortie.
 
-## Threats
+## Intelligence
 
-- **Air:** 2x Russian Su-27 (Skill High), R-27/R-77 class, launched on
-  intrusion trigger and vectored by Russian GCI from a 55G6 EWR on
-  prominent ground in the rear.
-- **SAM:** 1x SA-6 (Kub) site — 1x 1S91 search/track radar + 2x 2P25
-  launchers — on a ridge with LOS to the FOB. 2x SA-13 SHORAD on hilltops
-  covering the southern approach. Stay above 4500 m AGL in the target box
-  until `Weasel` calls SA-6 dead.
-- **AAA:** 1x ZSU-23-4 Shilka organic to the FOB.
-- **EWR:** 1x 55G6 on commanding ground in the Russian rear.
+Everything below is imagery and ELINT from the last three days. The SAM and
+SHORAD positions are assessed to within a few kilometres, and the map rings
+are drawn as estimates for that reason.
+
+- **Air:** Gudauta holds a Su-27 pair ready — current missiles, experienced
+  crews — launched against any package that crosses the Inguri and vectored by
+  early-warning radar in the Russian rear.
+- **SAM:** the ELINT cut puts an SA-6 fire-control radar on the ridge
+  overlooking the FOB. Kill the radar and the launchers on that ridge are
+  blind. Imagery also shows tracked IR launchers on the hills on the southern
+  approach — stay above 4500 m AGL in the target box until `Weasel` calls the
+  SA-6 cold.
+- **AAA:** guns inside the FOB perimeter, on every imagery pass this week.
+- **EWR:** early-warning radar on commanding ground in the Russian rear,
+  feeding the Gudauta GCI.
 
 ## ROE
 
@@ -226,9 +246,9 @@ run, so re-brief any visual references off the kneeboard, not memory.
 - Bullseye (own side): `{bx:.0f}, {by:.0f}` (DCS world m)
 - AO center: ~22 km NE of Sukhumi-Babushara, in the Kodori valley.
 - PUSH waypoint: 18 km NW of Kutaisi.
-- Ingress: terrain-masked corridor, overlay-routed to break LOS to the
-  SA-6, the EWR, and the Gudauta CAP base.
-- TANK orbit: overlay-placed standoff track behind Kutaisi.
+- Ingress: terrain-masked corridor, routed to keep ridgelines between you and
+  the reported radar positions and the Gudauta approach.
+- TANK orbit: standoff track behind Kutaisi.
 
 ## Frequencies
 
@@ -243,9 +263,10 @@ Late-spring clear morning, light W wind, 22 °C. QNH 760 mmHg. Visibility
 
 ## Win / loss conditions
 
-- **Success:** the Russian FOB is destroyed.
-- **Failure:** `Weasel` is destroyed while the FOB is still standing
-  (SEAD support gone, strike too risky).
+- **Success:** the FOB is wrecked — armour, trucks and stores burning in the
+  valley.
+- **Failure:** `Weasel` is lost with the FOB still standing; without SEAD the
+  strike is not worth flying.
 
 ## Re-generate
 
@@ -282,6 +303,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         )
 
         self._add_end_triggers(m, fob=fob, sa6=sa6, weasel=weasel)
+        self._conceal_red(russia)
         self._draw_plan(
             m,
             scene,
@@ -295,6 +317,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             tanker_track=tanker_track,
         )
         self._add_briefing(m)
+        waypoints.snap_base_waypoints(m, scene.overlay.overlay)
 
         miz_path.parent.mkdir(parents=True, exist_ok=True)
         m.save(str(miz_path))
@@ -763,14 +786,14 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             waypoints=3,
             leg_search_radius_m=6_000.0,
         )
-        for i, pt in enumerate(corridor):
-            if i == 0:
-                name = "PUSH"
-            elif i == len(corridor) - 1:
-                name = "TGT"
-            else:
-                name = f"INGRESS-{i}"
+        for i, pt in enumerate(corridor[:-1]):
+            name = "PUSH" if i == 0 else f"INGRESS-{i}"
             player.add_waypoint(pt, altitude=6500, speed=400, name=name)
+        # The corridor ends on the FOB itself: a ground target, so its
+        # steerpoint sits on the valley floor rather than at ingress altitude.
+        waypoints.add_ground_waypoint(
+            player, corridor[-1], overlay=scene.overlay.overlay, speed=400, name="TGT"
+        )
         egress = _offset(scene.ao_center, t, east_m=20_000, north_m=-15_000)
         player.add_waypoint(egress, altitude=6500, speed=420, name="EGRESS")
         player.add_runway_waypoint(scene.kutaisi)
@@ -778,6 +801,14 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         return [*corridor, egress]
 
     # -- F10 map briefing ---------------------------------------------------
+
+    def _conceal_red(self, russia: Country) -> None:
+        """Keep every Russian group off the F10 map, the planner and the datalink.
+
+        What the player knows about the FOB and its cover is the briefing plus
+        the estimates `_draw_plan` paints — nothing else.
+        """
+        conceal_country(russia)
 
     def _draw_plan(
         self,
@@ -822,7 +853,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         success = triggers.TriggerOnce(comment="Strike successful")
         success.add_condition(condition.GroupDead(fob.id))
         success_call = (
-            "Russian FOB destroyed. Mission successful. Dodge, return to base, Kutaisi."
+            "Magic: the FOB is wrecked, armour and stores burning in the "
+            "valley. Dodge, return to base, Kutaisi."
         )
         success.add_action(action.MessageToAll(m.string(success_call), seconds=20))
         self._voice.attach_to_all(m, success, success_call)
@@ -839,8 +871,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         failure.add_condition(condition.GroupDead(weasel.id))
         failure.add_condition(condition.GroupAlive(fob.id))
         failure_call = (
-            "Weasel is down with the FOB still standing. Mission failed. "
-            "Dodge, return to base, Kutaisi."
+            "Magic: Weasel is down and the FOB is still standing. Without SEAD "
+            "that valley is closed to us. Dodge, return to base, Kutaisi."
         )
         failure.add_action(action.MessageToAll(m.string(failure_call), seconds=20))
         self._voice.attach_to_all(m, failure, failure_call)
@@ -856,7 +888,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         )
         m.set_description_redtask_text(
             "Hold the FOB in the Kodori valley. SA-6 / SA-13 cover the target "
-            "box; Su-27s out of Gudauta scramble on USAF intrusion."
+            "box; Su-27s out of Gudauta launch against any USAF package "
+            "crossing the Inguri."
         )
         m.set_sortie_text(self.title)
 

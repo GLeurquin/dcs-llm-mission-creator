@@ -48,10 +48,13 @@ from dcs.unit import Skill
 from dcs.unitgroup import VehicleGroup
 from dcs.unittype import VehicleType
 
-from dcs_mission_creator.core.map_draw import PlanOverlay
+from dcs_mission_creator.core import waypoints
+from dcs_mission_creator.core.map_draw import PlanOverlay, conceal_country
 from dcs_mission_creator.core.mission_builder import MissionBuilder
+from dcs_mission_creator.core.placement import load_scene
 from dcs_mission_creator.core.tasking import apply_ai_difficulty
 from dcs_mission_creator.core.tts import VoiceSynth
+from dcs_mission_creator.map_overlay.scene import TacticalScene
 
 
 def _offset(
@@ -92,6 +95,7 @@ class _Scene:
     awacs_anchor: Point
     su27_intrusion: Point
     mig29_intrusion: Point
+    overlay: TacticalScene
 
 
 class AbkhazSweep(MissionBuilder):
@@ -137,26 +141,28 @@ PACKAGE
                   race-track. No tanker, no escort, no
                   Weasel wingman. You are alone tonight.
 
-THREATS
-  Air : 4x Russian Su-27, Skill Excellent, R-27ER class,
-        Sochi-Adler. Late-activated on the Abkhaz coastal
-        intrusion zone.
-        2x Russian MiG-29S, Skill Excellent, R-77 / R-27
-        class, Gudauta. Late-activated on a closer (north
-        of Sukhumi) intrusion zone — they roll in once
-        Dodge has committed.
-  SAM : 1x SA-6 (Kub 1S91 + 2x 2P25 launchers) on the
-        coastal ridge north of Sukhumi, Skill Excellent.
-        Engagement envelope ~24 km / 14 km altitude.
-  AAA : 2x ZSU-23-4 Shilka at the SA-6 site.
-  EWR : 1x 55G6 inland east of Sochi-Adler, Skill
-        Excellent, vectoring the Su-27 element.
-        1x 1L13 north of Gudauta, Skill Excellent,
-        vectoring the MiG-29S element.
+INTELLIGENCE
+  The picture is thin. No overhead since yesterday
+  morning and nothing airborne up there tonight — what
+  follows is assessment, not fact. Build your own
+  picture off Magic and the RWR.
+  Air : Sochi-Adler flies the aggressor syllabus and has
+        been putting up four-ships. Expect that, with the
+        long-burn R-27 variant. Gudauta keeps a lighter
+        pair that has reinforced every previous
+        engagement once we were committed — R-77 shooters.
+        Both fields are crewed by their best.
+  SAM : A Kub battery is assessed on the coastal ridge
+        north of Sukhumi. We have no current fix and it
+        moves, so assume the low block is denied
+        anywhere over the AO, and assume guns with it.
+  EWR : Early-warning radar covers the whole corridor
+        from inland. You will be seen from the coast in,
+        and both fields will be vectored onto you.
 
 ROE / FRAGS
-  - Weapons free on any Russian-coalition fighter inside
-    the intrusion zones.
+  - Weapons free on any Russian fighter inside the
+    coastal corridor.
   - Do NOT descend below 4500 m AGL over the AO — Snow
     Drum will see you the moment you drop into its
     envelope.
@@ -207,10 +213,10 @@ for first light can ingress unmolested.
 
 Push north out of Batumi up the Black Sea coast as `Dodge`, take a sweep
 station offshore between Sukhumi and Gudauta, and sanitize the airspace.
-Expect a Su-27 four-ship out of Sochi-Adler on the merge, then a MiG-29S
-two-ship reinforcement out of Gudauta once you are committed. Stay above
-4500 m over the AO — the SA-6 on the coastal ridge north of Sukhumi denies
-the low block.
+Expect a Su-27 four-ship out of Sochi-Adler on the merge, then a MiG-29S pair
+reinforcing out of Gudauta once you are committed. Stay above 4500 m over the
+AO — the Kub battery assessed on the coastal ridge north of Sukhumi denies the
+low block.
 
 ## Package
 
@@ -222,24 +228,28 @@ the low block.
 No tanker, no escort, no Weasel wingman — denied support is part of the
 ace composition. Carry two wing tanks.
 
-## Threats
+## Intelligence
 
-- **Air (primary):** 4x Russian Su-27 (Skill Excellent), R-27ER class,
-  Sochi-Adler. Late-activated on the Abkhaz coastal intrusion zone.
-- **Air (reinforcement):** 2x Russian MiG-29S (Skill Excellent), R-77 / R-27
-  class, Gudauta. Late-activated on a closer north-of-Sukhumi intrusion
-  zone — they commit once `Dodge` is engaged.
-- **SAM (terminal denial):** 1x SA-6 site on the coastal ridge north of
-  Sukhumi (Kub 1S91 Snow Drum SR/TR + 2x 2P25 launchers), Skill Excellent.
-  Engagement envelope ~24 km / 14 km altitude. Forces the fight above
-  4500 m AGL.
-- **AAA:** 2x ZSU-23-4 Shilka at the SA-6 site (Skill High).
-- **EWR (Su-27 GCI):** 1x 55G6 inland east of Sochi-Adler (Skill Excellent).
-- **EWR (MiG-29S GCI):** 1x 1L13 north of Gudauta (Skill Excellent).
+The picture is thin — no overhead since yesterday morning, nothing airborne
+up there tonight. Everything below is assessment. There are no enemy
+positions on your map: build the picture off `Magic`, the RWR and the tally.
+
+- **Air (primary):** Sochi-Adler flies the aggressor syllabus and has been
+  putting up four-ships of Su-27, carrying the long-burn R-27 variant. Their
+  best crews.
+- **Air (reinforcement):** Gudauta keeps a lighter MiG-29S pair that has
+  reinforced every previous engagement once we were committed — R-77
+  shooters.
+- **SAM (terminal denial):** a Kub battery is assessed on the coastal ridge
+  north of Sukhumi. No current fix, and it relocates, so assume the low block
+  is denied anywhere over the AO and assume guns are sited with it. That is
+  what forces the fight above 4500 m AGL, where the bandits want it.
+- **EWR:** early-warning radar covers the corridor from inland. You are seen
+  from the coast in, and both fields get vectored onto you.
 
 ## ROE
 
-- Weapons free on any Russian-coalition fighter inside the intrusion zones.
+- Weapons free on any Russian fighter inside the coastal corridor.
 - Do **not** descend below 4500 m AGL over the AO — Snow Drum sees you the
   moment you drop into its envelope.
 - Bingo fuel: 3500 lb. RTB Batumi direct (divert: Senaki-Kolkhi). Do not
@@ -275,8 +285,9 @@ commit. One mistake ends the sortie.
 
 ## Win / loss conditions
 
-- **Success:** all 4x Su-27 and all 2x MiG-29S are destroyed.
-- **Failure:** `Dodge` flight is dead before the bandits are.
+- **Success:** the corridor is swept clean — no Russian fighter left flying
+  between Sukhumi and Gudauta.
+- **Failure:** `Dodge` goes down with the corridor still contested.
 
 ## Re-generate
 
@@ -304,8 +315,10 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         player = self._spawn_player(m, usa, scene)
 
         self._add_end_triggers(m, su27=su27, mig29=mig29, player=player)
+        self._conceal_red(russia)
         self._draw_plan(m, scene)
         self._add_briefing(m)
+        waypoints.snap_base_waypoints(m, scene.overlay.overlay)
 
         miz_path.parent.mkdir(parents=True, exist_ok=True)
         m.save(str(miz_path))
@@ -380,6 +393,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             awacs_anchor=awacs_anchor,
             su27_intrusion=su27_intrusion,
             mig29_intrusion=mig29_intrusion,
+            overlay=load_scene("caucasus"),
         )
 
     # -- red side -----------------------------------------------------------
@@ -567,6 +581,14 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     # -- F10 map briefing ---------------------------------------------------
 
+    def _conceal_red(self, russia: Country) -> None:
+        """Keep every Russian group off the F10 map, the planner and the datalink.
+
+        Ace: the player is given a vague threat area and nothing else, so a
+        stock icon on the SA-6 ridge would undo the whole reveal policy.
+        """
+        conceal_country(russia)
+
     def _draw_plan(self, m: Mission, scene: _Scene) -> None:
         """Paint the plan on the F10 map (ace: friendly plan + a vague threat zone).
 
@@ -594,8 +616,9 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         success.add_condition(condition.GroupDead(su27.id))
         success.add_condition(condition.GroupDead(mig29.id))
         success_call = (
-            "Corridor is clean. Mission successful. Dodge, return to base, Batumi. "
-            "Magic is pushing the track north."
+            "Magic: picture is clean, nothing flying between Sukhumi and "
+            "Gudauta. Dodge, return to base, Batumi. Magic is pushing the "
+            "track north."
         )
         success.add_action(action.MessageToAll(m.string(success_call), seconds=25))
         self._voice.attach_to_all(m, success, success_call)
@@ -604,8 +627,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         failure = triggers.TriggerOnce(comment="Dodge lost")
         failure.add_condition(condition.GroupDead(player.id))
         failure_call = (
-            "Dodge is down. Mission failed. Magic, hold the southern track. "
-            "Strike packages aborting."
+            "Magic: Dodge is down and the corridor is still theirs. Holding "
+            "the southern track. First-light packages are aborting."
         )
         failure.add_action(action.MessageToAll(m.string(failure_call), seconds=25))
         self._voice.attach_to_all(m, failure, failure_call)
@@ -624,9 +647,9 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         )
         m.set_description_redtask_text(
             "Hold the Abkhaz coastal airspace. Su-27 from Sochi-Adler "
-            "intercept on the southern intrusion zone; MiG-29S from Gudauta "
-            "reinforce once USAF commits. SA-6 on the coastal ridge north "
-            "of Sukhumi denies the low block."
+            "intercept any USAF push up the coast; MiG-29S from Gudauta "
+            "reinforce once the Americans are committed. SA-6 on the coastal "
+            "ridge north of Sukhumi denies the low block."
         )
         m.set_sortie_text(self.title)
 
