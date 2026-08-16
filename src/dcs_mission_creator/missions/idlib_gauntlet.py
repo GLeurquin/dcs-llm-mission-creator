@@ -647,17 +647,13 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             )
         except LookupError:
             positions = frontier
-        groups: list[VehicleGroup] = []
-        for i, pos in enumerate(positions):
-            grp = m.vehicle_group(
-                russia,
-                f"EWR Sarab-{i + 1}",
-                vehicles.AirDefence.X_55G6_EWR,
-                position=pos,
-                heading=int(scene.threat_axis_deg),
-            )
-            ad.set_skill(grp, Skill.High)
-            groups.append(grp)
+        groups = ad.build_ewr_chain(
+            m,
+            russia,
+            positions,
+            prefix="EWR Sarab",
+            heading=int(scene.threat_axis_deg),
+        )
         return groups, list(positions)
 
     def _ridge_or_offset(

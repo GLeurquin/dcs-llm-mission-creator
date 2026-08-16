@@ -23,7 +23,7 @@ it does for `mission.vehicle_group(...)`.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, Sequence
 
 import structlog
 from dcs.unit import Skill
@@ -518,3 +518,39 @@ def build_sa13_site(
         terrain=terrain,
         extra=(_DOG_EAR,) if with_dog_ear else (),
     )
+
+
+def build_ewr_chain(
+    m: Mission,
+    country: Country,
+    positions: Sequence[Point],
+    *,
+    prefix: str,
+    heading: float = 270,
+    skill: Skill = Skill.High,
+) -> list[VehicleGroup]:
+    """One 55G6 EWR per position, named `<prefix>-1`, `<prefix>-2`, ...
+
+    Positions in, groups out — deliberately *not* the search for them. Where an
+    EWR chain goes is a per-mission question (which frontier, what spacing,
+    what to do when the terrain search comes up empty, and each mission answers
+    the fallback differently), and doing the search here would drag the raster
+    stack back into this module's import path.
+
+    EWRs only look; they never shoot. They are not `ThreatRing`s and nothing
+    needs to route around them — but they are what feeds the GCI picture, so
+    killing one is worth something to the player.
+    """
+    groups = []
+    for i, pos in enumerate(positions):
+        grp = m.vehicle_group(
+            country,
+            f"{prefix}-{i + 1}",
+            AirDefence.X_55G6_EWR,
+            position=pos,
+            heading=heading,
+        )
+        set_skill(grp, skill)
+        groups.append(grp)
+    log.debug("built EWR chain", prefix=prefix, count=len(groups))
+    return groups

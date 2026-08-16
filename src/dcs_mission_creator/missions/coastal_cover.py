@@ -35,7 +35,7 @@ from dcs.unit import Skill
 from dcs.unitgroup import VehicleGroup
 from dcs.unittype import VehicleType
 
-from dcs_mission_creator.core import triggers as mission_triggers
+from dcs_mission_creator.core import air_defense as ad, triggers as mission_triggers
 from dcs_mission_creator.core.cli import run_cli
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.map_draw import PlanOverlay
@@ -455,15 +455,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         except LookupError:
             anchor = offset(scene.sukhumi.position, east_m=8_000, north_m=10_000)
             positions = [anchor]
-        for i, pos in enumerate(positions):
-            grp = m.vehicle_group(
-                russia,
-                f"EWR Bear-{i + 1}",
-                vehicles.AirDefence.X_55G6_EWR,
-                position=pos,
-                heading=270,
-            )
-            set_skill(grp, Skill.High)
+        ad.build_ewr_chain(m, russia, positions, prefix="EWR Bear")
         return positions
 
     def _spawn_red_intercept(self, m: Mission, russia: Country, scene: _Scene):
