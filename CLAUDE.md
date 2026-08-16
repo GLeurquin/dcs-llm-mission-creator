@@ -417,8 +417,15 @@ of them holds policy: force composition, timings and text stay in the mission.
 
 - [`core/mission_kit.py`](src/dcs_mission_creator/core/mission_kit.py) —
   `offset(origin, *, east_m, north_m)` (DCS `x` is north and `y` is east; this
-  is why call sites never say so), `mark_clients(group)`, and a re-export of
-  `set_skill`. Import these rather than redefining them.
+  is why call sites never say so), `mark_clients(group)`, `arm(...)` (see the
+  loadout rule below), `race_track(p1, p2)` for the orbit arguments
+  `awacs_flight` / `refuel_flight` want, `unit_of_type(group, type)`, and a
+  re-export of `set_skill`. Import these rather than redefining them.
+
+  Use `unit_of_type` — never `group.units[0]` — when an objective means "kill
+  the radar". pydcs's own `VehicleTemplate.Russia.sa10_site` puts a paratrooper
+  at index 1, so an index-based win condition silently becomes "kill one
+  infantryman"; `unit_of_type` raises instead.
 - [`core/weather.py`](src/dcs_mission_creator/core/weather.py) — state the
   weather as a record instead of fourteen assignments:
 
