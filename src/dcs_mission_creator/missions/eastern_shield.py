@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import cast
 
-from dcs import action, condition, planes, task, triggers, vehicles
+from dcs import action, condition, planes, task, templates, triggers, vehicles
 from dcs.country import Country
 from dcs.drawing.icon import StandardIcon
 from dcs.mapping import Point
@@ -409,22 +409,17 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                 envelope_radius_m=22_000.0,
                 min_prominence_m=5.0,
             )
-        sa6_types = [
-            vehicles.AirDefence.Kub_1S91_str,
-            vehicles.AirDefence.Kub_2P25_ln,
-            vehicles.AirDefence.Kub_2P25_ln,
-            vehicles.AirDefence.Kub_2P25_ln,
-        ]
-        sa6 = m.vehicle_group_platoon(
-            russia,
-            "SAM Kobra",
-            cast(list[type[VehicleType]], sa6_types),
-            position=ridge,
-            heading=315,
-            formation=VehicleGroup.Formation.Scattered,
+        sa6 = templates.VehicleTemplate.sa6_site(
+            m, russia, ridge, heading=315, prefix="Kobra ", skill=Skill.High
         )
-        set_skill(sa6, Skill.High)
-        aaa_offset = Point(ridge.x + 250, ridge.y - 150, self._terrain)
+        # pydcs's template is a two-rail site; this battery fields three. Same
+        # group — a Kub TEL only engages while its 1S91 shares the group.
+        tel = m.vehicle("Launcher 3", vehicles.AirDefence.Kub_2P25_ln)
+        tel.position = ridge.point_from_heading(315 + 120, 45)
+        tel.heading = 315
+        tel.skill = Skill.High
+        sa6.add_unit(tel)
+        aaa_offset = offset(ridge, east_m=-150, north_m=250)
         aaa = m.vehicle_group(
             russia,
             "AAA Kobra",

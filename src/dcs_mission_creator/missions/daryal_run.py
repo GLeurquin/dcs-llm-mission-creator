@@ -26,24 +26,27 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import cast
 
-from dcs import action, condition, planes, task, triggers, vehicles
+from dcs import action, condition, planes, task, templates, triggers, vehicles
 from dcs.country import Country
 from dcs.mapping import Point
 from dcs.mission import Mission, StartType
 from dcs.terrain.caucasus.caucasus import Caucasus
 from dcs.terrain.terrain import Airport
 from dcs.unit import Skill
-from dcs.unitgroup import VehicleGroup
-from dcs.unittype import VehicleType
 
 from dcs_mission_creator.core import triggers as mission_triggers, waypoints
 from dcs_mission_creator.core.cli import run_cli
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.map_draw import PlanOverlay
 from dcs_mission_creator.core.mission_builder import MissionBuilder
-from dcs_mission_creator.core.mission_kit import arm, mark_clients, offset, set_skill
+from dcs_mission_creator.core.mission_kit import (
+    arm,
+    mark_clients,
+    offset,
+    set_skill,
+    unit_of_type,
+)
 from dcs_mission_creator.core.placement import load_scene
 from dcs_mission_creator.core.tasking import apply_ai_difficulty
 from dcs_mission_creator.core.tts import VoiceSynth
@@ -368,31 +371,28 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         return sa10, tor, shilkas, ewr
 
     def _spawn_sa10_site(self, m: Mission, russia: Country, pos: Point):
-        """Full SA-10 site in one group: 64H6E SR + 30H6 TR + 54K6 CP + 4 LNs.
+        """Full SA-10 site from the pydcs template: SR + TR + CP + launchers.
 
         Radar and launchers must share the group — an S-300 launcher only
-        engages while its Flap Lid TR is in-group. `units[0]` is the Big Bird
-        SR and `units[1]` the Flap Lid TR; the win condition kills those two
-        (see `_add_end_triggers`), the launchers now actually shoot back.
+        engages while its track radar is in-group, which the template already
+        gets right. A fourth launcher is added because a site guarding the one
+        pass through the ridge fields more than three rails.
+
+        Do **not** index into `units` to find a radar here: the template puts a
+        paratrooper at index 1. `_add_end_triggers` looks both radars up by
+        type through `unit_of_type`.
         """
-        sa10_types = [
-            vehicles.AirDefence.S_300PS_64H6E_sr,
-            vehicles.AirDefence.S_300PS_5H63C_30H6_tr,
-            vehicles.AirDefence.S_300PS_54K6_cp,
-            vehicles.AirDefence.S_300PS_5P85C_ln,
-            vehicles.AirDefence.S_300PS_5P85C_ln,
-            vehicles.AirDefence.S_300PS_5P85D_ln,
-            vehicles.AirDefence.S_300PS_5P85D_ln,
-        ]
-        sa10 = m.vehicle_group_platoon(
-            russia,
-            "SAM Grumble",
-            cast(list[type[VehicleType]], sa10_types),
-            position=pos,
-            heading=180,
-            formation=VehicleGroup.Formation.Scattered,
+        # The template registers the group with Russia itself — it takes no
+        # country argument, unlike `sa6_site`. Adding it again duplicates the
+        # whole site.
+        sa10 = templates.VehicleTemplate.Russia.sa10_site(
+            m, pos, 180, prefix="Grumble ", skill=Skill.Excellent
         )
-        set_skill(sa10, Skill.Excellent)
+        launcher = m.vehicle("Launcher 4", vehicles.AirDefence.S_300PS_5P85D_ln)
+        launcher.position = pos.point_from_heading(180 + 90, 50)
+        launcher.heading = 180
+        launcher.skill = Skill.Excellent
+        sa10.add_unit(launcher)
         return sa10
 
     def _spawn_shorad(self, m: Mission, russia: Country, pos: Point):
@@ -594,12 +594,13 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
     def _add_end_triggers(self, m: Mission, *, sa10, player) -> None:
         """Success when both SA-10 radars dead; failure when Dodge dies first.
 
-        `sa10.units[0]` is the Big Bird SR, `units[1]` the Flap Lid TR — gate
-        on those two units dying so the shot-capable launchers can stay in the
-        same group (an S-300 launcher only fires with its TR in-group).
+        Both radars are found by type, not by index: the site comes from
+        pydcs's template, whose `units[1]` is a paratrooper. Gating on the two
+        radars lets the shot-capable launchers stay in the same group, which an
+        S-300 launcher needs in order to fire at all.
         """
-        big_bird = sa10.units[0].id
-        flap_lid = sa10.units[1].id
+        big_bird = unit_of_type(sa10, vehicles.AirDefence.S_300PS_64H6E_sr).id
+        flap_lid = unit_of_type(sa10, vehicles.AirDefence.S_300PS_40B6M_tr).id
         mission_triggers.message_to_all(
             m,
             comment="SA-10 radars destroyed",

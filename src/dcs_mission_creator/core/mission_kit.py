@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Sequence
 
 from dcs.unit import Skill
+from dcs.unittype import UnitType
 
 # Re-exported: `set_skill` has lived in air_defense.py since the site builders
 # needed it, and it applies to any group, so missions should not have to know
@@ -22,9 +23,10 @@ from dcs_mission_creator.core.air_defense import set_skill
 
 if TYPE_CHECKING:
     from dcs.mapping import Point
+    from dcs.unit import Unit
     from dcs.unitgroup import FlyingGroup, Group
 
-__all__ = ["arm", "mark_clients", "offset", "set_skill"]
+__all__ = ["arm", "mark_clients", "offset", "set_skill", "unit_of_type"]
 
 
 def offset(origin: Point, *, east_m: float = 0.0, north_m: float = 0.0) -> Point:
@@ -70,3 +72,21 @@ def arm(
         unit.pylons.clear()
     for pylon, weapon in stores:
         group.load_pylon(getattr(getattr(plane_type, f"Pylon{pylon}"), weapon))
+
+
+def unit_of_type(group: Group, vehicle_type: type[UnitType]) -> Unit:
+    """The first unit in `group` of `vehicle_type`, or `LookupError`.
+
+    Objectives that mean "kill the radar" should say so. Reaching for
+    `group.units[0]` works only while the site is hand-built in a known order —
+    pydcs's own `VehicleTemplate.Russia.sa10_site`, for instance, puts a
+    paratrooper at index 1, so an index-based win condition silently becomes
+    "kill one infantryman". Raising here turns that into a build failure.
+    """
+    for unit in group.units:
+        if unit.type == vehicle_type.id:
+            return unit
+    raise LookupError(
+        f"{group.name} has no {vehicle_type.id}; it has "
+        f"{sorted({u.type for u in group.units})}"
+    )

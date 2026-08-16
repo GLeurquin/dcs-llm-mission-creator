@@ -34,9 +34,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import cast
 
-from dcs import action, condition, planes, task, triggers, vehicles
+from dcs import action, condition, planes, task, templates, triggers, vehicles
 from dcs.country import Country
 from dcs.mapping import Point
 from dcs.mission import Mission, StartType
@@ -44,7 +43,6 @@ from dcs.terrain.caucasus.caucasus import Caucasus
 from dcs.terrain.terrain import Airport
 from dcs.unit import Skill
 from dcs.unitgroup import VehicleGroup
-from dcs.unittype import VehicleType
 
 from dcs_mission_creator.core import triggers as mission_triggers
 from dcs_mission_creator.core.cli import run_cli
@@ -393,20 +391,9 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         group, so radar and TELs must not be split — kill the 1S91 and the
         whole site goes blind.
         """
-        sa6_types = [
-            vehicles.AirDefence.Kub_1S91_str,
-            vehicles.AirDefence.Kub_2P25_ln,
-            vehicles.AirDefence.Kub_2P25_ln,
-        ]
-        sa6 = m.vehicle_group_platoon(
-            russia,
-            "SAM Snow Drum",
-            cast(list[type[VehicleType]], sa6_types),
-            position=pos,
-            heading=180,
-            formation=VehicleGroup.Formation.Scattered,
+        sa6 = templates.VehicleTemplate.sa6_site(
+            m, russia, pos, heading=180, prefix="Snow Drum ", skill=Skill.Excellent
         )
-        set_skill(sa6, Skill.Excellent)
         return sa6
 
     def _spawn_shilkas(self, m: Mission, russia: Country, pos: Point):

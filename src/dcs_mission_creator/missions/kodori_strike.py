@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import cast
 
-from dcs import action, condition, planes, task, triggers, vehicles
+from dcs import action, condition, planes, task, templates, triggers, vehicles
 from dcs.country import Country
 from dcs.drawing.icon import StandardIcon
 from dcs.mapping import Point
@@ -466,20 +466,9 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                     min_distance_to=((ao, 1_500.0),),
                 ),
             )
-        sa6_types = [
-            vehicles.AirDefence.Kub_1S91_str,
-            vehicles.AirDefence.Kub_2P25_ln,
-            vehicles.AirDefence.Kub_2P25_ln,
-        ]
-        sa6 = m.vehicle_group_platoon(
-            russia,
-            "SAM Kodori-6",
-            cast(list[type[VehicleType]], sa6_types),
-            position=sa6_pos,
-            heading=180,
-            formation=VehicleGroup.Formation.Scattered,
+        sa6 = templates.VehicleTemplate.sa6_site(
+            m, russia, sa6_pos, heading=180, prefix="Kodori ", skill=Skill.High
         )
-        set_skill(sa6, Skill.High)
         snap_units_clear(scene.overlay.overlay, self._terrain, sa6)
         return sa6, sa6_pos
 
