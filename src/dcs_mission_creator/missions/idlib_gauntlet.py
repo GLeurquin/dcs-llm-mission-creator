@@ -101,6 +101,14 @@ from dcs_mission_creator.core.placement import (
     sam_site_on_ridge,
     snap_units_clear,
 )
+from dcs_mission_creator.core.recon import (
+    Chrome,
+    Frame,
+    Mark,
+    ReconStill,
+    publish as recon,
+    road_column,
+)
 from dcs_mission_creator.core.routing import ThreatRing
 from dcs_mission_creator.core.tasking import (
     FacCallsign,
@@ -226,6 +234,8 @@ class IdlibGauntlet(MissionBuilder):
         super().__init__(players=players)
         self._terrain = Syria()
         self._voice = VoiceSynth()
+        #: Set by `_render_recon`; `readme` degrades to no figure without it.
+        self._still: ReconStill | None = None
 
     # -- in-game and README briefings ---------------------------------------
 
@@ -362,6 +372,12 @@ NAV
                 column's own SHORAD, which drives, so any
                 ring we drew would be stale, and the Gadfly
                 we never fixed, which we cannot draw at all.
+  Imagery     : Hammer's radar cut of the column is on the
+                briefing screen. Wide-area search, 50 m
+                posts, so the brackets on it are moving-
+                target returns and not pictures of trucks —
+                read it for how long the column is and
+                which road it is on.
 
 FREQUENCIES
   Magic AWACS   : {_FREQ_AWACS}.000 AM ({_PRESET_AWACS})
@@ -383,6 +399,14 @@ FREQUENCIES
   is driving, so ask again on the way in — the numbers
   from check-in will be stale.
 """
+
+    def _recon_figure_md(self) -> str:
+        """The radar-still figure block, or nothing if no still was published.
+
+        Empty rather than raising, so `readme()` still works on a builder whose
+        `_assemble` has not run and at difficulties that withhold the imagery.
+        """
+        return "" if self._still is None else self._still.markdown()
 
     def readme(self) -> str:
         bx, by = self._terrain.bullseye_blue["x"], self._terrain.bullseye_blue["y"]
@@ -493,6 +517,8 @@ Positions below come off last night's Rivet Joint cut and this morning's
 Reaper feed — the belts are located to a few kilometres, not to the metre, and
 the map rings are marked as estimates for that reason. It is not a complete
 picture, and the last bullet is there to say where it is thin.
+
+{self._recon_figure_md()}
 
 - **The line:** partner-force units are in contact along the whole frontage, so
   the trace on your map is good. Armour, 23 mm guns and Igla teams hold the
@@ -653,9 +679,14 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         )
 
         self._conceal_red(russia, syria)
+        # One overlay for every reveal channel: the F10 plan, the cockpit
+        # cartridge and the recon still all have to make the same claim, and the
+        # difficulty policy that decides how much they claim lives in here.
+        plan = PlanOverlay(m, self.difficulty)
         briefed_threats = self._draw_plan(
             m,
             scene,
+            plan=plan,
             belts=belts,
             front=front,
             ewr_positions=ewr_positions,
@@ -666,6 +697,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             tanker_track=tanker_track,
         )
         self._load_hsd_threats(m, scene, briefed_threats)
+        self._render_recon(m, scene, plan=plan, convoy=convoy)
         self._add_iads(
             m,
             sa2=sa2,
@@ -1624,6 +1656,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         m: Mission,
         scene: _Scene,
         *,
+        plan: PlanOverlay,
         belts: tuple[ThreatRing, ...],
         front: Frontline,
         ewr_positions: list[Point],
@@ -1647,7 +1680,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         ZU-23 pit); and the Gadfly behind the northern shoulder is drawn nowhere
         at all, because nothing in the briefing claims to have found it.
         """
-        plan = PlanOverlay(m, self.difficulty)
         plan.objective(scene.route_mid, "Convoy axis — Taftanaz road", radius=7_000.0)
         plan.frontline(
             front.trace, "FRONT LINE — Syrian positions, guns and MANPADS below 10,000"
@@ -1695,6 +1727,78 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
     ) -> None:
         """Load the briefed belts as pre-planned threats on the player's cartridge."""
         dtc.arm_hsd_threats(m, points, overlay=scene.overlay.overlay)
+
+    # -- the imagery the briefing cites --------------------------------------
+
+    def _render_recon(
+        self, m: Mission, scene: _Scene, *, plan: PlanOverlay, convoy: VehicleGroup
+    ) -> None:
+        """Ship the radar cut of the column the Intelligence section already claims.
+
+        The briefing has always said the picture came off "this morning's Reaper
+        feed" and that the feed counted the SHORAD in the column. That was prose
+        describing imagery nobody could look at; this is the imagery.
+
+        `plan.detections` decides where the returns may be plotted, so the still
+        cannot out-claim the F10 map — and at `veteran`/`ace` it hands back nothing
+        and the mission publishes no frame at all.
+
+        The returns are laid along the road rather than read off the group's spawn
+        positions: pydcs stacks a platoon abeam its heading and DCS only strings it
+        out along the highway once the mission runs, so the build-time positions
+        are a 200 m dash at right angles to the road the briefing names. See
+        `recon.sample.road_column`.
+        """
+        column = road_column(
+            scene.overlay.overlay,
+            scene.convoy_origin,
+            scene.convoy_destination,
+            len(convoy.units),
+        )
+        returns = plan.detections(column)
+        if not returns:
+            return
+
+        axis = scene.convoy_origin.heading_between_point(scene.convoy_destination)
+        head, tail = returns[0], returns[-1]
+        marks = [Mark(x=p.x, y=p.y) for p in returns]
+        marks.append(
+            Mark(
+                x=head.midpoint(tail).x,
+                y=head.midpoint(tail).y,
+                kind="group",
+                radius_m=max(head.distance_to_point(tail) * 0.6, 700.0),
+                track_deg=axis,
+                text=f"{len(returns)} DET  TRK {axis:03.0f}  35 KM/H",
+            )
+        )
+        self._still = recon.sensor_still(
+            m,
+            # Centred on the column, not on the route midpoint — the frame is
+            # 25.6 km wide against a 24 km march, so centring on the route would
+            # push the column itself out to the edge. A quarter turn off the axis
+            # puts the road across the long dimension.
+            Frame.along_axis(head, tail, heading_offset_deg=-90.0),
+            marks,
+            Chrome(
+                platform="MQ-9 / AN-APY-8 LYNX II",
+                mode="WAS-MTI  5 LOOK",
+                # Three hours before the mission clock (`_set_time`), so "this
+                # morning" in the briefing is arithmetic and not a turn of phrase.
+                taken_at="0540L  12 SEP 26",
+                classification="SECRET // REL FVEY",
+                footer=f"{len(returns)} DET  ABU AL-DUHUR RD",
+                caption=(
+                    "`Hammer`'s radar took a wide-area cut of the Abu al-Duhur road "
+                    "before push. The base is a 50 m radar mosaic and the brackets "
+                    "are moving-target returns, not imagery — count them for the "
+                    "size of the column, not for what is in it."
+                ),
+            ),
+            overlay=scene.overlay.overlay,
+            slug=self.name,
+            label="convoy",
+        )
 
     # -- integrated air defence ---------------------------------------------
 

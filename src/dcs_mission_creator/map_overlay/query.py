@@ -57,6 +57,22 @@ def build_cache_root(theater: str) -> Path:
     return _resources_root() / "_build_cache" / theater
 
 
+@dataclass(frozen=True)
+class LayerWindow:
+    """A clamped rectangle of one raster layer, plus where it sits in the raster.
+
+    `valid` is False for any cell that fell outside the raster, which is the whole
+    reason this type exists rather than a bare array — see `MapOverlay.read_window`.
+    """
+
+    layer: str
+    cell_size_m: int
+    row0: int
+    col0: int
+    values: np.ndarray
+    valid: np.ndarray
+
+
 @dataclass
 class MapOverlay:
     """Lazy, memory-mapped accessor for a built overlay.
@@ -70,9 +86,10 @@ class MapOverlay:
     root: Path
     seed: int = DEFAULT_SEED
 
-    #: Lazily built road index — `(STRtree, lines)`, see `_road_lines`.
-    _road_index: tuple[STRtree, list[LineString]] | None = field(
-        default=None, init=False, repr=False, compare=False
+    #: Lazily built vector indexes by kind — `{"roads": (STRtree, lines)}`,
+    #: see `_vector_index`.
+    _vector_indexes: dict[str, tuple[STRtree, list[LineString]]] = field(
+        default_factory=dict, init=False, repr=False, compare=False
     )
 
     #: Opened zarr arrays, keyed by layer name — see `_open_layer`.
@@ -112,6 +129,84 @@ class MapOverlay:
             cached = zarr.open_array(str(self.root / f"{name}.zarr"), mode="r")
             self._layers[name] = cached
         return cached
+
+    # --------------------------------------------------------- window queries
+    def cell_center(self, row: int, col: int, cell_size_m: int) -> tuple[float, float]:
+        """(row, col) → the world `(x_north, y_east)` of that cell.
+
+        The inverse of `_xz_to_cell`, which `find_placement` open-codes twice.
+        """
+        b = self.manifest.bounds
+        return (b.top - row * cell_size_m, b.left + col * cell_size_m)
+
+    def read_window(
+        self,
+        name: str,
+        center: Point,
+        *,
+        half_width_m: float,
+        half_height_m: float | None = None,
+        fill: int = 0,
+    ) -> LayerWindow:
+        """Read a rectangle of a layer around `center`, clamped to the raster.
+
+        The bulk counterpart to the point queries. It exists as a public method
+        for one specific reason: `_xz_to_cell` performs **no bounds check**, so an
+        out-of-extent point produces negative indices and zarr silently returns
+        cells from the opposite edge of the map. A caller rasterising a window
+        near a map boundary would get a plausible picture of the wrong place.
+        Here, out-of-extent cells come back as `fill` with `valid` False, so the
+        caller can render no-data rather than someone else's terrain.
+
+        `row0` / `col0` are the window's origin in the full raster, which is what a
+        caller needs to turn world coordinates into window-relative indices.
+        """
+        spec = self.manifest.layers.as_dict()[name]
+        cell = spec.cell_size_m
+        z = self._open_layer(name)
+        h, w = z.shape
+        half_h = half_width_m if half_height_m is None else half_height_m
+
+        row_c, col_c = self._xz_to_cell(center, cell)
+        half_rows = int(half_h / cell) + 1
+        half_cols = int(half_width_m / cell) + 1
+        row0, row1 = row_c - half_rows, row_c + half_rows + 1
+        col0, col1 = col_c - half_cols, col_c + half_cols + 1
+
+        values = np.full((row1 - row0, col1 - col0), fill, dtype=z.dtype)
+        valid = np.zeros(values.shape, dtype=bool)
+
+        # Clip to the raster, then place the clipped block at its own offset.
+        cr0, cr1 = max(0, row0), min(h, row1)
+        cc0, cc1 = max(0, col0), min(w, col1)
+        if cr0 < cr1 and cc0 < cc1:
+            block = np.asarray(z[cr0:cr1, cc0:cc1])
+            values[cr0 - row0 : cr1 - row0, cc0 - col0 : cc1 - col0] = block
+            valid[cr0 - row0 : cr1 - row0, cc0 - col0 : cc1 - col0] = True
+
+        return LayerWindow(
+            layer=name,
+            cell_size_m=cell,
+            row0=row0,
+            col0=col0,
+            values=values,
+            valid=valid,
+        )
+
+    def vector_lines(
+        self, kind: str, center: Point, radius_m: float
+    ) -> list[LineString]:
+        """In-range polylines from a vector sidecar (`roads` / `rivers`).
+
+        Wraps the lazily built STRtree so callers outside this package never touch
+        `_road_lines`. Coordinates stay in the sidecars' own `(east, north)` order
+        — see `find_road_spawn` for why that convention exists.
+        """
+        from shapely.geometry import Point as ShPoint
+
+        tree, lines = self._vector_index(kind)
+        query = ShPoint(center.y, center.x).buffer(radius_m)
+        return [lines[int(i)] for i in tree.query(query)]
 
     # ---------------------------------------------------------- point queries
     def vegetation_at(self, point: Point) -> Vegetation:
@@ -410,25 +505,34 @@ class MapOverlay:
                 break
         return results
 
-    def _road_lines(self) -> tuple[STRtree, list[LineString]]:
-        """Road polylines + their spatial index, read from disk once.
+    def _vector_index(self, kind: str) -> tuple[STRtree, list[LineString]]:
+        """Polylines of one sidecar + their spatial index, read from disk once.
 
-        `roads.geojson` is megabytes of vertices, so the parse and the STRtree
-        build happen on first use and are cached on the instance for every
-        later `find_road_spawn` call.
+        `roads.geojson` is tens of megabytes of vertices, so the parse and the
+        STRtree build happen on first use and are cached on the instance for every
+        later `find_road_spawn` / `vector_lines` call.
         """
         from shapely.geometry import LineString
         from shapely.strtree import STRtree
 
-        if self._road_index is None:
-            data = json.loads((self.root / "roads.geojson").read_text())
+        cached = self._vector_indexes.get(kind)
+        if cached is None:
+            path = self.root / f"{kind}.geojson"
+            if not path.is_file():
+                raise FileNotFoundError(f"no {kind}.geojson in overlay at {self.root}")
+            data = json.loads(path.read_text())
             lines = [
                 LineString(feat["geometry"]["coordinates"])
                 for feat in data["features"]
                 if feat["geometry"]["type"] == "LineString"
             ]
-            self._road_index = (STRtree(lines), lines)
-        return self._road_index
+            cached = (STRtree(lines), lines)
+            self._vector_indexes[kind] = cached
+        return cached
+
+    def _road_lines(self) -> tuple[STRtree, list[LineString]]:
+        """Road polylines + their spatial index. See `_vector_index`."""
+        return self._vector_index("roads")
 
     def find_road_spawn(
         self,

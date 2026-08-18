@@ -21,6 +21,9 @@ dependencies = [
   "tenacity>=8.2",
   "elevation>=1.1",
   "matplotlib>=3.8",
+  # Imported directly by core/recon; matplotlib pulls it in transitively, but a
+  # dependency we import must be declared or the next lock could drop it.
+  "pillow>=10.1",
   "structlog>=24.1",
   "piper-tts>=1.4.2",
 ]

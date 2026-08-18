@@ -698,6 +698,33 @@ second channel:
   SHORAD threat belongs in the prose and in the AWACS calls, and on the map as
   a mark with no envelope.
 
+### Recon stills — imagery the briefing already claims
+
+A briefing that cites "this morning's Reaper feed" and then shows nothing is
+describing intel the player cannot look at. `core/recon` renders that feed as a
+wide-area radar frame and puts it on the briefing screen and in the README. Add
+one when the prose already claims imagery of the target; do not add one to
+justify new intel.
+
+- **It is a radar product, not a photograph.** The terrain data is 50 m posts, so
+  a frame tight enough to show trucks would be ~95 % invented. The frame is
+  25 km across and a vehicle is a fifth of a pixel — which is why the movers are
+  drawn as brackets *over* the image rather than as shapes *in* it.
+- **The caption states the resolution.** "The base is a 50 m radar mosaic and the
+  brackets are moving-target returns, not imagery — count them for the size of
+  the column, not for what is in it." That sentence is what stops the picture
+  over-claiming, and it is the same discipline as marking a ring "(est.)".
+- **The sensor and the frame time are part of the claim**, so they carry the same
+  source-and-age rule as any other intel line, and the timestamp must be
+  consistent with the mission clock rather than a nice-sounding number.
+- **Difficulty governs it like everything else.** Positions come from
+  `PlanOverlay.detections` and nothing else; at `veteran`/`ace` that returns
+  nothing and the mission publishes no still. A frame of empty ground is not a
+  substitute — silence is.
+- **Say where it is.** The in-game briefing is plain text, so it can only point
+  at the picture ("Hammer's radar cut is on the briefing screen"); the README
+  embeds it. Without that line the player may never look.
+
 ## Player airframe
 
 Default `dcs.planes.F_16C_50` — most flexible (CAP, CAS, SEAD, strike). Safe
@@ -746,6 +773,9 @@ Rules:
 1. Run `uv run dcs-mission-creator generate <slug>` (or
    `uv run python -m dcs_mission_creator.missions.<slug>`).
 2. Confirm both `.miz` and `README.md` were written; report the output folder.
+   If the mission publishes a recon still, confirm the PNG landed beside them and
+   that the README's relative link resolves — and *look at the image*, which is
+   the only way to tell whether it reads as a sensor product.
 3. **Don't** "validate" by opening the file — no DCS install on this box.
    For sanity, re-load via `Mission().load_file(path)` if the user wants it.
 4. List the knobs the user can tweak (theater, airframe, players, difficulty,

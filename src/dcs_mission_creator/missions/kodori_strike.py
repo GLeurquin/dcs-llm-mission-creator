@@ -1,25 +1,26 @@
 """Caucasus 'Kodori Strike' — F-16C mixed package strike on a Russian FOB.
 
 Player flies a USAF F-16C-50 out of Kutaisi as `Dodge`, lead element of a
-strike package hitting a Russian forward operating base in the Kodori valley
-northeast of Sukhumi-Babushara. `Weasel` (F-16C SEAD) rolls back an SA-6
-site placed on a ridge with LOS to the FOB. `Eagle` (F-15C high cover)
+strike package hitting a Russian forward operating base on the coastal plain
+at the Kodori delta, east-southeast of Sukhumi-Babushara. `Weasel` (F-16C SEAD)
+rolls back an SA-6 site on the rising ground inland, with LOS to the FOB.
+`Eagle` (F-15C high cover)
 holds an overlay-placed CAP station between Kutaisi and Gudauta, ready for
 the Russian Su-27 CAP launched on intrusion. `Magic` AWACS and `Texaco`
 tanker sit on overlay-placed race-tracks opposite the threat axis.
 
-All ground placements (FOB road snap, SA-6 ridge, SA-13 hilltop overwatch,
+All ground placements (FOB road snap, SA-6 site inland, SA-13 point defence,
 55G6 EWR) and the player's ingress corridor come from the `map_overlay`
 tactical-scene helpers — not hand-tuned cardinal offsets.
 
 Composition (difficulty: trained):
   - 2x Russian Su-27, Skill.High, R-27/R-77 class, launched on intrusion trigger.
   - Russian FOB: 2x T-72B, 4x BTR-80, 2x KAMAZ supply, 1x ZSU-23-4 Shilka,
-    snapped onto a road in the Kodori valley.
+    snapped onto the coast road at the Kodori delta.
   - SA-6 site: 1x Kub 1S91 radar + 2x Kub 2P25 launchers on prominent
     terrain with LOS to the FOB (Skill.High).
-  - 2x SA-13 (Strela-10M3) hilltop SHORAD covering the southern approach
-    to the FOB.
+  - 2x SA-13 (Strela-10M3) dug in around the FOB, covering the approach
+    the package flies in on.
   - 1x 55G6 EWR on prominent ground in the Russian rear, feeding GCI.
   - USA support: E-3A `Magic` + KC-135 `Texaco` on overlay-placed race-tracks
     behind Kutaisi. F-15C `Eagle` 2-ship on a CAP station forward toward Gudauta.
@@ -67,6 +68,13 @@ from dcs_mission_creator.core.placement import (
     load_scene,
     snap_units_clear,
 )
+from dcs_mission_creator.core.recon import (
+    Chrome,
+    Frame,
+    Mark,
+    ReconStill,
+    publish as recon,
+)
 from dcs_mission_creator.core.routing import ThreatRing
 from dcs_mission_creator.core.tasking import (
     apply_ai_difficulty,
@@ -78,6 +86,12 @@ from dcs_mission_creator.core.weather import Weather, Wind
 from dcs_mission_creator.map_overlay.placement import Placement
 from dcs_mission_creator.map_overlay.query import MapOverlay
 from dcs_mission_creator.map_overlay.scene import TacticalScene
+
+#: Elevation floor (m) for any air-defence placement in this AO. The threat
+#: layout sits on a coastal plain, where a "prominent" cell can be a beach —
+#: see `_spawn_red_sa6`. Low enough that the 26-49 m ground the mission actually
+#: uses still qualifies.
+_DRY_LAND_M = 20.0
 
 
 @dataclass
@@ -101,6 +115,8 @@ class KodoriStrike(MissionBuilder):
         super().__init__(players=players)
         self._terrain = Caucasus()
         self._voice = VoiceSynth()
+        #: Set by `_render_recon`; `readme` degrades to no figure without it.
+        self._still: ReconStill | None = None
 
     # -- in-game and README briefings ---------------------------------------
 
@@ -110,15 +126,17 @@ class KodoriStrike(MissionBuilder):
 ========================================================
 SITUATION
   Satellite imagery over three passes this week has
-  watched a Russian forward operating base grow in the
-  Kodori valley NE of Sukhumi-Babushara: armour, supply
-  trucks, dug-in guns. Yesterday's pass caught freshly
-  graded revetments on a ridge overlooking it, and an
-  ELINT cut the same night put an SA-6 fire-control
-  radar in that area — assess the site is now live.
-  SHORAD is reported on the hills covering the southern
-  approach. Early-warning radar in the Russian rear
-  hands the picture to the Su-27s at Gudauta, who launch
+  watched a Russian forward operating base grow on the
+  coast road at the Kodori delta, ESE of
+  Sukhumi-Babushara: armour, supply trucks, dug-in guns.
+  That road is the only supply artery into Abkhazia,
+  which is why the base is on it. Yesterday's pass
+  caught freshly graded revetments on the rising ground
+  inland, and an ELINT cut the same night put an SA-6
+  fire-control radar in that area — assess the site is
+  now live. SHORAD is reported dug in around the base
+  itself. Early-warning radar in the Russian rear hands
+  the picture to the Su-27s at Gudauta, who launch
   against anything crossing the Inguri.
 
 MISSION (Dodge — F-16C-50, Kutaisi)
@@ -140,11 +158,11 @@ INTELLIGENCE
         missiles, experienced crews. Early-warning radar
         in the rear will see you and vector them.
   SAM : ELINT places an SA-6 fire-control radar on the
-        ridge overlooking the FOB — that is Weasel's
+        rising ground about 10 km inland of the base,
+        looking straight down onto it — that is Weasel's
         problem. Imagery also shows tracked IR launchers
-        on the hills on the southern approach. Stay above
-        4500 m AGL in the target box until Weasel calls
-        the SA-6 cold.
+        dug in around the base. Stay above 4500 m AGL in
+        the target box until Weasel calls the SA-6 cold.
   AAA : Guns inside the FOB perimeter, seen on every
         imagery pass this week.
 
@@ -156,7 +174,8 @@ ROE / FRAGS
 
 NAV
   Bullseye (own side): {bx:.0f}, {by:.0f} (DCS world m)
-  AO center         : Kodori valley, ~22 km NE Sukhumi.
+  AO center         : coast road at the Kodori delta,
+                      ~8 km ESE Sukhumi-Babushara.
   PUSH waypoint     : 18 km NW of Kutaisi.
   Ingress           : terrain-masked corridor, routed to keep
                       ridgelines between you and the reported
@@ -165,12 +184,27 @@ NAV
                       loaded as pre-planned threats — select
                       PRE on the HSD for the rings. Estimates,
                       same as the map, no better than the cut.
+  Imagery           : yesterday's satellite pass over the base
+                      is on the briefing screen. Wide-area
+                      mosaic, 50 m posts, so the bracket is the
+                      target area and not a picture of what is
+                      in it. The sea is the black along the
+                      bottom; the coast road runs through the
+                      bracket.
 
 FREQUENCIES
   Magic AWACS   : 251.000 AM
   Texaco tanker : 252.000 AM, TACAN 10Y
   Kutaisi tower : per kneeboard
 """
+
+    def _recon_figure_md(self) -> str:
+        """The radar-still figure block, or nothing if no still was published.
+
+        Empty rather than raising, so `readme()` still works on a builder whose
+        `_assemble` has not run and at difficulties that withhold the imagery.
+        """
+        return "" if self._still is None else self._still.markdown()
 
     def readme(self) -> str:
         bx, by = self._terrain.bullseye_blue["x"], self._terrain.bullseye_blue["y"]
@@ -181,19 +215,20 @@ FREQUENCIES
 **Player aircraft:** F-16C-50 (`Dodge`), Kutaisi, hot ramp
 **Players:** {self.players} coop slot(s)
 **Difficulty:** trained — experienced Su-27 pair with GCI, one radar SAM plus
-hilltop SHORAD over the target, dedicated SEAD element, AWACS and tanker
+SHORAD dug in over the target, dedicated SEAD element, AWACS and tanker
 **Expected sortie length:** ~75 minutes
 
 ## Situation
 
 Satellite imagery over three passes this week has watched a Russian forward
-operating base grow in the Kodori valley northeast of Sukhumi-Babushara:
-armour, supply trucks, dug-in guns. Yesterday's pass caught freshly graded
-revetments on a ridge overlooking it, and an ELINT cut the same night put an
-SA-6 fire-control radar in that area — the site is assessed live. SHORAD is
-reported on the hills covering the southern approach. Early-warning radar in
-the Russian rear hands the picture to the Su-27s at Gudauta, who launch
-against any USAF package crossing the Inguri.
+operating base grow on the coastal plain at the Kodori delta, east-southeast of
+Sukhumi-Babushara: armour, supply trucks, dug-in guns. It sits on the coast
+road, which is the only supply artery into Abkhazia and the reason the base is
+where it is. Yesterday's pass caught freshly graded revetments on the rising
+ground inland, and an ELINT cut the same night put an SA-6 fire-control radar in
+that area — the site is assessed live. SHORAD is reported dug in around the base
+itself. Early-warning radar in the Russian rear hands the picture to the Su-27s
+at Gudauta, who launch against any USAF package crossing the Inguri.
 
 ## Mission
 
@@ -216,7 +251,7 @@ Kutaisi.
 75-minute sortie is well past F-16C internal endurance, so the tanker is
 mandatory — top off pre-strike on the way in, again post-strike if needed.
 
-Terrain, not a template, decides where the FOB, the SAM ridge and your
+Terrain, not a template, decides where the FOB, the SAM site and your
 corridor sit — they are re-derived every time the mission is generated, so
 brief off this sheet rather than off a previous sortie.
 
@@ -224,16 +259,20 @@ brief off this sheet rather than off a previous sortie.
 
 Everything below is imagery and ELINT from the last three days. The SAM and
 SHORAD positions are assessed to within a few kilometres, and the map rings
-are drawn as estimates for that reason.
+are drawn as estimates for that reason. The base itself is the one thing that
+has been watched long enough to be pinned, and the frame below is yesterday's
+pass over it.
+
+{self._recon_figure_md()}
 
 - **Air:** Gudauta holds a Su-27 pair ready — current missiles, experienced
   crews — launched against any package that crosses the Inguri and vectored by
   early-warning radar in the Russian rear.
-- **SAM:** the ELINT cut puts an SA-6 fire-control radar on the ridge
-  overlooking the FOB. Kill the radar and the launchers on that ridge are
-  blind. Imagery also shows tracked IR launchers on the hills on the southern
-  approach — stay above 4500 m AGL in the target box until `Weasel` calls the
-  SA-6 cold.
+- **SAM:** the ELINT cut puts an SA-6 fire-control radar on the rising ground
+  about 10 km inland of the base, with a clean look down onto it. Kill the radar
+  and the launchers up there are blind. Imagery also shows tracked IR launchers
+  dug in around the base — stay above 4500 m AGL in the target box until
+  `Weasel` calls the SA-6 cold.
 - **AAA:** guns inside the FOB perimeter, on every imagery pass this week.
 - **EWR:** early-warning radar on commanding ground in the Russian rear,
   feeding the Gudauta GCI.
@@ -248,7 +287,8 @@ are drawn as estimates for that reason.
 ## Navigation
 
 - Bullseye (own side): `{bx:.0f}, {by:.0f}` (DCS world m)
-- AO center: ~22 km NE of Sukhumi-Babushara, in the Kodori valley.
+- AO center: ~8 km ESE of Sukhumi-Babushara, on the coast road across the
+  Kodori delta. The supply road is the reason the base is there.
 - PUSH waypoint: 18 km NW of Kutaisi.
 - Ingress: terrain-masked corridor, routed to keep ridgelines between you and
   the reported radar positions and the Gudauta approach.
@@ -309,9 +349,14 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
         self._add_end_triggers(m, fob=fob, sa6=sa6, weasel=weasel)
         self._conceal_red(russia)
+        # One overlay for every reveal channel: the F10 plan, the cockpit
+        # cartridge and the recon still all have to make the same claim, and the
+        # difficulty policy that decides how much they claim lives in here.
+        plan = PlanOverlay(m, self.difficulty)
         briefed_threats = self._draw_plan(
             m,
             scene,
+            plan=plan,
             fob=fob,
             sa6_pos=sa6_pos,
             sa13_positions=sa13_positions,
@@ -322,6 +367,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             tanker_track=tanker_track,
         )
         self._load_hsd_threats(m, scene, briefed_threats)
+        self._render_recon(m, scene, plan=plan, fob=fob)
         self._add_briefing(m)
         return scene.overlay.overlay
 
@@ -352,10 +398,22 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
     def _setup_airports(self, m: Mission) -> _Scene:
         """Claim Kutaisi for blue, Sukhumi/Gudauta for red, derive AO + overlay.
 
-        AO seed is the upper Kodori valley NE of Sukhumi. The seed itself often
-        lands in dense canopy, biasing every downstream search forest-heavy;
-        we snap it to the nearest road-adjacent clearing so the FOB, SA-6 and
-        SA-13 placements have a chance to actually land in the open.
+        The AO seed is the coastal plain at the Kodori delta, and it has to be:
+        this mission wants a road-served FOB *and* prominent ground for the SA-6
+        and the SHORAD, and in this overlay those two only coexist where the
+        plain runs into the foothills.
+
+        The seed used to be the upper Kodori valley, 22 km northeast — where the
+        overlay has no road at all, because its OSM filter keeps only the major
+        network and the only major road in Abkhazia is the coastal highway.
+        `find_clear_spot` then escalated its radius (documented behaviour, four
+        attempts out to `radius_m * 4`) and put the AO **19.3 km** from the seed,
+        on this same coastal plain — while every briefing string still read
+        "Kodori valley, ~22 km NE". Measured, the old seed had one non-forest
+        cell within 10 km and zero road-served cells within 20 km, so the valley
+        could not have held the FOB, let alone the four air-defence groups.
+        Seeding where the mission can actually be built keeps the snap to 1.4 km
+        and makes the briefing's stated position true.
         """
         t = self._terrain
         kutaisi = t.airports["Kutaisi"]
@@ -366,7 +424,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         senaki.set_blue()  # divert field
         sukhumi.set_red()
         gudauta.set_red()
-        ao_seed = offset(sukhumi.position, east_m=22_000, north_m=12_000)
+        ao_seed = offset(sukhumi.position, east_m=9_000, north_m=-2_000)
         overlay = load_scene("caucasus")
         ao_center = find_clear_spot(
             overlay.overlay,
@@ -384,7 +442,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
     # -- red side -----------------------------------------------------------
 
     def _spawn_red_ground(self, m: Mission, russia: Country, scene: _Scene):
-        """FOB platoon + SA-6 ridge + SA-13 hilltop overwatch + rear EWR."""
+        """FOB platoon + SA-6 inland + SA-13 point defence + rear EWR."""
         fob = self._spawn_red_fob(m, russia, scene)
         sa6, sa6_pos = self._spawn_red_sa6(m, russia, scene)
         sa13_positions = self._spawn_red_shorad(m, russia, scene)
@@ -436,15 +494,24 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         return fob
 
     def _spawn_red_sa6(self, m: Mission, russia: Country, scene: _Scene):
-        """SA-6 (Kub) site on a clear ridge with LOS to the FOB; threats from south.
+        """SA-6 (Kub) site on clear rising ground with LOS to the FOB.
 
         Threats come from the south (Kutaisi). The SAM sits in a ±90° arc
         toward that axis, on prominent ground with LOS to the FOB, and
         explicitly out of light/dense forest (+ a forest edge buffer) so the
         radar isn't trying to track through canopy. Envelope and prominence
-        are relaxed in stages — Kodori is high mountain terrain so the first
-        attempt often fails. Final fallback delegates to `find_clear_spot` so we
-        never settle on a deep-canopy cell.
+        are relaxed in stages — the coastal plain is flat and the rising ground
+        is inland, so a tight envelope can come back empty. Final fallback
+        delegates to `find_clear_spot` so we never settle on a deep-canopy cell.
+
+        `min_elevation_m` is what keeps the site out of the surf, and it is not
+        redundant with the prominence filter — it is the fix for the way that
+        filter fails on a coast. `min_relative_height_m` is height above the
+        *local mean* over a 2 km radius, and beside the sea that mean is dragged
+        below zero (the water is −300 m a few kilometres out), so a beach cell at
+        −4 m clears a 20 m prominence test comfortably. Before the floor went in,
+        this search put the whole Kub site at −4 m and a launcher at −7 m: under
+        water, and passing every other filter.
         """
         ao = scene.ao_center
         attempts = [
@@ -459,6 +526,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                 not_in=_NO_FOREST,
                 forest_buffer_m=_FOREST_BUFFER_M,
                 not_in_built_up=True,
+                min_elevation_m=_DRY_LAND_M,
                 min_relative_height_m=prominence if prominence > 0 else None,
                 relative_height_radius_m=2_000.0,
                 in_sector_from=(ao, 90.0, 270.0),
@@ -483,6 +551,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                     not_in=_NO_FOREST,
                     forest_buffer_m=_FOREST_BUFFER_M,
                     not_in_built_up=True,
+                    min_elevation_m=_DRY_LAND_M,
                     min_distance_to=((ao, 1_500.0),),
                 ),
             )
@@ -495,34 +564,53 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
     def _spawn_red_shorad(
         self, m: Mission, russia: Country, scene: _Scene
     ) -> list[Point]:
-        """2x SA-13 on clear hilltops covering the southern approach to the FOB.
+        """2x SA-13 dug in around the FOB, covering the approach to it.
 
-        Each spot must be on prominent ground with LOS to the approach axis
-        and explicitly out of forest (with edge buffer) — Strela-10M3 optics
-        and seeker won't see through canopy. Two-pass search; relaxes
-        prominence on the second pass. Per-shooter fallback delegates to
-        `find_clear_spot` so a missed hilltop pick never drops the launcher into
-        canopy.
+        Each spot must be on prominent ground with LOS out along the approach
+        the package flies in on, and explicitly out of forest (with edge buffer)
+        — Strela-10M3 optics and seeker won't see through canopy. Two-pass
+        search; relaxes prominence on the second pass. Per-shooter fallback
+        delegates to `find_clear_spot` so a missed hilltop pick never drops the
+        launcher into canopy.
+
+        Sited as point defence **around what they defend**, biased to the side
+        the package comes in on, which is the arrangement a coastal supply node
+        actually gets. The old code searched around a hard-coded "6 km east,
+        15 km south" anchor for hilltops with LOS to it; on a target this close
+        to the shore that anchor is 100 m deep in the Black Sea, so both
+        prominence passes came back empty and both launchers were placed by the
+        canopy fallback — the "hilltops covering the approach" in the briefing
+        were two cells picked by a last-resort spiral.
+
+        So: search around the AO, require line of sight to the AO itself (a
+        launcher has to see what it is shooting over), and bias the sector
+        toward the ingress bearing, which is derived from the blue field rather
+        than assumed southerly. High ground is a *preference* — the first pass
+        asks for prominence and, on this coast, is expected to fail. The
+        elevation floor is doing the same job as in `_spawn_red_sa6`.
         """
         t = self._terrain
-        approach_anchor = offset(scene.ao_center, east_m=6_000, north_m=-15_000)
-        anchors = [approach_anchor, scene.ao_center]
+        ao = scene.ao_center
+        ingress_deg = ao.heading_between_point(scene.kutaisi.position)
+        sector = ((ingress_deg - 90.0) % 360.0, (ingress_deg + 90.0) % 360.0)
         placed: list[Point] = []
-        for i in range(2):
-            anchor = anchors[i % len(anchors)]
-            for prominence in (40.0, 20.0):
+        for _ in range(2):
+            for prominence in (20.0, None):
                 require = Placement(
                     max_slope_deg=20,
                     not_in=_NO_FOREST,
                     forest_buffer_m=_FOREST_BUFFER_M,
                     not_in_built_up=True,
+                    min_elevation_m=_DRY_LAND_M,
                     min_relative_height_m=prominence,
                     relative_height_radius_m=2_000.0,
-                    line_of_sight_to=(anchor,),
-                    min_distance_to=tuple((p, 2_000.0) for p in placed),
+                    in_sector_from=(ao, *sector),
+                    line_of_sight_to=(ao,),
+                    min_distance_to=((ao, 1_000.0),)
+                    + tuple((p, 2_000.0) for p in placed),
                 )
                 spots = scene.overlay.overlay.find_placement(
-                    anchor, radius_m=6_000.0, require=require
+                    scene.ao_center, radius_m=6_000.0, require=require
                 )
                 if spots:
                     placed.append(spots[0])
@@ -531,7 +619,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                 placed.append(
                     find_clear_spot(
                         scene.overlay.overlay,
-                        anchor,
+                        scene.ao_center,
                         t,
                         radius_m=6_000.0,
                         require=Placement(
@@ -539,6 +627,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                             not_in=_NO_FOREST,
                             forest_buffer_m=_FOREST_BUFFER_M,
                             not_in_built_up=True,
+                            min_elevation_m=_DRY_LAND_M,
                             min_distance_to=tuple((p, 2_000.0) for p in placed),
                         ),
                     )
@@ -884,7 +973,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             name = "PUSH" if i == 0 else f"INGRESS-{i}"
             player.add_waypoint(pt, altitude=6500, speed=400, name=name)
         # The corridor ends on the FOB itself: a ground target, so its
-        # steerpoint sits on the valley floor rather than at ingress altitude.
+        # steerpoint sits on the ground rather than at ingress altitude.
         waypoints.add_ground_waypoint(
             player, corridor[-1], overlay=scene.overlay.overlay, speed=400, name="TGT"
         )
@@ -909,6 +998,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         m: Mission,
         scene: _Scene,
         *,
+        plan: PlanOverlay,
         fob,
         sa6_pos: Point,
         sa13_positions: list[Point],
@@ -924,7 +1014,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         Weasel's cockpit shows the same claim as the map. The FOB and the EWR
         stay map-only — neither is a missile envelope to stay outside of.
         """
-        plan = PlanOverlay(m, self.difficulty)
         plan.objective(scene.ao_center, "AO — FOB Kodori", radius=6_000.0)
         plan.route(corridor, "Dodge ingress")
         plan.orbit(*escort_track, "Eagle CAP")
@@ -951,6 +1040,84 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             )
         plan.threat(ewr_pos, radius=4_000.0, label="EWR", icon=StandardIcon.SearchRadar)
         return hsd
+
+    # -- the imagery the briefing cites --------------------------------------
+
+    def _render_recon(
+        self, m: Mission, scene: _Scene, *, plan: PlanOverlay, fob: VehicleGroup
+    ) -> None:
+        """Ship the wide-area cut of the base the Situation paragraph already claims.
+
+        "Satellite imagery over three passes this week has watched a Russian
+        forward operating base grow" was prose about a product nobody could look
+        at. This is the product: the mosaic off yesterday's pass, the one
+        collection in this briefing that is imagery rather than an ELINT cut.
+
+        A target graphic, not a moving-target cut — a supply base sits still, so
+        there is no track to draw and no route to run across the frame, and it is
+        published north-up the way a target graphic is. The coastline does the
+        work a grid would: the base is astride the coast road, and both the
+        shoreline and the road are in the frame, so a reader can see what the
+        bracket is on.
+
+        Only the base is marked, and the two things that are deliberately not:
+        the Gainful inland, because it is an ELINT cut and not imagery at all,
+        and the IR launchers dug in around the base, which the earlier passes
+        found but which are a fifth of a pixel here. Both are already an
+        estimated ring on the map and a point in the cartridge; a bracket here
+        would be a third, better-looking guess at the same site.
+
+        The registration bias is 200 m rather than the 1.2 km default, for the
+        reason `PlanOverlay.detections` documents: this frame is a coastline, a
+        road net and villages, so the product is registered against them. At the
+        default the bracket would sit a kilometre off the road the base is on, in
+        a picture that draws the road.
+        """
+        aim = plan.detections([scene.ao_center], bias_m=200.0, jitter_m=60.0)
+        if not aim:
+            return
+
+        marks = [
+            Mark(
+                x=aim[0].x,
+                y=aim[0].y,
+                kind="group",
+                radius_m=900.0,
+                # No vehicle count: at 50 m posts this frame cannot resolve one
+                # truck from the next, and the three passes that *did* count them
+                # are a different collection. `idlib_gauntlet` labels a count
+                # because counting movers is what an MTI product does.
+                text="FOB  STORES / VEH PARK",
+            )
+        ]
+        self._still = recon.sensor_still(
+            m,
+            Frame(center=scene.ao_center),
+            marks,
+            Chrome(
+                platform="SAR SATELLITE  X-BAND",
+                mode="STRIPMAP  5 LOOK",
+                # Yesterday's pass, which is what the briefing cites; a dawn
+                # crossing, as a sun-synchronous orbit gives.
+                taken_at="0612L  19 MAY 26",
+                classification="SECRET // REL FVEY",
+                footer="KODORI DELTA  COAST RD",
+                caption=(
+                    "Yesterday's pass over the Kodori delta. This is the wide-area "
+                    "mosaic — 50 m posts — so the bracket is the target area and "
+                    "not a picture of what is parked in it; the revetment call came "
+                    "off a spot collect on the same pass. Black is water: the sea "
+                    "across the bottom and down the left, the delta channel running "
+                    "to it. The coast road is the thin dark line through the "
+                    "bracket. Neither the launchers dug in around the base nor the "
+                    "graded ground inland resolves at this spacing, which is why "
+                    "the rings on your map are estimates."
+                ),
+            ),
+            overlay=scene.overlay.overlay,
+            slug=self.name,
+            label="fob",
+        )
 
     def _load_hsd_threats(
         self, m: Mission, scene: _Scene, points: list[dtc.ThreatPoint]
@@ -998,12 +1165,12 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         """Wire the in-game description, side tasks, and sortie name."""
         m.set_description_text(self._in_game_briefing())
         m.set_description_bluetask_text(
-            "Lead the strike on the Russian FOB in the Kodori valley. Weasel "
+            "Lead the strike on the Russian FOB at the Kodori delta. Weasel "
             "rolls back the SA-6 site; Eagle holds a CAP station between "
             "Kutaisi and Gudauta and handles the Su-27 intercept. RTB Kutaisi."
         )
         m.set_description_redtask_text(
-            "Hold the FOB in the Kodori valley. SA-6 / SA-13 cover the target "
+            "Hold the FOB at the Kodori delta. SA-6 / SA-13 cover the target "
             "box; Su-27s out of Gudauta launch against any USAF package "
             "crossing the Inguri."
         )

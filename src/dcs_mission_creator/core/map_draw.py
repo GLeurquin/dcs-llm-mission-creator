@@ -170,6 +170,63 @@ class PlanOverlay:
         # veteran / ace: intentionally no per-unit reveal.
         return None
 
+    def detections(
+        self,
+        positions: Sequence[Point],
+        *,
+        bias_m: float = 1_200.0,
+        jitter_m: float = 120.0,
+    ) -> list[Point]:
+        """Positions a **sensor product** may show, per difficulty. Draws nothing.
+
+        A rendered recon still (`core/recon`) is a third channel of enemy reveal
+        alongside the F10 plan and the HSD cartridge, so it has to answer to the
+        same policy — otherwise a mission could publish a photograph of ground
+        truth at `ace` while the map deliberately showed nothing. This method is
+        that gate: it returns where the product is allowed to put its detections,
+        and drawing is entirely the caller's business.
+
+        recruit  → per-return jitter only, essentially truth.
+        trained  → **one** registration bias shared by the whole cluster, plus
+                   per-return jitter.
+        veteran / ace → empty, and a mission with nothing to plot then publishes
+                   no still at all — the same call `threat_area` makes.
+
+        The shared bias is the part worth keeping. Offsetting each vehicle
+        independently by a kilometre scatters an eleven-vehicle column over four
+        and the picture stops reading as a column at all. A real product's error
+        is exactly this shape: a geolocation registration error common to the
+        frame, plus a small per-detection accuracy. So the physically honest model
+        is also the one that preserves the formation.
+
+        **`bias_m` is a property of the frame, not of the difficulty**, and the
+        1.2 km default is the value for a frame with nothing in it to register
+        against — which is what `idlib_gauntlet` renders, its ground measuring no
+        road, no water and no tree. Cut it hard as soon as the picture draws
+        landmarks: an exploitation system ties the product to the road net it can
+        see, and what survives is the sensor's own cross-range accuracy, a couple
+        of hundred metres. The default over `coastal_cover`'s valley put the
+        column 1.0–1.2 km from any road in a frame that paints the roads, so the
+        still contradicted its own footer, and a mover sitting a field away from
+        the highway reads as a broken product rather than as an estimate. The
+        gate above is the difficulty policy; this is calibration.
+        """
+        if not positions:
+            return []
+        if self._d in (Difficulty.VETERAN, Difficulty.ACE):
+            return []
+        if self._d == Difficulty.TRAINED:
+            bearing = random.uniform(0.0, 360.0)
+            shifted = [p.point_from_heading(bearing, bias_m) for p in positions]
+        else:
+            shifted = list(positions)
+        return [
+            p.point_from_heading(
+                random.uniform(0.0, 360.0), random.uniform(0.0, jitter_m)
+            )
+            for p in shifted
+        ]
+
     def mobile_threat(
         self, center: Point, label: str, icon: Optional[StandardIcon] = None
     ) -> None:

@@ -56,6 +56,14 @@ from dcs_mission_creator.core.placement import (
     load_scene,
     sam_site_on_ridge,
 )
+from dcs_mission_creator.core.recon import (
+    Chrome,
+    Frame,
+    Mark,
+    ReconStill,
+    publish as recon,
+    road_column,
+)
 from dcs_mission_creator.core.routing import ThreatRing
 from dcs_mission_creator.core.tasking import (
     apply_ai_difficulty,
@@ -89,6 +97,8 @@ class CoastalCover(MissionBuilder):
         super().__init__(players=players)
         self._terrain = Caucasus()
         self._voice = VoiceSynth()
+        #: Set by `_render_recon`; `readme` degrades to no figure without it.
+        self._still: ReconStill | None = None
 
     # -- in-game and README briefings ---------------------------------------
 
@@ -147,11 +157,26 @@ NAV
                       pre-planned threat — select PRE on the
                       HSD for the ring. It is where the feed
                       last had the launcher, not a fix.
+  Imagery           : the Reaper's radar cut of the column is
+                      on the briefing screen, shot 25 minutes
+                      before push. Wide-area search, 50 m
+                      posts, so the brackets are moving-target
+                      returns and not pictures of vehicles —
+                      read it for how long the column is and
+                      which road it is on.
 
 FREQUENCIES
   Magic AWACS   : 251.000 AM
   Batumi tower  : per kneeboard
 """
+
+    def _recon_figure_md(self) -> str:
+        """The radar-still figure block, or nothing if no still was published.
+
+        Empty rather than raising, so `readme()` still works on a builder whose
+        `_assemble` has not run and at difficulties that withhold the imagery.
+        """
+        return "" if self._still is None else self._still.markdown()
 
     def readme(self) -> str:
         bx, by = self._terrain.bullseye_blue["x"], self._terrain.bullseye_blue["y"]
@@ -191,6 +216,16 @@ Russian fighters before they get a shot on the strike.
 No tanker — F-16C internal fuel covers the sortie with a ~10 min margin.
 
 ## Intelligence
+
+The ground picture below is one Reaper that has been over the Inguri valley
+since first light — the column, the launcher and the hill guns are all off that
+feed, and the column is located to the road it is driving on. The hill positions
+are good to a kilometre or two, which is why the map rings are marked as
+estimates. The air and radar picture is not from the feed at all: that is
+overnight signals work, and the reserve is partner-force reporting nobody has
+confirmed.
+
+{self._recon_figure_md()}
 
 - **Air:** Sukhumi-Babushara holds a MiG-29S pair on alert, current-generation
   missiles, flown by an experienced crew. They will come once we are committed
@@ -270,9 +305,14 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         if self._reserve is not None:
             self._add_reserve_trigger(m, convoy=convoy, reserve=self._reserve)
         self._conceal_red(russia)
+        # One overlay for every reveal channel: the F10 plan, the cockpit
+        # cartridge and the recon still all have to make the same claim, and the
+        # difficulty policy that decides how much they claim lives in here.
+        plan = PlanOverlay(m, self.difficulty)
         briefed_threats = self._draw_plan(
             m,
             scene,
+            plan=plan,
             convoy=convoy,
             sa13_pos=sa13_pos,
             ewr_positions=ewr_positions,
@@ -281,6 +321,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             awacs_track=awacs_track,
         )
         self._load_hsd_threats(m, scene, briefed_threats)
+        self._render_recon(m, scene, plan=plan, convoy=convoy)
         self._add_briefing(m)
         return scene.overlay.overlay
 
@@ -768,6 +809,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         m: Mission,
         scene: _Scene,
         *,
+        plan: PlanOverlay,
         convoy,
         sa13_pos: Point,
         ewr_positions: list[Point],
@@ -781,7 +823,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         escort's cockpit shows the same claim as the map. The column and the
         EWRs stay map-only — neither is a missile envelope to stay outside of.
         """
-        plan = PlanOverlay(m, self.difficulty)
         plan.objective(scene.ao_center, "AO — convoy axis", radius=6_000.0)
         plan.route(corridor, "Dodge ingress")
         plan.orbit(*cap_track, "Eagle CAP")
@@ -807,6 +848,100 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
     ) -> None:
         """Load the briefed SHORAD as a pre-planned threat on the escort's cartridge."""
         dtc.arm_hsd_threats(m, points, overlay=scene.overlay.overlay)
+
+    # -- the imagery the briefing cites --------------------------------------
+
+    def _render_recon(
+        self, m: Mission, scene: _Scene, *, plan: PlanOverlay, convoy: VehicleGroup
+    ) -> None:
+        """Ship the radar cut of the column the Situation paragraph already claims.
+
+        Every intelligence line in this briefing is sourced to one Reaper that
+        has been over the Inguri valley since first light — the column forming
+        up, the launcher going onto high ground, the guns on the hills. This is
+        the one thing that feed can actually be shown doing: a wide-area cut of
+        the column on the valley road, stamped shortly before push, so the
+        picture is the column where the mission puts it rather than where it was
+        five hours ago.
+
+        `plan.detections` is the reveal gate, so the still cannot out-claim the
+        F10 map, and at `veteran`/`ace` it returns nothing and no frame is
+        published. Only the column is marked. The launcher on the high ground
+        and the dug-in guns are a ring and an icon on the map instead: at 50 m
+        posts a gun pit is a fifth of a pixel, and bracketing one here would be
+        a third, better-looking estimate of a site the map and the cartridge
+        already place — three claims about one launcher, disagreeing.
+
+        Returns are laid along the real road by `road_column` rather than read
+        off the group: pydcs stacks a platoon abeam its heading and DCS only
+        strings it out along the road once the mission runs, so the build-time
+        positions are a dash at right angles to the road the briefing names.
+
+        The 1.2 km registration bias `detections` defaults to is cut to 200 m
+        because this frame paints roads and braided river to register against —
+        see that method on why the number is calibration and not a difficulty
+        concession. Measured here, the default put the column 1.0–1.2 km from
+        any road in a picture that draws the roads, which contradicted the
+        still's own footer.
+        """
+        route = self._convoy_route
+        column = road_column(
+            scene.overlay.overlay,
+            route.waypoints[0],
+            route.waypoints[-1],
+            len(convoy.units),
+        )
+        returns = plan.detections(column, bias_m=200.0, jitter_m=60.0)
+        if not returns:
+            return
+
+        # `road_column` walks away from the spawn point, so the last return is
+        # the lead vehicle. Track is measured off the column itself rather than
+        # off the route's end-to-end bearing: the valley road bends, and the
+        # tick has to point the way the picture shows the road running.
+        tail, lead = returns[0], returns[-1]
+        axis = tail.heading_between_point(lead)
+        marks = [Mark(x=p.x, y=p.y) for p in returns]
+        marks.append(
+            Mark(
+                x=tail.midpoint(lead).x,
+                y=tail.midpoint(lead).y,
+                kind="group",
+                radius_m=max(tail.distance_to_point(lead) * 0.6, 700.0),
+                track_deg=axis,
+                text=f"{len(returns)} DET  TRK {axis:03.0f}  40 KM/H",
+            )
+        )
+        self._still = recon.sensor_still(
+            m,
+            # Centred on the column rather than on the route: the frame is
+            # 25.6 km wide against an 18 km march, so centring the route would
+            # put the column itself out at the edge. A quarter turn off the
+            # column axis lays the road across the long dimension.
+            Frame.along_axis(tail, lead, heading_offset_deg=-90.0),
+            marks,
+            Chrome(
+                platform="MQ-9 / AN-APY-8 LYNX II",
+                mode="WAS-MTI  5 LOOK",
+                # 25 minutes before the mission clock (`_set_time`) — the last
+                # cut off a feed that has been up since first light, which is
+                # why the column is still where the picture has it.
+                taken_at="0935L  15 MAY 26",
+                classification="SECRET // REL FVEY",
+                footer=f"{len(returns)} DET  INGURI VALLEY RD",
+                caption=(
+                    "The Reaper's radar cut of the valley road, 25 minutes before "
+                    "push. The base is a 50 m radar mosaic and the brackets are "
+                    "moving-target returns, not imagery — count them for how long "
+                    "the column is and which road it is on, not for what is in it. "
+                    "The gun vehicle riding with the column is one of these "
+                    "returns and cannot be told from the rest."
+                ),
+            ),
+            overlay=scene.overlay.overlay,
+            slug=self.name,
+            label="convoy",
+        )
 
     # -- triggers and briefing ----------------------------------------------
 

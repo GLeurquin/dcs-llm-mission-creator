@@ -58,7 +58,12 @@ from dcs_mission_creator.map_overlay.coords import (
     rendered_xz_bounds,
     terrain_bbox_latlon,
 )
-from dcs_mission_creator.map_overlay.manifest import Manifest, OsmFilters, XZBounds
+from dcs_mission_creator.map_overlay.manifest import (
+    Manifest,
+    OsmFilters,
+    XZBounds,
+    osm_filters_for,
+)
 from dcs_mission_creator.map_overlay.query import build_cache_root, overlay_root
 
 _LOGGER = structlog.get_logger(__name__)
@@ -542,13 +547,32 @@ def _save_geojson(
 def _load_or_create_manifest(
     out_dir: Path, theater_slug: str, terrain: Terrain
 ) -> Manifest:
+    """Load the theater's manifest, reconciled against the current filter policy.
+
+    The filters decide which OSM ways get rasterised, and they are read back off
+    the manifest rather than from the defaults — so a manifest written before a
+    policy change would silently rebuild with the *old* selection and the rebuild
+    would be a no-op. Overwrite them from `osm_filters_for` instead, and say so:
+    the layers on disk no longer match the ones the new filters describe until
+    this build finishes.
+    """
     manifest_path = out_dir / "manifest.json"
-    if manifest_path.exists():
-        return Manifest.read(manifest_path)
-    return Manifest.default_for(
-        theater_slug,
-        rendered_xz_bounds(theater_slug, terrain),
-    )
+    if not manifest_path.exists():
+        return Manifest.default_for(
+            theater_slug,
+            rendered_xz_bounds(theater_slug, terrain),
+        )
+    manifest = Manifest.read(manifest_path)
+    policy = osm_filters_for(theater_slug)
+    if manifest.osm_filters != policy:
+        _LOGGER.info(
+            "osm.filters_changed",
+            theater=theater_slug,
+            was=manifest.osm_filters.road_classes_keep,
+            now=policy.road_classes_keep,
+        )
+        manifest.osm_filters = policy
+    return manifest
 
 
 def _init_grid(bounds: XZBounds, cfg: _OsmBuild) -> _Grid:

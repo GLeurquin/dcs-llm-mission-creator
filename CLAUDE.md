@@ -348,6 +348,103 @@ markers. The F/A-18C has a cartridge too, but its threats are `MEZ_THRTS` on the
 SA page — a second table, not a parameter — and no other module in DCS draws a
 pre-planned ring.
 
+## Recon-still helper (project-owned)
+
+[`recon`](src/dcs_mission_creator/core/recon/) renders the imagery a briefing
+claims. `idlib_gauntlet`'s Intelligence section always said the picture came off
+"this morning's Reaper feed" and that the feed counted the SHORAD in the column —
+prose describing imagery nobody could look at. This produces the imagery, from
+the overlay rasters plus the positions of the groups the mission spawned, and
+ships it twice: as a `pictureFileNameB` slide inside the `.miz` (the briefing
+screen) and as a PNG beside the README, which embeds it.
+
+```python
+from dcs_mission_creator.core.recon import Chrome, Frame, Mark, road_column
+from dcs_mission_creator.core.recon import publish as recon
+
+column = road_column(overlay, scene.convoy_origin, scene.convoy_destination, 11)
+returns = plan.detections(column)          # the reveal gate; [] at veteran/ace
+if returns:
+    self._still = recon.sensor_still(
+        m,
+        Frame.along_axis(returns[0], returns[-1], heading_offset_deg=-90.0),
+        [Mark(x=p.x, y=p.y) for p in returns] + [group_mark],
+        Chrome(platform="MQ-9 / AN-APY-8 LYNX II", mode="WAS-MTI  5 LOOK",
+               taken_at="0540L  12 SEP 26", caption="..."),
+        overlay=scene.overlay.overlay, slug=self.name, label="convoy",
+    )
+```
+
+**It is a radar product, not a photograph, and that is forced by the data.**
+Measured at the Idlib route midpoint, a 6 km frame holds *no roads, no water and
+no trees*, with elevation spanning 271–319 m in whole metres across 49 distinct
+values — ~95 % of an EO/IR frame there would be invention, and hillshading
+1 m-quantised elevation at ~1.2° slope gives contour terracing, not terrain. The
+honest floor is **two output pixels per 50 m post**, so the frame is
+25.6 × 19.2 km at 1024 × 768 (25 m/px), rotated so the route runs across it. At
+that scale a vehicle is a fifth of a pixel, which is *why* detections are
+symbology drawn after the sensor chain rather than hot blobs in it: an open
+bracket over a coarse base claims exactly what the product can support. Full
+argument, with the numbers, in
+[render.py](src/dcs_mission_creator/core/recon/render.py)'s docstring.
+
+Two rules govern what may appear:
+
+- **Statistics may be modelled; features may not.** Open ground carries a
+  correlated roughness field (a few dB over field-sized patches) because holding
+  sigma-zero constant made 90 % of the frame uniform white noise, which reads as
+  *broken* rather than as *coarse*. That claims "this ground has roughness
+  variation at about this scale", which is true; it does not claim a hedge or a
+  parcel boundary anywhere. Never draw a feature the overlay does not know about.
+- **`PlanOverlay.detections` is the only source of positions.** A still is a
+  third reveal channel beside the F10 plan and the HSD cartridge, so it answers
+  to the same difficulty policy; `detections` returns `[]` at `veteran`/`ace` and
+  the mission then publishes no frame. Its `trained` error is **one registration
+  bias shared by the whole cluster** plus small per-return jitter — offsetting
+  each vehicle independently scatters an eleven-vehicle column over four
+  kilometres and it stops reading as a column, and a shared bias is what a real
+  product's error actually looks like. `bias_m` itself is **calibration, not
+  policy**: the 1.2 km default is for a frame with no landmark in it (Idlib's
+  ground holds no road, no water and no tree), and a frame that paints the road
+  net has to cut it to a couple of hundred metres — a product is registered
+  against what it can see. The default over `coastal_cover`'s valley put the
+  column 1.0–1.2 km off any road in a picture that draws the roads.
+
+**A mission gets a still only if the overlay can carry its subject**, which is a
+question about the rasters and has to be measured, not assumed. `coastal_cover`
+(the column on the valley road) and `kodori_strike` (the base on the coast road)
+both carry one; `eastern_shield` cannot. Its depot is the Kuweires apron, and the
+overlay has no aeroway layer — 4 building cells within 1.5 km of the field and
+the nearest road 2.2 km away — so the frame renders farmland with a bracket in
+the middle of it and the bracket names an apron the picture does not show. Give
+the overlay runways and it is the next candidate.
+
+The two `ace` missions need no judgement call: `detections` returns `[]` there, so
+`abkhaz_sweep` and `daryal_run` publish nothing by policy, and neither briefing
+cites imagery in the first place.
+
+What made `kodori_strike` publishable was fixing the mission, not the renderer —
+see its `_setup_airports`. It briefed a FOB in the Kodori valley "~22 km NE of
+Sukhumi-Babushara" while building it 19.3 km from that seed on the coastal plain,
+because the overlay's OSM filter keeps only the major road network and the only
+major road in Abkhazia is the coastal highway, so `near_road_m` was unsatisfiable
+in the mountains and `find_clear_spot` escalated out of the region. A still would
+have put that contradiction on the briefing screen, which is a good argument for
+publishing one: **imagery is a consistency check on a mission's own geography.**
+
+Also load the column with `road_column`, not from `group.units[*].position`:
+pydcs `vehicle_group_platoon` uses `Formation.Line`, which stacks units 20 m apart
+**abeam** the heading, and DCS only strings them along the road once the mission
+runs — the spawn positions are a 200 m dash at right angles to the road the
+briefing names.
+
+The cache mirrors `VoiceSynth`: `cache/recon/<slug>-<label>-<hash8>.png`, keyed on
+the **sampled scene** rather than the query, so rebuilding the overlay invalidates
+it. The renderer is seeded from that key alone (never stdlib `random`, whose stream
+depends on how many draws the mission already made), and the file's mtime and mode
+are pinned because `zipf.write` records both into the archive. Missions never copy
+the file — `MissionBuilder.build_miz` does.
+
 ## Front-line helper (project-owned)
 
 [`frontline`](src/dcs_mission_creator/core/frontline.py) is the geometry of a
@@ -759,9 +856,9 @@ of them holds policy: force composition, timings and text stay in the mission.
 
 ## Reproducibility
 
-Building the same mission twice produces the same `.miz`, byte for byte. That
-is not free — four separate things had to be pinned, and all four are easy to
-undo by accident:
+Building the same mission twice produces the same `.miz` **contents**, entry for
+entry. That is not free — five separate things had to be pinned, and all five are
+easy to undo by accident:
 
 - `MapOverlay` carries the sampling `seed` (default 0). `find_placement` takes
   no per-call seed; build the overlay with a different one to resample.
@@ -772,8 +869,27 @@ undo by accident:
   imported, before any seeding can run. It moved every flight's take-off point.
 - `MissionBuilder._pin_onboard_numbers` — pydcs picks tail numbers with
   `set.pop()` over a set of strings, which follows string hashing.
+- `core/recon/publish.py` pins the rendered PNG's **mtime and mode**
+  (`os.utime` / `os.chmod`). pydcs stores a resource as a *path* and writes it at
+  save time with `zipf.write`, which records `st_mtime`, and `ZipInfo.from_file`
+  puts the file mode in `external_attr` — so a re-render, or a different umask,
+  changes the archive even when every pixel is identical. `core/dtc.py` solves the
+  same problem with an explicit `ZipInfo(date_time=...)`, which the `MapResource`
+  path gives no hook for. Note the voice cache has the same exposure and no pin:
+  it gets away with it only because a warm `cache/voice/` leaves the WAV mtimes
+  alone.
 
-If a change makes generation non-deterministic, the smoke test catches it.
+**The archive itself is not byte-identical, and never has been.** `Mission.save`
+writes `mission`, `options`, `warehouses` and the two `l10n/DEFAULT` files with
+`zipfile.writestr`, which stamps each entry with the *current time*; two builds
+more than two seconds apart therefore differ in those five headers while every
+byte of content matches. Verified against `abkhaz_sweep`, which carries no recon
+still: two CLI builds give two different hashes. So compare entry contents, not
+file hashes — which is what `test_generation_is_reproducible` now does. It used
+to compare whole files and passed only while both builds landed in the same
+two-second DOS-timestamp bucket: true for two warm 0.08 s builds, false as soon
+as the first build paid a cold cost, which made a real property look flaky and a
+clock-dependent assertion look like evidence of byte-identity.
 
 ## Tests
 
@@ -828,6 +944,19 @@ remain only at the pydcs API layer (`airport.set_blue()`,
   Caucasus mix: F-16C escort/CAP from Batumi over an A-10C strike on a
   Russian convoy near Senaki, MiG-29S intercept from Sukhumi-Babushara,
   trained difficulty, ~50 min sortie. Generates to `out/coastal_cover.miz`.
+  Carries a **recon still** (`core/recon`) of the column on the valley road,
+  which is the whole intelligence picture here: every claim in its briefing is
+  sourced to one Reaper that has been up since first light.
+- [kodori_strike.py](src/dcs_mission_creator/missions/kodori_strike.py) —
+  Caucasus: F-16C strike out of Kutaisi on a Russian FOB astride the coast road
+  at the Kodori delta, with an F-16C SEAD element against the SA-6 on the rising
+  ground inland and Su-27s out of Gudauta. Trained, ~75 min. Also carries a
+  **recon still** — the coastline in it is what makes it the most legible of the
+  three. Read its `_setup_airports` before moving any AO on this map: it is the
+  worked example of a placement whose constraints were unsatisfiable where the
+  briefing pointed, and of the two ways a coast breaks a placement filter (no
+  roads inland of the highway; `min_relative_height_m` reading a beach as high
+  ground because the sea drags the local mean below zero).
 - [idlib_gauntlet.py](src/dcs_mission_creator/missions/idlib_gauntlet.py) —
   Syria: F-16C out of Hatay against a Syrian resupply column with organic
   SHORAD, run through three SAM belts (SA-2 / SA-6 / SA-8 + EWR) that go dark
@@ -839,7 +968,10 @@ remain only at the pydcs API layer (`airport.set_blue()`,
   behind it so the far side of the line is held ground. One of those, the
   northern SA-11, is deliberately on no map and no cartridge: the briefing calls
   it an emitter nobody fixed, `Magic` names it when the player crosses the seam,
-  and it only bites someone who flanks.
+  and it only bites someone who flanks. It is also the reference for the **recon
+  still** (`core/recon`): a wide-area radar frame of the resupply column on the
+  briefing screen and in the README, which is the imagery its Intelligence
+  section was already citing.
 
 All six missions ([coastal_cover](src/dcs_mission_creator/missions/coastal_cover.py),
 [kodori_strike](src/dcs_mission_creator/missions/kodori_strike.py),

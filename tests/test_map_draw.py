@@ -48,3 +48,49 @@ def test_a_trace_that_is_not_a_line_draws_nothing() -> None:
     m = Mission(TERRAIN)
     PlanOverlay(m, Difficulty.TRAINED).frontline(TRACE[:1], "FRONT LINE")
     assert blue_layer(m) == []
+
+
+# -- detections: the reveal channel a recon still is allowed to draw from ----
+
+
+def _detections(difficulty: Difficulty, count: int = 11) -> list[Point]:
+    m = Mission(Caucasus())
+    truth = [Point(100_000.0 + i * 120.0, 200_000.0, m.terrain) for i in range(count)]
+    return PlanOverlay(m, difficulty).detections(truth)
+
+
+def test_detections_are_withheld_at_veteran_and_ace() -> None:
+    """A still with nothing to plot is a frame of empty ground, so none is published."""
+    assert _detections(Difficulty.VETERAN) == []
+    assert _detections(Difficulty.ACE) == []
+
+
+def test_detections_at_recruit_stay_essentially_on_truth() -> None:
+    m = Mission(Caucasus())
+    truth = [Point(100_000.0, 200_000.0, m.terrain)]
+    got = PlanOverlay(m, Difficulty.RECRUIT).detections(truth, jitter_m=120.0)
+    assert len(got) == 1
+    assert truth[0].distance_to_point(got[0]) <= 120.0
+
+
+def test_trained_detections_share_one_bias_so_the_column_survives() -> None:
+    """Per-point offsets would scatter an 11-vehicle column over kilometres.
+
+    The spread between returns must stay close to the truth's own spread; only the
+    whole cluster moves.
+    """
+    m = Mission(Caucasus())
+    truth = [Point(100_000.0 + i * 120.0, 200_000.0, m.terrain) for i in range(11)]
+    got = PlanOverlay(m, Difficulty.TRAINED).detections(truth, bias_m=1_200.0)
+
+    assert len(got) == len(truth)
+    true_span = truth[0].distance_to_point(truth[-1])
+    got_span = got[0].distance_to_point(got[-1])
+    assert abs(got_span - true_span) < 400.0
+    # The cluster as a whole has moved by roughly the registration bias.
+    shift = truth[0].midpoint(truth[-1]).distance_to_point(got[0].midpoint(got[-1]))
+    assert 800.0 < shift < 1_600.0
+
+
+def test_detections_of_nothing_is_nothing() -> None:
+    assert _detections(Difficulty.TRAINED, count=0) == []

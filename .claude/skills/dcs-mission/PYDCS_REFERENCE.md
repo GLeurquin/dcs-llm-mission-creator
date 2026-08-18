@@ -527,7 +527,21 @@ m.triggerrules.triggers.append(t)
 
 - **Briefing pictures:** `m.add_picture_blue(filepath)` /
   `add_picture_red` / `add_picture_neutral` — image slides on the briefing
-  screen (target photo, map snapshot). Returns a `ResourceKey`.
+  screen (target photo, map snapshot). Returns a `ResourceKey`, and appends to
+  `pictureFileNameB/R/N` as well as registering the resource. Three facts the
+  docstring does not tell you:
+  - pydcs says "jpg or bmp"; that is **stale**. DCS's own file filter
+    (`MissionEditor/modules/FileDialogFilters.lua`) is `(*.jpg;*.jpeg;*.png)`,
+    so PNG is fine — `core/recon` ships one.
+  - It records an **absolute path**, not the bytes. The file must still exist,
+    unchanged, when `m.save` runs.
+  - `MapResource.store` flattens every resource to `l10n/DEFAULT/<basename>` and
+    **skips a basename it has already written**, leaving the second resource key
+    pointing at the *first* file's bytes. Basenames must be globally unique
+    across every resource in the mission; this is why the voice cache and the
+    recon cache both put a content hash in the filename, and why
+    `recon.publish` raises on a collision rather than letting DCS show the wrong
+    picture.
 - **Kneeboard:** `m.add_aircraft_kneeboard(aircraft_type, page_path)` — an
   in-cockpit kneeboard page (freqs, laser codes, target photo) per airframe.
 
@@ -656,6 +670,10 @@ calling §11 / triggers directly. Their contracts live in
   beacons stay raw pydcs (§6.5).
 
 ---
+- **Recon stills** — `core/recon` (`sensor_still`, `Frame`, `Mark`,
+  `Chrome`, `road_column`) renders a wide-area radar product from the overlay
+  and attaches it as a briefing slide. Positions come only from
+  `PlanOverlay.detections`; never read spawn positions directly.
 
 ## 13. Gotcha checklist
 
@@ -669,6 +687,15 @@ calling §11 / triggers directly. Their contracts live in
   group creation already applied a task default (§4.5).
 - `Point` is world meters, not lat/lon; third ctor arg is the terrain.
 - `m.save(path)` does **not** mkdir the parent.
+- Resources reach the `.miz` via `zipf.write`, which records the source file's
+  **mtime** (and, through `ZipInfo.from_file`, its mode) into the archive — so a
+  re-rendered or re-downloaded asset changes the package even when its bytes are
+  identical. `core/recon` pins both with `os.utime` / `os.chmod`; there is no
+  `ZipInfo` hook on the `MapResource` path.
+- `Mission.save` writes its own five entries with `zipfile.writestr`, which
+  stamps each with the **current time**. Two builds more than two seconds apart
+  therefore produce different archive bytes with identical entry contents —
+  compare entries, not file hashes, when checking reproducibility.
 - `m.save(path)` writes a fixed set of zip entries (`mission`, `options`,
   `warehouses`, `l10n/DEFAULT/*`, `KNEEBOARD/…`) with no hook for another file,
   so anything else the `.miz` must contain — an F-16C data cartridge,

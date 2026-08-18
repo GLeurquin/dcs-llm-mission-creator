@@ -24,6 +24,7 @@ from dcs.mission import Mission
 
 from dcs_mission_creator.core import datalink, dcs_install, dtc, waypoints
 from dcs_mission_creator.core.difficulty import Difficulty
+from dcs_mission_creator.core.recon import publish as recon
 
 if TYPE_CHECKING:
     from dcs.terrain.terrain import Terrain
@@ -84,6 +85,14 @@ class MissionBuilder(ABC):
         mission armed is a *file inside the package*, and `Mission.save` writes
         a fixed set of zip entries with no hook for another one, so it goes in
         after the save.
+
+        The fourth has a different reason again, and it is worth stating rather
+        than letting the list above absorb it: a recon still (`core/recon`) is
+        already inside the `.miz` as a briefing slide by the time we get here,
+        because pydcs models briefing pictures. What it is *not* is next to the
+        README, and the README embeds it with a relative link — so a copy lands
+        beside the package. An asset alongside the mission, not a gap in what
+        pydcs writes.
         """
         m = Mission(self._terrain)
         self._permit_crash_recovery(m)
@@ -93,6 +102,7 @@ class MissionBuilder(ABC):
         miz_path.parent.mkdir(parents=True, exist_ok=True)
         m.save(str(miz_path))
         dtc.write_cartridges(m, miz_path)
+        recon.publish_stills(m, miz_path.parent)
 
     @staticmethod
     def _permit_crash_recovery(m: Mission) -> None:

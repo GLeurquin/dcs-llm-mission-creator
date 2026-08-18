@@ -107,6 +107,34 @@ class OsmFilters:
     )
 
 
+#: Per-theater deviations from the `OsmFilters` defaults, same shape as
+#: `coords._RENDERED_XZ_BOUNDS`: a slug missing here gets the defaults.
+#:
+#: Syria keeps `secondary` and `tertiary`. The default three classes left a
+#: 24 km stretch of the Abu al-Duhur -> Taftanaz axis with no road within
+#: 4.8-16.6 km, so `idlib_gauntlet`'s convoy origin snapped to nothing and the
+#: column started 15 km from any road the overlay knew about. The road is there
+#: in OSM and in DCS — it is tagged `secondary`, which the Caucasus-derived
+#: filter threw away. DCS Syria paints a far denser net than Caucasus does, so
+#: the reasoning behind the narrow default does not carry over.
+_THEATER_OSM_FILTERS: dict[str, OsmFilters] = {
+    "syria": OsmFilters(
+        road_classes_keep=[
+            "motorway",
+            "trunk",
+            "primary",
+            "secondary",
+            "tertiary",
+        ]
+    ),
+}
+
+
+def osm_filters_for(theater: str) -> OsmFilters:
+    """The OSM filter policy for `theater` — its override, or the defaults."""
+    return _THEATER_OSM_FILTERS.get(theater, OsmFilters())
+
+
 @dataclass
 class Manifest:
     version: int
@@ -125,7 +153,7 @@ class Manifest:
             theater=theater,
             bounds=bounds,
             layers=LayerSet(),
-            osm_filters=OsmFilters(),
+            osm_filters=osm_filters_for(theater),
         )
 
     def to_dict(self) -> dict[str, Any]:
