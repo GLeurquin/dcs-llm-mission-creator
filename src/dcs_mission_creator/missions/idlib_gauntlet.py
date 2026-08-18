@@ -7,17 +7,38 @@ through is covered by three overlapping Russian-supplied SAM belts. The
 difficulty is not the convoy — it is working inside the missile engagement
 zones long enough to kill it before it reaches Taftanaz.
 
+The column is resupplying a *front line*, and that line is why the sortie has
+a shape at all (see `core/frontline.py`). Ninety kilometres of dug-in Syrian
+positions run across the ingress axis with an S-125 battery holding each
+shoulder, so the flanks are a hundred-kilometre detour into a missile envelope
+rather than a turn — and the one sector without a battery on it is the SA-6's.
+The seam is the way in, which is what makes SEAD the first phase instead of an
+option. Beyond the northern shoulder sits a Gadfly battery the intel never
+fixed: it is on no map and no cartridge, it covers the wide northern arc, and
+it exists to charge for the flank the briefing said not to fly.
+
 The SAM belts react to HARM fire the way real crews do (see
-`core/emcon.py`): the launch goes out over the IADS net, the crew takes a few
-seconds to react, the fire-control radar drops emissions, the missile goes for
-the last known point, and the site comes back up several minutes later. HARMs
-therefore *suppress* far more often than they *kill*, and the player has to use
-the dark window rather than expect a free radar kill.
+`core/emcon.py`): the launch goes out over the IADS net, the crew spends most
+of a minute seeing the shot and acting on the call, the fire-control radar drops
+emissions, the missile goes for the last known point, and the site comes back up
+several minutes later. HARMs therefore *suppress* more often than they *kill* —
+but a shot taken from inside the belt arrives before the transmitter dies, so
+the player chooses between a standoff shot for the dark window and a close one
+for the radar.
 
 Composition (difficulty: trained):
   - Syrian convoy `Nasr` (11 vehicles): 3x T-72B, 2x BTR-80, 2x Ural-375,
     plus organic SHORAD — 2x SA-13 Strela-10M3, 1x SA-19 Tunguska,
     1x ZSU-23-4 Shilka. Armor Average, SHORAD High.
+  - Front line, 90 km of frontage 26 km short of the AO: 4 dug-in Syrian
+    strongpoints (T-72B, BMP-2, Shilka, ZU-23, Igla-S) plus an SA-3 site on
+    each shoulder, Skill Average.
+  - Rear areas, 60 km off the AO on each beam: an SA-3 site in the southern
+    sector, Skill Average, and in the northern one an SA-11 Buk, Skill High.
+    The ground behind the line is held ground, so declining the corridor
+    trades one envelope for another rather than for an empty sky.
+  - Off the map: that Buk. Briefed as an emitter nobody fixed, so it has no
+    ring, no cartridge point and no place in the friendly flight plan.
   - SAM belt 1 (long): SA-2 site at Abu al-Duhur, Skill Average.
   - SAM belt 2 (medium): SA-6 site on high ground over the convoy route,
     Skill High — the priority SEAD target.
@@ -52,6 +73,7 @@ from dcs.unittype import VehicleType
 
 from dcs_mission_creator.core import (
     air_defense as ad,
+    dtc,
     routing,
     triggers as mission_triggers,
     waypoints,
@@ -59,6 +81,8 @@ from dcs_mission_creator.core import (
 from dcs_mission_creator.core.cli import run_cli
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.emcon import ArmSite, arm_emcon_reaction
+from dcs_mission_creator.core.frontline import Frontline, plan_frontline
+from dcs_mission_creator.core.jtac import CoordTarget, arm_jtac_coords
 from dcs_mission_creator.core.map_draw import PlanOverlay
 from dcs_mission_creator.core.mission_builder import MissionBuilder
 from dcs_mission_creator.core.mission_kit import arm, mark_clients, race_track
@@ -67,6 +91,7 @@ from dcs_mission_creator.core.placement import (
     find_clear_spot,
     load_scene,
     sam_site_on_ridge,
+    snap_units_clear,
 )
 from dcs_mission_creator.core.routing import ThreatRing
 from dcs_mission_creator.core.tasking import (
@@ -89,11 +114,12 @@ _FREQ_AWACS = 251
 _FREQ_TANKER = 270
 _FREQ_FAC = 133
 _LASER_CODE = 1688
-# F-16C stock presets carrying those nets, so the briefing can say "channel N"
-# instead of leaving the player to hand-tune and find no JTAC in the menu.
+# F-16C stock presets carrying the AWACS and tanker nets, so the briefing can say
+# "channel N" instead of leaving the player to hand-tune. The FAC net is quoted as
+# a frequency only: a "CH 10" next to the tanker's TACAN 10X reads as a TACAN
+# channel, and a player who goes looking for one never gets on the JTAC's net.
 _PRESET_AWACS = "COMM1 CH 18"
 _PRESET_TANKER = "COMM1 CH 7"
-_PRESET_FAC = "COMM2 CH 10"
 # Hammer's station: a race-track abeam the convoy road, long enough to cover the
 # whole 25 km of it. 5 km cross-track at 18,000 ft holds the column inside about
 # 8 km slant the entire run — a DCS FAC that sits further out never acquires.
@@ -101,6 +127,70 @@ _FAC_OFFSET_M = 5_000.0
 _FAC_LEG_M = 18_000.0
 _FAC_ALT_M = 5_500
 _FAC_SPEED_KPH = 300
+# Mission seconds at which Hammer checks in. The coordinate readout he volunteers
+# hangs off the same number, so the two calls stay in order however either moves.
+_FAC_CHECKIN_S = 300
+# The front line, derived off the AO -> Hatay axis (see `core/frontline.py`).
+# 90 km of frontage makes going round a wing a hundred-kilometre detour on a
+# sortie that already needs the tanker, and the 12 km bow puts the wings ahead
+# of the middle so the flanks are the long way in as well as the far way round.
+# The 30 km seam is the sector with no battery on it — the crossing the briefing
+# points at, and the SA-6's own ground, which is what makes SEAD the first phase
+# rather than a choice.
+_FRONT_STANDOFF_M = 26_000.0
+_FRONT_SPAN_M = 90_000.0
+_FRONT_BOW_M = 12_000.0
+_FRONT_SEAM_M = 30_000.0
+_FRONT_SECTORS_PER_SIDE = 2
+# Briefed envelope of the S-125 battery on each shoulder — 25 km, not the 18 km
+# the F-16's own threat table prints for an SA-3. A briefed ring has to be at
+# least the system's real reach, or the player who flies just outside it is shot
+# at by a promise the mission under-wrote.
+_SHOULDER_RING_M = 25_000.0
+# How far off the AO, on each beam of the ingress axis, the rear-area batteries
+# sit: an S-125 in the southern sector and the unfixed Gadfly in the northern
+# one. They are what make the ground behind the line *held* ground rather than
+# open sky the moment the corridor is declined. 60 km is the whole design of the
+# number — near enough to cover the arc a player flies when they give up on the
+# seam, far enough that the briefed corridor and its SEAD target stay outside
+# both envelopes.
+_REAR_BATTERY_OFFSET_M = 60_000.0
+# Eagle's barrier CAP: one leg down the ingress axis on the friendly side of the
+# line, from this near point to this far point measured back from the seam.
+_TARCAP_NEAR_M = 8_000.0
+_TARCAP_FAR_M = 48_000.0
+
+
+#: One dug-in sector of the front line. Armour and a rifle section so the
+#: position reads as held ground; the gun, the pit and the MANPADS team are what
+#: it costs an aircraft to cross the line anywhere but high.
+_STRONGPOINT_TYPES = [
+    vehicles.Armor.T_72B,
+    vehicles.Armor.T_72B,
+    vehicles.Armor.BMP_2,
+    vehicles.AirDefence.ZSU_23_4_Shilka,
+    vehicles.AirDefence.ZU_23_Emplacement,
+    vehicles.AirDefence.SA_18_Igla_S_manpad,
+    vehicles.Infantry.Infantry_AK,
+]
+#: The air-defence half of a strongpoint, which gets the better crews.
+_LINE_SHORAD_IDS = {
+    vehicles.AirDefence.ZSU_23_4_Shilka.id,
+    vehicles.AirDefence.ZU_23_Emplacement.id,
+    vehicles.AirDefence.SA_18_Igla_S_manpad.id,
+}
+
+
+def _front_shoulders(front: Frontline) -> tuple[Point, Point]:
+    """The line's two shoulders as (northern, southern).
+
+    `plan_frontline` hands them back in its own lateral order, which says
+    nothing about the compass. Sorting on DCS `x` (north) fixes which one the
+    map label, the cartridge and the briefing prose each mean, so a change to
+    the geometry cannot silently swap the two sides of the line.
+    """
+    north, south = sorted(front.shoulders, key=lambda p: -p.x)
+    return north, south
 
 
 @dataclass
@@ -143,6 +233,12 @@ SITUATION
   out of the pocket says it carries the ammunition for
   the next push. It travels with its own short-range
   air defence.
+  The ammunition is for the line, and the line is your
+  problem before the column is. Ninety kilometres of
+  dug-in Syrian positions sit between the pocket and
+  that road, an S-125 battery holding each shoulder.
+  One sector has no battery on it — the middle, which
+  the SA-6 covers instead. That sector is the way in.
   A Rivet Joint track overnight mapped the corridor it
   drives through: three overlapping Russian-supplied
   SAM belts. Those crews are drilled — they drop
@@ -151,10 +247,11 @@ SITUATION
   Expect to suppress, not to sanitize.
 
 MISSION (Uzi — F-16C-50, Hatay)
-  Break the column up before it reaches Taftanaz.
-  Suppress whatever belt is holding you off the target.
-  Render it combat-ineffective and the ammunition never
-  reaches the pocket; the whole column is better.
+  Cross the line at the seam, high. Suppress whatever
+  belt is holding you off the target. Break the column
+  up before it reaches Taftanaz. Render it
+  combat-ineffective and the ammunition never reaches
+  the pocket; the whole column is better.
 
 PACKAGE
   Uzi 1 (you): F-16C-50, Hatay, hot ramp. 2x AGM-88C,
@@ -163,13 +260,35 @@ PACKAGE
   Pontiac 1-2: F/A-18C, 4x GBU-12 + ATFLIR, Hatay. Held
         in reserve, pushing onto the column once the
         SAM threat over the route is suppressed.
-  Eagle 1-2  : F-15C TARCAP west of the corridor.
+  Eagle 1-2  : F-15C barrier CAP down the corridor on
+        our side of the line.
   Hammer     : MQ-9, {_FREQ_FAC}.000 AM, FAC(A) over the
         corridor, lasing the column, code {_LASER_CODE}.
   Magic      : E-3A AWACS, {_FREQ_AWACS}.000 AM.
   Texaco     : KC-135, {_FREQ_TANKER}.000 AM, TACAN 10X.
 
 INTELLIGENCE
+  FRONT: Partner-force positions face the line all the
+        way across, so we know where it runs; the map
+        has the trace. Each shoulder is an S-125
+        battery, roughly 25 km of reach and 60,000 ft
+        of ceiling — going round a wing means flying
+        through one. Between them the frontage is
+        armour, 23 mm guns and Igla teams: nothing
+        above 10,000 ft, everything below it. Cross at
+        the seam and cross high.
+  REAR: The far side of the line is held ground, not
+        open sky. There is a third S-125 battery in the
+        southern rear, level with the convoy road, and
+        the belts below cover the road itself — getting
+        past the line somewhere else buys you a
+        different envelope, not a free run.
+        One more thing off last night's cut: a Gadfly
+        search radar was heard on the net in the
+        northern rear and never fixed. We have no
+        position for it, so there is no ring on your
+        map and none in the cartridge. Read it as that
+        flank being spoken for and stay in the seam.
   SAM : From the Rivet Joint cut — an SA-2 belt around
         Abu al-Duhur, reach out to about 40 km; an SA-6
         belt on the high ground over the convoy route,
@@ -183,14 +302,23 @@ INTELLIGENCE
         column. None of that shuts down for a HARM —
         kill it or stay outside 8 km.
   Air : ELINT has the alert pair at Bassel Al-Assad on
-        cockpit alert. MiG-29S. They will come once the
-        column starts taking losses.
+        cockpit alert. MiG-29S, experienced crews. That
+        is minutes from the corridor — plan on them
+        being airborne at some point in the sortie.
 
 ROE / FRAGS
   - Cleared to engage the convoy and any air defence
     covering it.
   - Cleared to engage Syrian and Russian aircraft in
     the corridor.
+  - The line itself is not your target. Two HARMs will
+    not open a shoulder and the strongpoints are the
+    partner force's problem — cross the seam and leave
+    them alone.
+  - Do not arc round the line. The flanks are S-125
+    country, the rear behind them is covered as well,
+    the north has an emitter we never found, and the
+    fuel is not there for any of it.
   - HARM suppresses; a dark site is not a dead site.
     Work the window, do not loiter in the MEZ.
   - Tank from Texaco before the push if the SEAD phase
@@ -199,21 +327,40 @@ ROE / FRAGS
 NAV
   Bullseye (own side): {bx:.0f}, {by:.0f} (DCS world m)
   PUSH        : 25 km southeast of Hatay.
+  SEAM        : the crossing, on your nose out of PUSH,
+                about 26 km short of the convoy road.
+                Marked on the map.
   Convoy axis : Abu al-Duhur -> Taftanaz, north-west.
   Off-load    : Taftanaz. If the column makes it there,
                 we have missed the window.
+  Cartridge   : the three belts and all three S-125
+                batteries are loaded as pre-planned
+                threats — select PRE on the HSD for the rings.
+                Same estimates as the map, off the same cut.
+                Two things are deliberately absent: the
+                column's own SHORAD, which drives, so any
+                ring we drew would be stale, and the Gadfly
+                we never fixed, which we cannot draw at all.
 
 FREQUENCIES
   Magic AWACS   : {_FREQ_AWACS}.000 AM ({_PRESET_AWACS})
   Texaco tanker : {_FREQ_TANKER}.000 AM, TACAN 10X
                   ({_PRESET_TANKER})
-  Hammer FAC(A) : {_FREQ_FAC}.000 AM ({_PRESET_FAC}),
-                  laser {_LASER_CODE}
+  Hammer FAC(A) : {_FREQ_FAC}.000 AM, laser {_LASER_CODE}
   Hatay tower   : per kneeboard
 
   Hammer is on the VHF radio, not the UHF one you start
-  on. Tune COMM2 before you look for him — the JTAC only
-  shows up in the radio menu on the net he is talking on.
+  on. Dial {_FREQ_FAC}.000 AM into COMM2 before you look for
+  him — the JTAC only shows up in the radio menu on the
+  net he is talking on.
+
+  His formal nine-line comes over in military grid — that
+  is how the net reads it, and it is no use in the DED.
+  He passes the column in degrees and decimal minutes
+  after check-in, and again whenever you ask: F10 radio
+  menu, Other, Hammer 1-1, target coordinates. The column
+  is driving, so ask again on the way in — the numbers
+  from check-in will be stale.
 """
 
     def readme(self) -> str:
@@ -224,9 +371,11 @@ FREQUENCIES
 **Date / time:** 12 September 2026, 08:40 local
 **Player aircraft:** F-16C-50 (`Uzi`), Hatay, hot ramp
 **Players:** {self.players} coop slot(s)
-**Difficulty:** trained (medium) — three layered SAM belts with drilled
-EMCON-capable crews, organic SHORAD on the target, an alert fighter pair,
-full support package (AWACS, tanker, TARCAP, FAC(A))
+**Difficulty:** trained (medium) — a 90 km front line with an S-125 battery on
+each shoulder and a third in the southern rear, three layered SAM belts with
+drilled EMCON-capable crews, an unlocated SA-11 covering the northern rear,
+organic SHORAD on the target, an alert fighter pair, full support package
+(AWACS, tanker, TARCAP, FAC(A))
 **Expected sortie length:** ~60 minutes
 
 ## Situation
@@ -236,6 +385,17 @@ Abu al-Duhur; a Reaper has been following it since and it is running
 north-west toward the Taftanaz off-load. Partner-force reporting out of the
 pocket says it carries the ammunition for the next push. It travels with its
 own short-range air defence.
+
+That ammunition is for the front line, and the line is between you and the
+road. Ninety kilometres of dug-in Syrian positions run across the approach with
+an S-125 battery holding each shoulder; the only sector without a battery on it
+is the middle one, and the SA-6 covers that instead. There is no way to the
+convoy that is not either through the seam or round a wing.
+
+The ground behind the line is held ground, too — a third S-125 battery sits in
+the southern rear level with the convoy road, and there is something in the
+northern rear we could not put a pin in. Going round the line does not buy an
+empty sky on the far side; it buys a different envelope, further from the tanker.
 
 A Rivet Joint track overnight mapped the corridor it drives through: three
 overlapping Russian-supplied SAM belts — an SA-2 belt around Abu al-Duhur, an
@@ -248,36 +408,47 @@ SA-6 belt on the high ground over the route, and a mobile SA-8 at the off-load
 objective; the SAM belts are the problem, not the target list. Kill what you
 must, suppress the rest, and get weapons onto the trucks.
 
-1. **Push and SEAD.** Ingress from Hatay through the terrain-masked corridor.
-   The SA-6 on the ridge is what owns the convoy route — put it down or keep
-   it down.
-2. **Interdict.** Work the column with the CBU-97s — SFW submunitions are what
+1. **Cross the line.** Push out of Hatay and cross at the seam, high — the
+   frontage either side of it is guns and MANPADS, and each shoulder is an
+   S-125 battery. Going round is a hundred-kilometre detour into one of them
+   on a sortie that already needs the tanker.
+2. **SEAD.** The seam puts you in the SA-6's sector, which is the point: the
+   SA-6 on the ridge is what owns the convoy route — put it down or keep it
+   down.
+3. **Interdict.** Work the column with the CBU-97s — SFW submunitions are what
    kill a dispersed column in two passes. `Hammer` (MQ-9) is overhead on
-   {_FREQ_FAC}.000 AM ({_PRESET_FAC}) for the talk-on, lasing code {_LASER_CODE}
+   {_FREQ_FAC}.000 AM for the talk-on, lasing code {_LASER_CODE}
    for `Pontiac`'s GBU-12s.
-3. **Strike release.** `Pontiac` (2x F/A-18C) is held in reserve at Hatay and
+4. **Strike release.** `Pontiac` (2x F/A-18C) is held in reserve at Hatay and
    will run the column once the SAM threat over the route is suppressed.
-4. **DCA.** The Bassel Al-Assad alert pair will scramble once the column starts
-   taking real losses. `Eagle` TARCAP is west of the corridor; back them up.
+5. **DCA.** Plan on the Bassel Al-Assad alert pair getting airborne at some
+   point in the sortie — cockpit alert puts them minutes from the corridor.
+   `Eagle` is on a barrier CAP down the corridor on our side of the line, so
+   the alert pair has to come through them to reach you; back them up.
 
 ## How those crews handle a HARM
 
 Every radar-guided site in the corridor is drilled in emissions control, and
-the belts are netted — a launch anywhere on the corridor is called down the
-net in seconds. When they see an anti-radiation shot:
+the belts are netted — a launch anywhere on the corridor gets called down the
+net. When they see an anti-radiation shot:
 
 - the crew that hears the call usually drops emissions; not all of them do,
   and the SA-2 site is the least disciplined of the three;
-- it takes them a few seconds to react, so a shot from close in still kills;
+- none of them gets a launch warning, so the shot has to be spotted, passed and
+  believed before anyone touches the transmitter — that costs them the better
+  part of a minute, and a shot taken from inside the belt arrives first and
+  kills. Standoff buys the dark window; a close shot buys the radar;
 - the site then sits dark with radars off and weapons tight for several
   minutes, and `Magic` calls the shutdown on the radio;
 - keep the pressure on with a second shot and that crew stays off the air
   longer;
 - when they judge it safe the radar comes back up, and `Magic` calls that too.
 
-Practical consequence: a HARM shot buys you a working window, not a kill.
-Plan the run for the window, and remember the column's own launchers and guns
-never shut down — they are optical and IR-guided.
+Practical consequence: a HARM taken from standoff buys you a working window
+rather than a kill, and the closer you shoot the more likely the emitter is
+still up when the missile arrives. Plan the run for the window, and remember the
+column's own launchers and guns never shut down — they are optical and
+IR-guided.
 
 ## Package
 
@@ -285,7 +456,7 @@ never shut down — they are optical and IR-guided.
 |-------------|----------|----------|---------------------------------------|
 | Uzi 1       | F-16C-50 | Hatay    | Player SEAD / interdiction            |
 | Pontiac 1-2 | F/A-18C  | Hatay    | Strike on the column (held until release) |
-| Eagle 1-2   | F-15C    | Incirlik | TARCAP west of the corridor           |
+| Eagle 1-2   | F-15C    | Incirlik | Barrier CAP behind the seam           |
 | Hammer      | MQ-9     | on station | FAC(A), lases the column, code {_LASER_CODE}  |
 | Magic       | E-3A     | Incirlik | AWACS, {_FREQ_AWACS}.000 AM                    |
 | Texaco      | KC-135   | Incirlik | Tanker, {_FREQ_TANKER}.000 AM, TACAN 10X        |
@@ -299,8 +470,18 @@ carries 4x GBU-12 with ATFLIR — buddy-lase off `Hammer` or self-lase.
 
 Positions below come off last night's Rivet Joint cut and this morning's
 Reaper feed — the belts are located to a few kilometres, not to the metre, and
-the map rings are marked as estimates for that reason.
+the map rings are marked as estimates for that reason. It is not a complete
+picture, and the last bullet is there to say where it is thin.
 
+- **The line:** partner-force units are in contact along the whole frontage, so
+  the trace on your map is good. Armour, 23 mm guns and Igla teams hold the
+  sectors — a threat below about 10,000 ft and nothing above it — and each
+  shoulder is an S-125 battery, roughly 25 km of reach with the ceiling to
+  match. The seam in the middle is the sector with no battery on it.
+- **The rear:** a third S-125 battery in the southern rear, level with the
+  convoy road, roughly 25 km. Together with the belts below it there is no
+  quarter of that airspace nobody is covering — assume the far side of the line
+  is defended in depth, because it is.
 - **Long belt:** SA-2 around Abu al-Duhur, reach out to roughly 40 km. Poorly
   drilled crew by the standard of the other two.
 - **Medium belt:** SA-6 on the high ground over the convoy route, roughly
@@ -314,12 +495,24 @@ the map rings are marked as estimates for that reason.
 - **EWR:** early-warning radars behind the belts feeding the net and the GCI
   picture.
 - **Air:** ELINT puts a MiG-29S pair on cockpit alert at Bassel Al-Assad,
-  experienced crews. They will start engines when the column starts taking
-  real losses.
+  experienced crews. Cockpit alert is minutes from the runway and the field is
+  minutes from the corridor; whether they are released and when is the Syrian
+  air-defence commander's call, so plan on the fight rather than on a warning.
+- **Not located:** a Gadfly-class search radar came up on the net in the
+  northern rear overnight and we never got a fix on it. There is no ring for it
+  on the map and no point for it on your cartridge, because we would be drawing
+  a guess. Fly as though that flank is covered — it very likely is — and expect
+  `Magic` to call it if it radiates while you are up.
 
 ## ROE
 
 - Cleared to engage the convoy and every air-defence unit covering it.
+- The front line is not the target. Two HARMs will not open a shoulder battery
+  and the strongpoints belong to the partner force's fight — cross the seam and
+  leave them be.
+- Do not arc round the line. Both flanks are S-125 country, the rear behind
+  them is covered as well, the northern one has an emitter we could not find,
+  and the fuel is not there for the detour.
 - Cleared to engage Syrian and Russian aircraft inside the corridor.
 - HARM suppresses; a dark site is not a dead site. Do not loiter in a MEZ
   waiting for a radar that will come back up.
@@ -331,19 +524,40 @@ the map rings are marked as estimates for that reason.
 
 - Bullseye (own side): `{bx:.0f}, {by:.0f}` (DCS world m)
 - PUSH: 25 km southeast of Hatay.
+- SEAM: the crossing, straight on out of PUSH, about 26 km short of the convoy
+  road and marked on the map. The front-line trace either side of it is drawn
+  precisely — both armies have been sitting on it for weeks.
 - Convoy axis: Abu al-Duhur → Taftanaz, north-west, ~28 km of road.
 - Off-load: Taftanaz. If the column reaches it, we have missed the window.
+- Your data cartridge carries the three belts and all three S-125 batteries as
+  pre-planned threats — select PRE on the HSD (they show on the HAD too) for the
+  rings. They are the same estimates the map shows, off the same cut, and no
+  more precise than it.
+- Two threats are deliberately **not** on the cartridge and have no ring on the
+  map. The column's own SHORAD drives with the trucks, so a fixed envelope drawn
+  where the column started would be a lie about everywhere it no longer covers —
+  treat the whole convoy axis as short-range-SAM country and work it from
+  outside 8 km. The unlocated Gadfly has no position at all, and a cartridge
+  point is a claim we cannot make; the north being spoken for is the warning.
 
 ## Frequencies
 
 - Magic AWACS: {_FREQ_AWACS}.000 AM — {_PRESET_AWACS}
 - Texaco tanker: {_FREQ_TANKER}.000 AM, TACAN 10X — {_PRESET_TANKER}
-- Hammer FAC(A): {_FREQ_FAC}.000 AM — {_PRESET_FAC}, laser code {_LASER_CODE}
+- Hammer FAC(A): {_FREQ_FAC}.000 AM — laser code {_LASER_CODE}
 - Hatay tower: per kneeboard
 
-`Hammer` works the VHF radio, not the UHF one the jet starts on: put COMM2 on
-{_PRESET_FAC} ({_FREQ_FAC}.000 AM) and he appears in the radio menu as
+`Hammer` works the VHF radio, not the UHF one the jet starts on: dial
+{_FREQ_FAC}.000 AM into COMM2 and he appears in the radio menu as
 **Hammer 1-1**. Until COMM2 is on his net there is no JTAC entry to select.
+
+`Hammer`'s formal nine-line comes over in military grid — that is how the net
+reads it, and the DED cannot take it. He also passes the column in degrees and
+decimal minutes with the ground elevation: once shortly after check-in, and again
+whenever you ask for it (F10 radio menu → *Other* → **Hammer 1-1** → *Target
+coordinates*). The column is on the move, so the position is only good when you
+ask for it — get a fresh one before the run-in rather than flying the one from
+check-in.
 
 ## Weather
 
@@ -375,19 +589,30 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         russia, syria = m.country("Russia"), m.country("Syria")
 
         convoy = self._spawn_red_convoy(m, syria, scene)
+        front = self._plan_frontline(scene)
+        self._spawn_red_frontline(m, syria, scene, front)
+        shoulders = self._spawn_red_front_shoulders(m, russia, scene, front)
+        unfixed = self._spawn_red_unfixed_sam(m, russia, scene, front)
+        rear, rear_pos = self._spawn_red_rear_sam(m, russia, scene, front)
         sa2, sa2_pos = self._spawn_red_sa2_belt(m, russia, scene)
         sa6, sa6_pos = self._spawn_red_sa6_belt(m, russia, scene)
         sa8, sa8_pos = self._spawn_red_sa8_belt(m, russia, scene)
         ewrs, ewr_positions = self._spawn_red_ewr_chain(m, russia, scene)
         migs = self._spawn_red_alert_fighters(m, russia, scene)
-        belts = self._threat_rings(sa2_pos=sa2_pos, sa6_pos=sa6_pos, sa8_pos=sa8_pos)
+        belts = self._threat_rings(
+            sa2_pos=sa2_pos,
+            sa6_pos=sa6_pos,
+            sa8_pos=sa8_pos,
+            rear_pos=rear_pos,
+            front=front,
+        )
 
         awacs_track = self._spawn_awacs(m, usa, scene)
         tanker_track = self._spawn_tanker(m, usa, scene)
-        tarcap_track = self._spawn_tarcap(m, usa, scene)
+        tarcap_track = self._spawn_tarcap(m, usa, scene, front=front)
         fac_track = self._spawn_fac(m, usa, scene, convoy=convoy)
         pontiac = self._spawn_strike(m, usa, scene, convoy=convoy, threats=belts)
-        corridor = self._spawn_player(
+        player, corridor = self._spawn_player(
             m,
             usa,
             scene,
@@ -396,10 +621,11 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         )
 
         self._conceal_red(russia, syria)
-        self._draw_plan(
+        briefed_threats = self._draw_plan(
             m,
             scene,
             belts=belts,
+            front=front,
             ewr_positions=ewr_positions,
             corridor=corridor,
             tarcap_track=tarcap_track,
@@ -407,9 +633,21 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             awacs_track=awacs_track,
             tanker_track=tanker_track,
         )
-        self._add_harm_reaction(m, sa2=sa2, sa6=sa6, sa8=sa8, ewrs=ewrs)
+        self._load_hsd_threats(m, scene, briefed_threats)
+        self._add_harm_reaction(
+            m,
+            sa2=sa2,
+            sa6=sa6,
+            sa8=sa8,
+            ewrs=ewrs,
+            shoulders=shoulders,
+            rear=rear,
+            unfixed=unfixed,
+        )
+        self._add_fac_coord_readout(m, convoy=convoy)
         self._add_intro_voice(m)
         self._add_support_checkins(m)
+        self._add_front_crossing_trigger(m, front=front, player=player)
         self._add_strike_release_triggers(m, sa6=sa6, pontiac=pontiac)
         self._add_scramble_trigger(m, convoy=convoy, migs=migs)
         self._add_end_triggers(m, scene, convoy=convoy, migs=migs)
@@ -546,6 +784,168 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         )
         apply_ai_difficulty(convoy, self.difficulty)
         return convoy
+
+    # -- red side: the front line -------------------------------------------
+
+    def _plan_frontline(self, scene: _Scene) -> Frontline:
+        """The Syrian forward line, laid across the Hatay -> AO axis.
+
+        This is the geometry the rest of the sortie hangs off: the line stands
+        26 km short of the convoy road with 90 km of frontage, so the AO cannot
+        be reached from an arbitrary bearing — every approach either crosses the
+        seam in the middle or spends a hundred kilometres going round a wing.
+        """
+        return plan_frontline(
+            defends=scene.route_mid,
+            facing=scene.hatay.position,
+            standoff_m=_FRONT_STANDOFF_M,
+            span_m=_FRONT_SPAN_M,
+            bow_m=_FRONT_BOW_M,
+            sectors_per_side=_FRONT_SECTORS_PER_SIDE,
+            seam_width_m=_FRONT_SEAM_M,
+            overlay=scene.overlay.overlay,
+            terrain=self._terrain,
+        )
+
+    def _spawn_red_frontline(
+        self, m: Mission, syria: Country, scene: _Scene, front: Frontline
+    ) -> list[VehicleGroup]:
+        """Dug-in Syrian strongpoints along the line, one per sector.
+
+        Armour and a rifle section make it read as a front rather than a SAM
+        picket; the Shilka, the ZU-23 pit and the Igla team are what the frontage
+        is actually worth to an aircraft — nothing above about 10,000 ft, and
+        everything below it. That is the altitude the briefing sells the seam
+        crossing at, and the reason a player who tries to sneak the line low
+        somewhere else is in gun range the whole way across.
+
+        `plan_frontline` put the position itself on open ground, but a scattered
+        seven-vehicle platoon spreads further than any placement buffer, so each
+        one is snapped again unit by unit: a Shilka parked under canopy neither
+        sees the crossing nor reads as a held position.
+        """
+        groups = []
+        for i, pos in enumerate(front.sectors, start=1):
+            grp = m.vehicle_group_platoon(
+                syria,
+                f"Line strongpoint {i}",
+                cast(list[type[VehicleType]], _STRONGPOINT_TYPES),
+                position=pos,
+                heading=int(front.facing_deg),
+                formation=VehicleGroup.Formation.Scattered,
+            )
+            for u in grp.units:
+                u.skill = Skill.High if u.type in _LINE_SHORAD_IDS else Skill.Average
+            snap_units_clear(scene.overlay.overlay, self._terrain, grp)
+            groups.append(grp)
+        return groups
+
+    def _spawn_red_front_shoulders(
+        self, m: Mission, russia: Country, scene: _Scene, front: Frontline
+    ) -> list[VehicleGroup]:
+        """An S-125 battery on each shoulder — the reason flanking is not free.
+
+        Returned in the order `_front_shoulders` fixes (northern first) so the
+        map labels, the cartridge and the briefing prose cannot swap sides
+        between builds. Skill Average: these are the quiet flanks of the line,
+        not the crews watching the road. Overlay and terrain go in so the
+        launcher ring is snapped off canopy and water like every other site —
+        `plan_frontline` cleared the centre, not the 65 m around it.
+        """
+        return [
+            ad.build_sa3_site(
+                m,
+                russia,
+                pos,
+                heading=int(front.facing_deg),
+                launchers=4,
+                prefix=f"Shield {name} ",
+                skill=Skill.Average,
+                overlay=scene.overlay.overlay,
+                terrain=self._terrain,
+            )
+            for name, pos in zip(("north", "south"), _front_shoulders(front))
+        ]
+
+    def _rear_battery_position(
+        self, scene: _Scene, front: Frontline, *, side_deg: float
+    ) -> Point:
+        """Open ground for a rear-area battery, `side_deg` off the ingress axis.
+
+        Measured from the AO rather than from the line, on the beam, so the two
+        rear batteries sit level with the objective and their envelopes cover the
+        depth behind the front instead of the frontage itself.
+        """
+        return find_clear_spot(
+            scene.overlay.overlay,
+            scene.route_mid.point_from_heading(
+                (front.facing_deg + side_deg) % 360.0, _REAR_BATTERY_OFFSET_M
+            ),
+            self._terrain,
+            radius_m=4_000.0,
+        )
+
+    def _spawn_red_unfixed_sam(
+        self, m: Mission, russia: Country, scene: _Scene, front: Frontline
+    ) -> VehicleGroup:
+        """The Gadfly nobody located: the northern rear-area battery, an SA-11.
+
+        Deliberately absent from `_threat_rings`, from `_draw_plan` and from the
+        cartridge. The briefing says an emitter of this class was heard on the
+        net overnight and never fixed, which is all the intel the mission claims
+        — so the map cannot draw a ring without overstating it, and the friendly
+        package cannot plan around what its planner has no position for
+        (`apply_threat_reaction` is what covers them if it comes up).
+
+        Its job is the northern flanking arc and the depth behind the line's
+        northern sector: 60 km out on the beam, so a player who abandons the seam
+        and arcs round the top of the line flies through it, while the briefed
+        corridor — and the SA-6 site at the end of it — stay outside its reach.
+        Standing it up next to the line's own shoulder was the first attempt and
+        the wrong one: the SEAD target sits north-east of the convoy, so the ring
+        reached across the corridor and punished the player for complying.
+        """
+        pos = self._rear_battery_position(scene, front, side_deg=90.0)
+        buk = templates.VehicleTemplate.sa11_site(
+            m,
+            russia,
+            pos,
+            heading=int(pos.heading_between_point(scene.hatay.position)),
+            prefix="Gadfly ",
+            skill=Skill.High,
+        )
+        snap_units_clear(scene.overlay.overlay, self._terrain, buk)
+        return buk
+
+    def _spawn_red_rear_sam(
+        self, m: Mission, russia: Country, scene: _Scene, front: Frontline
+    ) -> tuple[VehicleGroup, Point]:
+        """The southern rear-area battery: an S-125 level with the AO, briefed.
+
+        The point of it is that the ground behind the line is *held* ground. With
+        only the corridor defended, a player who declines the seam finds an empty
+        sky on the far side and the whole layout collapses into one avoidable
+        line; with a battery in each rear sector, every way in is somebody's
+        envelope and the corridor becomes the cheapest of several priced options
+        rather than the only one drawn.
+
+        This one is on last night's cut, so it gets a ring, a cartridge point and
+        a place in the AI routing — unlike its northern counterpart, which is the
+        same idea with the intelligence missing.
+        """
+        pos = self._rear_battery_position(scene, front, side_deg=-90.0)
+        site = ad.build_sa3_site(
+            m,
+            russia,
+            pos,
+            heading=int(pos.heading_between_point(scene.hatay.position)),
+            launchers=4,
+            prefix="Shield rear ",
+            skill=Skill.Average,
+            overlay=scene.overlay.overlay,
+            terrain=self._terrain,
+        )
+        return site, pos
 
     # -- red side: the three SAM belts --------------------------------------
 
@@ -795,22 +1195,23 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         return p1, p2
 
     def _spawn_tarcap(
-        self, m: Mission, usa: Country, scene: _Scene
+        self, m: Mission, usa: Country, scene: _Scene, *, front: Frontline
     ) -> tuple[Point, Point]:
-        """F-15C Eagle 2-ship between the corridor and Bassel Al-Assad.
+        """F-15C Eagle 2-ship on a barrier CAP behind the seam.
+
+        Stationed on the friendly side of the front line, down the ingress axis,
+        rather than pushed out on the flank toward Bassel Al-Assad: out there the
+        orbit would sit inside an S-125 envelope on the line's shoulder, and a
+        TARCAP whose job is the corridor crossing belongs over the corridor. The
+        40 km leg keeps them between the seam and the tanker, so the alert pair
+        has to come through them to reach the package.
 
         Launches from Incirlik — Hatay's ten stands are reserved for the
         player flight and Pontiac — so the TARCAP arrives on station about
         when the player pushes.
         """
-        p1, p2 = scene.overlay.place_cap_station(
-            defended_asset=scene.route_mid,
-            threat_bearing_deg=scene.route_mid.heading_between_point(
-                scene.bassel.position
-            ),
-            forward_distance_m=35_000.0,
-            track_length_m=45_000.0,
-        )
+        p1 = front.seam.point_from_heading(front.facing_deg, _TARCAP_NEAR_M)
+        p2 = front.seam.point_from_heading(front.facing_deg, _TARCAP_FAR_M)
         eagle = m.patrol_flight(
             usa,
             "Eagle",
@@ -1074,8 +1475,14 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         *,
         sead_ip: Point,
         threats: tuple[Point, ...],
-    ) -> list[Point]:
-        """Uzi F-16C-50 from Hatay, terrain-masked ingress to the SA-6 site."""
+    ) -> tuple[FlyingGroup, list[Point]]:
+        """Uzi F-16C-50 from Hatay, terrain-masked ingress to the SA-6 site.
+
+        Hands the group back as well as the route: the front-line crossing call
+        is gated on this flight being at the seam, and gating it on the coalition
+        instead had the Eagles trip it from their CAP station before the player
+        had taxied.
+        """
         player = m.flight_group_from_airport(
             country=usa,
             name="Uzi",
@@ -1094,15 +1501,15 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             player,
             planes.F_16C_50,
             [
-                (1, "AIM_9X_Sidewinder_IR_AAM"),
-                (2, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+                (1, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+                (2, "AIM_9X_Sidewinder_IR_AAM"),
                 (3, harm),
                 (4, sfw),
                 (5, "Fuel_tank_300_gal"),
                 (6, sfw),
                 (7, harm),
-                (8, "AIM_120C_AMRAAM___Active_Radar_AAM"),
-                (9, "AIM_9X_Sidewinder_IR_AAM"),
+                (8, "AIM_9X_Sidewinder_IR_AAM"),
+                (9, "AIM_120C_AMRAAM___Active_Radar_AAM"),
                 (10, "AN_ASQ_213_HTS___HARM_Targeting_System"),
                 (11, "AN_AAQ_28_LITENING___Targeting_Pod_"),
             ],
@@ -1133,7 +1540,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         )
         player.add_runway_waypoint(scene.hatay)
         player.land_at(scene.hatay)
-        return [*corridor, scene.route_mid]
+        return player, [*corridor, scene.route_mid]
 
     # -- F10 map briefing ---------------------------------------------------
 
@@ -1146,19 +1553,38 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         conceal_country(*countries)
 
     def _threat_rings(
-        self, *, sa2_pos: Point, sa6_pos: Point, sa8_pos: Point
+        self,
+        *,
+        sa2_pos: Point,
+        sa6_pos: Point,
+        sa8_pos: Point,
+        rear_pos: Point,
+        front: Frontline,
     ) -> tuple[ThreatRing, ...]:
-        """The three belts as envelopes, for both the drawn plan and AI routing.
+        """Every briefed envelope, for both the drawn plan and AI routing.
 
         One set of radii, two consumers: what `_draw_plan` paints as the
         estimated ring is exactly what the AI package flies around, so the
         briefing and the friendly flight plan can never disagree. The EWRs are
-        not here — they cannot shoot, so nothing needs to route around them.
+        not here — they cannot shoot, so nothing needs to route around them —
+        and neither is the unfixed Gadfly: the mission never claims to know
+        where it is, so nothing may be planned off it either.
+
+        The shoulder batteries are what turn the front line from scenery into
+        geometry: their rings sit 45 km off the ingress axis, which is why the
+        seam is flyable and the flanks are not. The rear battery covers the depth
+        behind the line on the southern beam, so the far side of the front is
+        held airspace rather than an empty sky waiting for anyone who skipped the
+        corridor.
         """
+        north, south = _front_shoulders(front)
         return (
             ThreatRing(sa2_pos, 40_000.0, "SA-2 belt"),
             ThreatRing(sa6_pos, 25_000.0, "SA-6 belt"),
             ThreatRing(sa8_pos, 10_000.0, "SA-8 belt"),
+            ThreatRing(north, _SHOULDER_RING_M, "SA-3 north shoulder"),
+            ThreatRing(south, _SHOULDER_RING_M, "SA-3 south shoulder"),
+            ThreatRing(rear_pos, _SHOULDER_RING_M, "SA-3 rear battery"),
         )
 
     def _draw_plan(
@@ -1167,37 +1593,76 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         scene: _Scene,
         *,
         belts: tuple[ThreatRing, ...],
+        front: Frontline,
         ewr_positions: list[Point],
         corridor: list[Point],
         tarcap_track: tuple[Point, Point],
         fac_track: tuple[Point, Point],
         awacs_track: tuple[Point, Point],
         tanker_track: tuple[Point, Point],
-    ) -> None:
-        """Paint the plan on the F10 map (trained: coarse, estimated threats)."""
+    ) -> list[dtc.ThreatPoint]:
+        """Paint the plan on the F10 map (trained: coarse, estimated threats).
+
+        Returns the estimated air-defense rings as HSD threat points, so the
+        cockpit shows the same claim as the map rather than a second guess at it.
+        The EWRs are not among them — a search radar has no envelope to draw —
+        and neither is the objective ring.
+
+        Three things on this map are deliberately *not* threats. The front-line
+        trace is drawn precisely at every difficulty because both armies have
+        been sitting on it for weeks; its strongpoints get no rings of their own
+        (an intel officer plots the line and says it is gun country, not every
+        ZU-23 pit); and the Gadfly behind the northern shoulder is drawn nowhere
+        at all, because nothing in the briefing claims to have found it.
+        """
         plan = PlanOverlay(m, self.difficulty)
         plan.objective(scene.route_mid, "Convoy axis — Taftanaz road", radius=7_000.0)
+        plan.frontline(
+            front.trace, "FRONT LINE — Syrian positions, guns and MANPADS below 10,000"
+        )
+        plan.waypoint_label(front.seam, "SEAM — cross here, high")
         plan.route(corridor, "Uzi ingress")
         plan.orbit(*tarcap_track, "Eagle TARCAP")
         plan.orbit(*fac_track, "Hammer FAC(A)")
         plan.orbit(*awacs_track, "Magic AWACS")
         plan.orbit(*tanker_track, "Texaco tanker")
         plan.waypoint_label(scene.convoy_destination, "Off-load — Taftanaz")
+        # Keyed by label so a belt added without a cockpit system raises here
+        # instead of quietly going missing from the cartridge.
+        systems = {
+            "SA-2 belt": dtc.SA_2,
+            "SA-6 belt": dtc.SA_6,
+            "SA-8 belt": dtc.SA_8,
+            "SA-3 north shoulder": dtc.SA_3,
+            "SA-3 south shoulder": dtc.SA_3,
+            "SA-3 rear battery": dtc.SA_3,
+        }
+        hsd: list[dtc.ThreatPoint] = []
         for belt in belts:
-            plan.threat(
-                belt.position,
-                radius=belt.radius_m,
-                label=belt.label,
-                icon=StandardIcon.AirDefense,
+            hsd += dtc.briefed(
+                plan.threat(
+                    belt.position,
+                    radius=belt.radius_m,
+                    label=belt.label,
+                    icon=StandardIcon.AirDefense,
+                ),
+                systems[belt.label],
             )
         for pos in ewr_positions:
             plan.threat(pos, radius=4_000.0, label="EWR", icon=StandardIcon.SearchRadar)
-        plan.threat(
-            scene.convoy_origin,
-            radius=8_000.0,
-            label="Convoy SHORAD",
-            icon=StandardIcon.Mechanized,
+        # The column's 2S6, Strela and Shilka drive with it, so they get a mark
+        # and no envelope: a ring drawn where the column started is a promise
+        # about ground the SHORAD has left, and it never reaches the cartridge.
+        plan.mobile_threat(
+            scene.convoy_origin, "Convoy SHORAD", icon=StandardIcon.Mechanized
         )
+        return hsd
+
+    def _load_hsd_threats(
+        self, m: Mission, scene: _Scene, points: list[dtc.ThreatPoint]
+    ) -> None:
+        """Load the briefed belts as pre-planned threats on the player's cartridge."""
+        dtc.arm_hsd_threats(m, points, overlay=scene.overlay.overlay)
 
     # -- HARM reaction ------------------------------------------------------
 
@@ -1209,31 +1674,37 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         sa6: VehicleGroup,
         sa8: VehicleGroup,
         ewrs: list[VehicleGroup],
+        shoulders: list[VehicleGroup],
+        rear: VehicleGroup,
+        unfixed: VehicleGroup,
     ) -> None:
         """Wire realistic emissions control for every radar-guided site.
 
         The tuned dials are the difficulty statement for the SEAD half of this
-        mission: the SA-6 and SA-8 crews are drilled (react ~9 times in 10,
-        recognise the launch in 3–7 s), the SA-2 crew is a conscript belt that
-        misses the call almost a third of the time, and the EWRs — furthest
-        from the shooter, and not the ones being shot at — react slowest and
-        come back up soonest. A suppressed site stays dark ~4–6 min, long
-        enough that a HARM buys the package a real run at the column instead
-        of a one-minute gap.
+        mission. Nobody in a site gets a launch warning, so every band is tens
+        of seconds — the same order as a HARM's flight — and the shot's range
+        decides the duel: the SA-8's own crew works its own radar and is off
+        the air in well under a minute, the drilled SA-6 crew not far behind,
+        the conscript SA-2 belt misses the call almost a third of the time and
+        takes over a minute when it does, and the EWRs — furthest from the
+        shooter, and not the ones being shot at — react slowest and come back
+        up soonest. A suppressed site stays dark ~4–6 min, long enough that a
+        HARM buys the package a real run at the column instead of a one-minute
+        gap.
         """
         sites = [
             ArmSite(
                 sa6,
                 "SA-6",
                 probability=0.9,
-                delay_s=(3.0, 7.0),
+                delay_s=(14.0, 40.0),
                 shutdown_s=(280.0, 400.0),
             ),
             ArmSite(
                 sa8,
                 "SA-8",
                 probability=0.85,
-                delay_s=(2.0, 5.0),
+                delay_s=(10.0, 30.0),
                 shutdown_s=(220.0, 320.0),
                 react_range_m=40_000.0,
             ),
@@ -1241,7 +1712,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                 sa2,
                 "SA-2",
                 probability=0.7,
-                delay_s=(5.0, 11.0),
+                delay_s=(25.0, 70.0),
                 shutdown_s=(260.0, 380.0),
             ),
             *[
@@ -1249,12 +1720,37 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                     ewr,
                     "early-warning radar",
                     probability=0.75,
-                    delay_s=(6.0, 14.0),
+                    delay_s=(30.0, 90.0),
                     shutdown_s=(200.0, 300.0),
                     react_range_m=90_000.0,
                 )
                 for ewr in ewrs
             ],
+            # The line's own radars and the rear-area battery behind it. All of
+            # them react — same net — but a battery 45 km or more off the
+            # corridor hears the call rather than sees the shot, so it is slower
+            # than the belts and its dark window is worth nothing at all to a
+            # player who stays in the seam. It is worth something to one who did
+            # not, which is the only time these ever get shot at.
+            *[
+                ArmSite(
+                    site,
+                    "S-125 battery",
+                    probability=0.7,
+                    delay_s=(30.0, 80.0),
+                    shutdown_s=(240.0, 360.0),
+                    react_range_m=70_000.0,
+                )
+                for site in [*shoulders, rear]
+            ],
+            ArmSite(
+                unfixed,
+                "the unlocated Gadfly",
+                probability=0.9,
+                delay_s=(12.0, 35.0),
+                shutdown_s=(240.0, 360.0),
+                react_range_m=70_000.0,
+            ),
         ]
         arm_emcon_reaction(
             m,
@@ -1263,6 +1759,34 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             coalition="blue",
             down_call="Magic: {label} has ceased emissions, site is dark.",
             up_call="Magic: {label} is radiating again, expect it hot.",
+        )
+
+    def _add_fac_coord_readout(self, m: Mission, *, convoy: VehicleGroup) -> None:
+        """Let Hammer pass the column's position in the units the Viper takes.
+
+        The stock 9-line reads a military grid to every airframe, and the F-16's
+        DED accepts degrees and decimal minutes — so as it ships, Hammer's
+        talk-on is a kneeboard conversion before it is a steerpoint. The request
+        on his menu answers in the asking cockpit's own format, and answers with
+        where the column *is*: it is still driving, so the mark that was good at
+        check-in is stale by the time the SEAD phase is over.
+
+        He volunteers it once, a few seconds behind his check-in call, so the
+        player is not expected to guess that the readout exists — the grid DCS
+        reads out otherwise looks like everything the controller has.
+        """
+        arm_jtac_coords(
+            m,
+            [
+                CoordTarget(
+                    convoy,
+                    label="Hammer 1-1",
+                    what="the resupply column",
+                    laser_code=_LASER_CODE,
+                )
+            ],
+            menu_title="Hammer 1-1",
+            push_at_s=_FAC_CHECKIN_S + 15,
         )
 
     # -- triggers and briefing ----------------------------------------------
@@ -1275,8 +1799,10 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             voice=self._voice,
             text=(
                 "Uzi, Magic on station. Syrian column rolling north-west out of "
-                "Abu al-Duhur, forty minutes from the Taftanaz off-load. Three SAM "
-                "belts on your nose, SA-6 owns the route. Texaco is 270.0, TACAN 10X."
+                "Abu al-Duhur, forty minutes from the Taftanaz off-load. Cross the "
+                "line at the seam and stay high through it — the shoulders are "
+                "S-125. Three SAM belts beyond it, SA-6 owns the route. Texaco is "
+                "270.0, TACAN 10X."
             ),
         )
 
@@ -1292,11 +1818,11 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         mission_triggers.checkin(
             m,
             voice=self._voice,
-            at_seconds=300,
+            at_seconds=_FAC_CHECKIN_S,
             comment="Hammer FAC(A) check-in",
             text=(
-                f"Uzi, Hammer overhead the corridor, {_FREQ_FAC}.0 victor, "
-                f"{_PRESET_FAC}. I have the column visual, eleven vehicles, "
+                f"Uzi, Hammer overhead the corridor, {_FREQ_FAC}.0 victor. "
+                f"I have the column visual, eleven vehicles, "
                 f"laser code {_LASER_CODE} on call."
             ),
         )
@@ -1309,6 +1835,37 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                 "Magic: reminder, Uzi — HARM suppresses those belts, it does not "
                 "kill them. Work the dark window."
             ),
+        )
+
+    def _add_front_crossing_trigger(
+        self, m: Mission, *, front: Frontline, player: FlyingGroup
+    ) -> None:
+        """Magic puts a name to the unfixed Gadfly once the package is at the seam.
+
+        The site is on no map and no cartridge, so without this the player either
+        never learns it exists or finds out from an RWR launch warning while
+        arcing north — which reads as the mission cheating rather than as the
+        morning's intel having a hole in it. An AWACS with ESM would hear a Buk
+        search radar the moment it came up, and hearing it at the crossing is
+        also when it matters: the call is what makes "stay in the seam" a warning
+        instead of a preference. It still does not hand over a position — nobody
+        has one — so the flank stays a gamble rather than a target.
+        """
+        seam = m.triggers.add_triggerzone(
+            position=front.seam, radius=20_000, hidden=True, name="Front line seam"
+        )
+        mission_triggers.message_to_coalition(
+            m,
+            comment="Front line crossed: unlocated Gadfly called",
+            conditions=(condition.PartOfGroupInZone(player.id, seam.id),),
+            voice=self._voice,
+            text=(
+                "Uzi, Magic. Crossing the line — and we have that Gadfly search "
+                "radar up north of the corridor, same emitter we could not fix "
+                "this morning. No fix on it, so do not arc north of the line: "
+                "stay in the seam and let the SA-6 be your problem."
+            ),
+            seconds=20,
         )
 
     def _add_strike_release_triggers(
@@ -1426,7 +1983,10 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         """Wire the in-game description, side tasks, and sortie name."""
         m.set_description_text(self._in_game_briefing())
         m.set_description_bluetask_text(
-            "Break up the Syrian resupply column before it reaches the Taftanaz "
+            "Cross the Syrian front line at the seam, high — the frontage is guns "
+            "and MANPADS and each shoulder is an S-125 battery, and there is an "
+            "emitter north of the corridor we never located. Then break up the "
+            "resupply column before it reaches the Taftanaz "
             "off-load. Suppress the SA-2, SA-6 and SA-8 belts covering the "
             "corridor — their crews drop emissions when they see a HARM and "
             "stay dark for minutes, so work the window. Pontiac is held "
@@ -1435,7 +1995,10 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         )
         m.set_description_redtask_text(
             "Run the resupply column from Abu al-Duhur to the Taftanaz "
-            "off-load. Air defence belts cover the corridor; drop emissions on "
+            "off-load; the ammunition is for the divisions holding the line. "
+            "Hold the frontage, keep both shoulder batteries on the air and let "
+            "the middle sector stay the SA-6's business. "
+            "Air defence belts cover the corridor; drop emissions on "
             "anti-radiation fire and re-radiate once the shooter is dry. "
             "Scramble the MiG-29S alert pair when the column takes losses."
         )

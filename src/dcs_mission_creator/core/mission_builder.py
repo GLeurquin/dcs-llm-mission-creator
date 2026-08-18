@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING
 
 from dcs.mission import Mission
 
-from dcs_mission_creator.core import dcs_install, waypoints
+from dcs_mission_creator.core import datalink, dcs_install, dtc, waypoints
 from dcs_mission_creator.core.difficulty import Difficulty
 
 if TYPE_CHECKING:
@@ -67,17 +67,47 @@ class MissionBuilder(ABC):
     def build_miz(self, miz_path: Path) -> None:
         """Assemble the mission, then finish and save it.
 
-        Concrete on purpose. Base-waypoint snapping has to happen after the last
-        flight exists and before the save — pydcs hard-codes those altitudes to
-        zero, which buries them under any field above sea level. That ordering
-        used to live in CLAUDE.md as prose, with all six missions ending in the
-        same three lines; a mission that forgot them shipped a broken jet.
+        Concrete on purpose. Both finishing steps have to happen after the last
+        flight exists and before the save, and both are things pydcs leaves
+        undone rather than things a mission decides:
+
+        - base-waypoint snapping, because pydcs hard-codes take-off and landing
+          altitudes to zero, which buries them under any field above sea level.
+          That ordering used to live in CLAUDE.md as prose, with all six
+          missions ending in the same three lines; a mission that forgot them
+          shipped a broken jet.
+        - datalink identities, because pydcs writes neither track numbers nor
+          the per-unit network table, so a coop flight spawned anonymous and
+          could not see itself on the scope.
+
+        The third finishing step is the mirror image: any data cartridge a
+        mission armed is a *file inside the package*, and `Mission.save` writes
+        a fixed set of zip entries with no hook for another one, so it goes in
+        after the save.
         """
         m = Mission(self._terrain)
+        self._permit_crash_recovery(m)
         overlay = self._assemble(m)
         waypoints.snap_base_waypoints(m, overlay)
+        datalink.assign_datalink_identities(m)
         miz_path.parent.mkdir(parents=True, exist_ok=True)
         m.save(str(miz_path))
+        dtc.write_cartridges(m, miz_path)
+
+    @staticmethod
+    def _permit_crash_recovery(m: Mission) -> None:
+        """Let a player who crashes pick an aircraft again instead of being done.
+
+        Every player slot is `Skill.Client`, so a mission opens on the
+        slot-selection screen — but crash recovery is off in the DCS simulation
+        preset, and with it off a crash goes straight to the debriefing and the
+        sortie is over. Enforcing the ME's "PERMIT CRASH RCVR" (`permitCrash`)
+        in the mission's own forced options overrides whatever the player has
+        set, so a crash returns to the slot list and the jet can be re-selected.
+        Nothing else is forced: the rest of the gameplay options stay the
+        player's.
+        """
+        m.forced_options.permit_crash = True
 
     @staticmethod
     def _pin_runway_waypoint_distance(distance_m: int = 7_000) -> None:

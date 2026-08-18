@@ -506,14 +506,14 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             player,
             planes.F_16C_50,
             [
-                (1, "AIM_9X_Sidewinder_IR_AAM"),
-                (2, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+                (1, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+                (2, "AIM_9X_Sidewinder_IR_AAM"),
                 (3, "AGM_88C_HARM___High_Speed_Anti_Radiation_Missile_"),
                 (4, "Fuel_tank_370_gal"),
                 (6, "Fuel_tank_370_gal"),
                 (7, "AGM_88C_HARM___High_Speed_Anti_Radiation_Missile_"),
-                (8, "AIM_120C_AMRAAM___Active_Radar_AAM"),
-                (9, "AIM_9X_Sidewinder_IR_AAM"),
+                (8, "AIM_9X_Sidewinder_IR_AAM"),
+                (9, "AIM_120C_AMRAAM___Active_Radar_AAM"),
                 (10, "AN_ASQ_213_HTS___HARM_Targeting_System"),
             ],
         )

@@ -146,6 +146,31 @@ def test_build_miz_assembles_and_saves(tmp_path: Path, monkeypatch):
     assert out.is_file(), "parent directory should be created"
 
 
+def test_build_miz_permits_crash_recovery(tmp_path: Path):
+    """A crash must return to the slot list, not to the debriefing.
+
+    Checked on the saved file rather than on the builder: the whole point is
+    that the option reaches the `.miz`, where DCS reads it as a mission-level
+    override of the player's own gameplay settings.
+    """
+    import zipfile
+
+    out = tmp_path / "stub.miz"
+    StubAssembler().build_miz(out)
+    with zipfile.ZipFile(out) as z:
+        mission = z.read("mission").decode("utf-8", "replace")
+    assert '["permitCrash"]=true' in mission
+
+
+def test_permit_crash_recovery_forces_nothing_else():
+    """The rest of the gameplay options stay the player's."""
+    from dcs.terrain import Caucasus
+
+    m = Mission(Caucasus())
+    MissionBuilder._permit_crash_recovery(m)
+    assert m.forced_options.dict() == {"permitCrash": True}
+
+
 def test_build_miz_snaps_after_assembling(tmp_path: Path, monkeypatch):
     """Ordering is the whole point: snapping before the last flight exists is a no-op."""
     from dcs_mission_creator.core import mission_builder as mb

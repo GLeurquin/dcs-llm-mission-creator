@@ -45,9 +45,64 @@ __SITES__
     end
   end
 
+  -- Reaction time is not a flat coin flip across the band: the middle is the
+  -- common case, and both a snap reaction and a badly slow one are rare.
+  -- Averaging two uniform draws gives that triangular shape in one line. The
+  -- same spread reads right for how long a crew then stays off the air.
+  local function spread(lo, hi)
+    return lo + (math.random() + math.random()) * 0.5 * (hi - lo)
+  end
+
+  -- A site that has lost its radars is not dark, it is dead — it has nothing
+  -- left to switch off and the crew making the call is gone. `Group.isExist()`
+  -- stays true while a single launcher or the command post survives, so the one
+  -- thing the calls have to be gated on is a live emitter. These are the
+  -- attributes DCS tags radar vehicles with (search, track/fire-control, EWR).
+  local radarAttrs = {"SAM SR", "SAM TR", "EWR"}
+
+  local function liveRadars(name)
+    local g = Group.getByName(name)
+    if not g or not g:isExist() then return 0 end
+    local n = 0
+    for _, u in ipairs(g:getUnits() or {}) do
+      if u:isExist() and u:getLife() > 0 then
+        for _, attr in ipairs(radarAttrs) do
+          if u:hasAttribute(attr) then
+            n = n + 1
+            break
+          end
+        end
+      end
+    end
+    return n
+  end
+
+  -- `site.radars` remembers the most radars this site was ever seen with, so a
+  -- group activated after mission start is counted the first time it is looked
+  -- at rather than mistaken for a wreck. A site that never had a radar-tagged
+  -- unit at all (a hand-built group of some type DCS does not tag) falls back to
+  -- plain group existence, so it still reacts instead of going silent forever.
+  local function radiating(site)
+    local n = liveRadars(site.name)
+    if n > (site.radars or 0) then site.radars = n end
+    if n > 0 then return true end
+    if (site.radars or 0) > 0 then return false end
+    local g = Group.getByName(site.name)
+    return g ~= nil and g:isExist()
+  end
+
+  -- Counted here, at mission start, while every site is still intact: a radar
+  -- killed by something other than a HARM, before the first anti-radiation shot
+  -- of the mission, has to read as dead rather than as one of those untagged
+  -- groups. Late-activated sites do not exist yet and are picked up lazily above.
+  for _, site in ipairs(sites) do
+    site.radars = liveRadars(site.name)
+  end
+
   local function emissions(site, on)
     local g = Group.getByName(site.name)
     if not g or not g:isExist() then return false end
+    if not radiating(site) then return false end
     local c = g:getController()
     if on then
       c:setOption(AI.Option.Ground.id.ALARM_STATE, AI.Option.Ground.val.ALARM_STATE.RED)
@@ -71,7 +126,7 @@ __SITES__
   end
 
   local function goDark(site, time)
-    local down = site.downMin + math.random() * (site.downMax - site.downMin)
+    local down = spread(site.downMin, site.downMax)
     local st = state[site.name]
     if st then
       -- Already dark: repeated fire keeps the crew off the air longer.
@@ -109,15 +164,17 @@ __SITES__
     local now = timer.getTime()
     for _, site in ipairs(sites) do
       local g = Group.getByName(site.name)
-      if g and g:isExist() then
+      if g and g:isExist() and radiating(site) then
         local units = g:getUnits()
         local u = units and units[1]
         if u then
           local p = u:getPoint()
           local dx, dz = sp.x - p.x, sp.z - p.z
           if math.sqrt(dx * dx + dz * dz) <= site.range and math.random() <= site.prob then
-            local delay = site.delayMin + math.random() * (site.delayMax - site.delayMin)
-            timer.scheduleFunction(goDark, site, now + delay)
+            -- Drawn per site per shot, and deliberately of the same order as a
+            -- HARM's time of flight: the missile's range at launch is what
+            -- decides whether it arrives before the transmitter dies.
+            timer.scheduleFunction(goDark, site, now + spread(site.delayMin, site.delayMax))
           end
         end
       end

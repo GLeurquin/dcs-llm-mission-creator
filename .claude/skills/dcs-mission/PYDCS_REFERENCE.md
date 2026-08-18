@@ -72,6 +72,15 @@ assert not status                             # empty list == clean
   hours earlier and is how a daytime package ends up flying in the dark.
 - There is **no `mission.duration`**. End the sortie with triggers (§7) or
   let bingo fuel resolve it.
+- `m.forced_options` (`dcs.forcedoptions.ForcedOptions`) is the ME's *Mission
+  Options* panel: every field is `None` (= leave it to the player) until set,
+  and only the set ones reach the `.miz`'s `forcedOptions` table, where they
+  override the player's own gameplay settings. Fields are snake_case mirrors of
+  the Lua keys — `permit_crash`, `external_views`, `labels`, `easy_radar`,
+  `unrestricted_satnav`, `immortal`, `fuel`, `weapons`, … The project forces
+  exactly one, in `MissionBuilder._permit_crash_recovery`: `permit_crash = True`,
+  which is crash recovery — without it a crash ends the sortie at the
+  debriefing instead of returning to slot selection.
 - Import/save on non-Windows prints
   `"Cannot read registry keys on non-Windows OS, returning None"` and
   `"Couldn't detect any installed DCS World version"`. Harmless — do not
@@ -358,13 +367,29 @@ gets no radio option and no laser spot, with nothing logged:
 4. **Radio.** The FAC entry appears in the player's menu only on the FAC net.
    Set the FAC's own radio to match with
    `task.SetFrequencyCommand(mhz, Modulation.AM)` (pydcs otherwise leaves the
-   group on its 251.0 default) and tell the player which **preset channel**
-   carries it — `planes.<Type>.panel_radio[radio][channel]` lists the stock
-   presets, e.g. the F-16C has 133 on COMM2 CH 10 and 251 on COMM1 CH 18.
+   group on its 251.0 default) and brief the net as a **frequency**
+   ("133.000 AM into COMM2"), never as a preset "CH N". A channel number next
+   to the tanker's "TACAN 10X" reads as a TACAN channel, and a player who goes
+   hunting for one never gets on the JTAC's net. Preset channels are fine for
+   AWACS and tanker, where a mistuned radio only costs a service.
 
 A FAC parked close enough to see the target is usually inside a MEZ. Give it
 `task.SetInvisibleCommand(True)` so the sortie's laser does not evaporate in
 the first two minutes.
+
+**Coordinates are MGRS-only and nothing in the mission changes that.** The
+9-line and the target call both format the position with `MGRS:make(point, 4)`
+in the game's `Scripts/Speech/NATO.lua`, so a 4-digit grid is what every
+airframe is read — including the ones with no way to enter one (the F-16's DED
+and the Hornet's UFC take degrees and decimal minutes). There is no task field,
+option or ME setting for it. **Project wrapper:**
+`jtac.arm_jtac_coords(m, [CoordTarget(convoy, label="Hammer 1-1",
+what="the resupply column", laser_code=1688)], menu_title="Hammer 1-1")` adds a
+radio request that answers in the requesting cockpit's own format, off a live
+unit so a moving target's position is current. Arm it *alongside* the FAC task —
+the laser and the talk-on stay stock — and give it `push_at_s` (just after the
+controller's check-in) so one readout arrives unprompted: the player is otherwise
+read nothing but ED's grid and never learns the F10 entry exists.
 
 ### 6.2 AI behaviour options — the difficulty dial
 Each is a `task.Opt*` appended to `points[0].tasks`:
@@ -632,6 +657,12 @@ calling §11 / triggers directly. Their contracts live in
   group creation already applied a task default (§4.5).
 - `Point` is world meters, not lat/lon; third ctor arg is the terrain.
 - `m.save(path)` does **not** mkdir the parent.
+- `m.save(path)` writes a fixed set of zip entries (`mission`, `options`,
+  `warehouses`, `l10n/DEFAULT/*`, `KNEEBOARD/…`) with no hook for another file,
+  so anything else the `.miz` must contain — an F-16C data cartridge,
+  `DTC/<name>.dtc` (`core/dtc.py`) — is appended to the archive after the save.
+- `Unit.dict()` emits a fixed field list, so a mission-file unit key pydcs does
+  not model (`datalinks`, `DTC`) needs `core/unit_extras.py`.
 - No `mission.duration` — end via triggers or bingo fuel.
 - `Coalition` is in `dcs.action`, not `dcs.coalition`.
 - `TriggerContinious` and `Preceptions` are spelled that way in the source.

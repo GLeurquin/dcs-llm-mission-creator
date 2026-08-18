@@ -14,7 +14,7 @@ rule.add_action(lua.InlineDoScript(script))
 
 Substitution is deliberately dumb (literal `__NAME__` → text): the values are
 already-formatted Lua source built on the Python side, so nothing here quotes
-or escapes for you — use the caller's own literal helper for that.
+or escapes for you — build string literals with `quote`.
 
 Use `InlineDoScript`, never pydcs's `action.DoScript` — see its docstring.
 """
@@ -24,7 +24,7 @@ from __future__ import annotations
 import re
 from functools import lru_cache
 from importlib.resources import files
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from dcs import action
 
@@ -37,6 +37,20 @@ def source(name: str) -> str:
     if not name.endswith(".lua"):
         raise ValueError(f"lua script name must end in .lua, got {name!r}")
     return files(__name__).joinpath(name).read_text(encoding="utf-8")
+
+
+def quote(text: Optional[str]) -> str:
+    """Return `text` as a Lua string literal, or the literal `nil` for `None`.
+
+    The `None` case is what makes this worth sharing: every table row rendered
+    into a script has optional fields (a radio call nobody wrote, a laser code
+    the target has not got), and they have to reach Lua as `nil` rather than as
+    an empty string a truth test would still accept.
+    """
+    if text is None:
+        return "nil"
+    escaped = text.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
 
 
 def render(name: str, **substitutions: str) -> str:

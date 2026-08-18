@@ -34,11 +34,21 @@ This is a pydcs-based DCS mission generator. Three docs, one job each:
 - The base class owns everything around that, and **a mission overrides none
   of it**:
   - `build_miz` constructs the `Mission`, calls `_assemble`, snaps every
-    flight's take-off/landing waypoints to field elevation, makes the output
-    directory and saves. Snapping has to happen after the last flight exists
-    and before the save — pydcs hard-codes those altitudes to zero, so a
-    mission that skipped it shipped a jet spawned underground. It is in the
-    base precisely so it cannot be forgotten.
+    flight's take-off/landing waypoints to field elevation, assigns datalink
+    identities, makes the output directory and saves. Both finishing steps have
+    to happen after the last flight exists and before the save — pydcs
+    hard-codes take-off/landing altitudes to zero, so a mission that skipped
+    the snap shipped a jet spawned underground, and it writes no datalink
+    identity at all, so a coop flight came up anonymous and blind to itself.
+    They are in the base precisely so they cannot be forgotten. One step runs
+    *after* the save for the mirror-image reason: any data cartridge a mission
+    armed (`core/dtc.py`) is a file inside the `.miz`, and `Mission.save` writes
+    a fixed set of zip entries with no hook for another one.
+  - `_permit_crash_recovery` forces `permitCrash` on (the ME's "PERMIT CRASH
+    RCVR", `m.forced_options`) for every mission, so a player who crashes
+    lands back on the slot-selection screen and can take another jet instead
+    of dropping straight to the debriefing. Nothing else is forced — the rest
+    of the gameplay options stay whatever the player set.
   - `generate(output_dir) -> tuple[Path, Path]` seeds the RNG, then writes
     `<name>.miz` and `README.md`.
 - Each module also exposes a one-line `main()` so the script stays runnable
@@ -117,7 +127,9 @@ plan.route(corridor, "Dodge ingress")      # list[Point] of the flown route
 plan.orbit(p1, p2, "Eagle CAP")            # a friendly race-track leg
 plan.waypoint_label(pos, "Magic AWACS")
 plan.threat(sa13_pos, radius=8_000.0, label="SA-13", icon=StandardIcon.AirDefense)
+plan.mobile_threat(convoy_pos, "Convoy SHORAD", icon=StandardIcon.Mechanized)
 plan.threat_area(center, 28_000.0, "SA-6 + bandit CAP — vicinity")
+plan.frontline(front.trace, "FRONT LINE — guns and MANPADS below 10,000")
 ```
 
 Pass **absolute** world `Point`s — `PlanOverlay` does the layer selection,
@@ -127,9 +139,29 @@ policy. `.threat()` is the difficulty dial: full icon + true ring on
 `recruit`, coarse + offset + "(est.)" on `trained`, **no-op** on
 `veteran`/`ace` (use `.threat_area()` for a vague zone there). `.objective()`
 tightens/loosens the same way. Friendly-plan calls (`route`, `orbit`,
-`waypoint_label`) always draw precisely. Design rules (what to draw, reveal
-per label) live in the `dcs-mission` skill; the underlying pydcs drawing API
-lives in PYDCS_REFERENCE.md.
+`waypoint_label`) always draw precisely. `.frontline()` is the one *enemy* call
+that also draws precisely at every difficulty — a front line is ground both
+armies have held for weeks, and the briefing's "cross at the seam" needs
+something on the map to point at; the air defence sitting on it still goes
+through `.threat()` / `.mobile_threat()` like anything else. Design rules (what
+to draw, reveal per label, and that a site may be left off the map on purpose)
+live in the `dcs-mission` skill; the underlying pydcs drawing API lives in
+PYDCS_REFERENCE.md.
+
+`.threat()` also **returns** the `(center, radius)` it drew — the coarsened
+estimate on `trained`, `None` where the difficulty withholds the site. Feed that
+to `core/dtc.py` (via `dtc.briefed`) rather than re-deriving it: the offset
+bearing is a fresh random draw per call, so a second guess at "the trained
+estimate" lands somewhere else and the cockpit would contradict the map.
+
+**A ring is only for something emplaced.** `.threat()` claims the envelope *is
+there*; air defence that drives — a convoy's organic SHORAD, a road-marching
+launcher, a late-activated reserve — has left any ring drawn at its start
+point, and the ring then reads as "clear" everywhere it no longer covers. Those
+get `.mobile_threat(center, label, icon=…)`: same difficulty policy, icon and
+label only, no circle, and **no return value**, so a moving system cannot end
+up frozen into a pre-planned cartridge point. Ground truth for the call: a group
+with waypoints is mobile.
 
 Missions call this in a `_draw_plan` step near the end of `_assemble`, before
 `_add_briefing`. Whether it runs before or after the trigger steps does not
@@ -226,6 +258,133 @@ this. Design rules (which waypoints, where the run-in altitude goes) live in
 the `dcs-mission` skill; the pydcs waypoint API and the gotcha in
 PYDCS_REFERENCE.md §4.3.
 
+## Datalink-identity helper (project-owned)
+
+[`datalink`](src/dcs_mission_creator/core/datalink.py) makes a coop flight show
+up on its own scopes. Two things the ME writes for every aircraft, and pydcs
+writes for none, decide that:
+
+- **`AddPropAircraft`** carries the identity — the track number (`STN_L16` on
+  Link 16, `SADL_TN` on the A-10's SADL) and the callsign the datalink displays
+  it under (`VoiceCallsignLabel` + `VoiceCallsignNumber`). pydcs seeds those
+  keys from the type's `property_defaults`, where all three are `None`, and
+  never fills them: the whole package spawns anonymous, and identical.
+- **`datalinks`** is the per-unit network table the four modules with a
+  Datalink dialog (F-16C, F/A-18C, A-10C II, AH-64D) read their team members
+  out of. pydcs has no field for it, so the F-16's MIDS comes up with an empty
+  flight and no other player's PPLI symbol ever appears on the HSD, the FCR
+  page or the HUD.
+
+`assign_datalink_identities(m)` fills both, mission-wide and in group-id order
+(deterministic, so the `.miz` stays byte-identical): a unique track number per
+aircraft in per-flight blocks (`00101`, `00102`, …, `00201`), the ME's own
+two-letter tag plus flight digits off the pydcs callsign (`Springfield11` →
+`SD` + `11`), and each flight listed as its own team members. **Missions never
+call it** — `MissionBuilder.build_miz` does, right after `snap_base_waypoints`.
+
+Adding a module is a `_NETS` table entry — its dialog defaults and whether its
+team members carry a TDOA flag, both read off
+`<DCS>/CoreMods/aircraft/<module>/Datalinks/*.lua`. The AH-64D is deliberately
+absent: its IDM has a different shape (`TN_IDM_LB` / `OwnshipCallSign`) and no
+mission here flies one. Writing the table at all needs
+[`core/unit_extras.py`](src/dcs_mission_creator/core/unit_extras.py) — a
+one-wrapper patch of `FlyingUnit.dict`, the same kind of targeted patch as
+`MissionBuilder._pin_onboard_numbers`, shared with `core/dtc.py` because two
+mission-file unit keys have no pydcs field. Register with
+`emit_unit_key("datalinks", "datalinks")`; **do not** write a second wrapper —
+two wrappers each guarding on their own marker re-wrap the chain on every build.
+
+## HSD threat-ring helper (project-owned)
+
+[`dtc`](src/dcs_mission_creator/core/dtc.py) puts the briefed SAM rings in the
+cockpit. The F-16C draws a surface-to-air envelope on the HSD (and the HAD) from
+its **data cartridge**, not from the RWR: up to fifteen pre-planned threat
+points in steerpoints 56–70, each with a position, a three-character code and
+the system's range and ceiling. DCS reads them from a `DTC/<name>.dtc` JSON file
+inside the `.miz` plus a per-unit `DTC` key naming the cartridges that slot
+carries — and pydcs writes neither (`Mission.save` writes a fixed set of zip
+entries, `Unit.dict` has no `DTC` field).
+
+Feed it what the F10 plan *drew*, not the site's true position:
+`PlanOverlay.threat` now returns the `(center, radius)` it painted — coarsened
+and offset at `trained`, `None` at `veteran`/`ace` — and `dtc.briefed` turns
+that into zero or one threat point, so the cockpit ring and the map ring are the
+same claim and the difficulty policy stays in `map_draw.py`:
+
+```python
+hsd = dtc.briefed(
+    plan.threat(sa6_pos, radius=12_000.0, label="SA-6", icon=StandardIcon.AirDefense),
+    dtc.SA_6,
+)
+...
+dtc.arm_hsd_threats(m, hsd, overlay=scene.overlay.overlay)   # a `_load_hsd_threats` step
+```
+
+- `arm_hsd_threats(m, points, *, name="THREATS", overlay=None)` — builds one
+  cartridge, marks it default + `AutoLoad` (the rings are up before the player
+  touches the DTE page) and attaches it to every **player-flown F-16C** unit.
+  Empty `points` writes nothing, which is exactly how an ace mission comes out;
+  more than fifteen points, or no Viper slot to load, raises.
+- `ThreatSystem` constants (`dtc.SA_2`, `dtc.SA_6`, `dtc.SA_19`, `dtc.HAWK`, …)
+  are the jet's own `THREAT_PTS_defs` rows — `def_num`, exact name, code, range,
+  ceiling. Adding a system is a table entry.
+- The gotcha that makes it work at all: every `mirror_*` flag is the editor's
+  **"Do not upload tab data"** checkbox and defaults to *on*, so
+  `mirror_THREAT_PTS` has to be `False` or the jet takes the cartridge and then
+  declines to read the tab. The other tabs stay mirrored on purpose — uploading
+  an empty steerpoint or comms tab would wipe the mission's own route and radio
+  presets.
+- **Missions never write the file** — `MissionBuilder.build_miz` appends it
+  after `m.save(...)`, since the cartridge is a file *inside* the package.
+
+Only list **emplaced** systems the briefing names: a ring the player was never
+briefed on is intel the mission did not claim to have, and a pre-planned point
+is a static claim, so anything that drives is excluded on principle — a convoy's
+organic SHORAD, a launcher on a road march, a mobile reserve. Draw those with
+`PlanOverlay.mobile_threat` (no envelope, nothing returned), and let the
+briefing say the axis is SHORAD country instead of pretending to a fix. EWRs are
+not rings either (a search radar has no envelope), and neither are ground-force
+markers. The F/A-18C has a cartridge too, but its threats are `MEZ_THRTS` on the
+SA page — a second table, not a parameter — and no other module in DCS draws a
+pre-planned ring.
+
+## Front-line helper (project-owned)
+
+[`frontline`](src/dcs_mission_creator/core/frontline.py) is the geometry of a
+front: the reason a mission's target cannot be attacked from an arbitrary
+bearing. Without one, the player arcs wide of every belt and comes in from the
+quarter nobody covered, and the whole threat layout watches from behind.
+
+```python
+from dcs_mission_creator.core.frontline import plan_frontline
+
+front = plan_frontline(
+    defends=scene.route_mid,          # what the line stands in front of
+    facing=scene.hatay.position,      # the side the threat comes from
+    standoff_m=26_000.0, span_m=90_000.0, bow_m=12_000.0,
+    sectors_per_side=2, seam_width_m=30_000.0,
+    overlay=scene.overlay.overlay, terrain=self._terrain,   # both or neither
+)
+front.trace       # the drawn polyline, flank to flank, seam included
+front.shoulders   # the two tips — where the area SAMs go
+front.sectors     # the dug-in positions between them, seam excluded
+front.seam        # the crossing the briefing points at
+front.facing_deg  # heading a site on the line wants
+```
+
+Geometry only — no groups, no tasks, exactly like `core/routing.py`. Force
+composition (an S-125 battery per shoulder, armour + guns + MANPADS per sector)
+is mission policy. `span_m` is the detour a flanker pays and `bow_m` sweeps the
+wings toward `facing` so the flanks are the long way in as well as the far way
+round; `seam_width_m` is the frontage with no position on it. Feed the shoulder
+envelopes into `_threat_rings` so the drawn plan, the cartridge and the AI routes
+are one claim, and draw the trace with `PlanOverlay.frontline` — the trace is
+public knowledge, so it is the one red thing drawn precisely at **every**
+difficulty. Design rules (how to price each way in, depth coverage behind the
+line, the seam leading into the mission's real problem) live in the
+`dcs-mission` skill; `TacticalScene.place_frontline` is the different question
+(a FLOT meandering between two known anchors).
+
 ## Threat-aware routing helper (project-owned)
 
 [`routing`](src/dcs_mission_creator/core/routing.py) plans AI routes *around*
@@ -314,7 +473,7 @@ from dcs_mission_creator.core.emcon import ArmSite, arm_emcon_reaction
 
 arm_emcon_reaction(
     m,
-    [ArmSite(sa6, "SA-6", probability=0.9, delay_s=(3, 7), shutdown_s=(280, 400)),
+    [ArmSite(sa6, "SA-6", probability=0.9, delay_s=(14, 40), shutdown_s=(280, 400)),
      ArmSite(sa2, "SA-2", probability=0.7), *ewr_groups],   # bare groups OK
     voice=self._voice,                       # calls are spoken as well as printed
     down_call="Magic: {label} has ceased emissions, site is dark.",
@@ -323,16 +482,69 @@ arm_emcon_reaction(
 ```
 
 Per-site dials are the SEAD difficulty statement: `probability` (does this crew
-catch the launch at all), `delay_s` (recognition lag — a close-in HARM still
-kills), `shutdown_s` (how long it stays dark — minutes, not seconds, so a HARM buys a
+catch the launch at all), `delay_s` (recognition lag — **tens of seconds**, the
+same order as a HARM's time of flight, because nobody in the site gets a launch
+warning: the shot must be seen, called down the net and acted on. Single-digit
+seconds darken the radar in the first third of the missile's flight and no HARM
+ever connects; at these bands the shooter's range at launch decides the duel),
+`shutdown_s` (how long it stays dark — minutes, not seconds, so a HARM buys a
 real working window; repeat fire extends it), `react_range_m` (how far down the
-net the launch travels). Radio calls are queued and played
+net the launch travels). Both time bands are drawn triangularly, so the middle
+of the band is the common case. Radio calls are queued and played
 `announce_spacing_s` apart, so a shot that darkens a whole belt still gets one
-call per site instead of only the first. Only list
+call per site instead of only the first. A site whose **radars** are dead is
+destroyed rather than suppressed and drops out of the whole cycle — silently,
+with no call: the gate is a live radar unit, because DCS keeps the group alive
+while one launcher stands, and gating on the group had a site the player had just
+killed report that it was going dark and then that it was radiating again. Only list
 **radar-guided** sites — SA-13/MANPADS have nothing to shut down, and listing a
 mixed convoy would make the whole column hold fire on every HARM shot. Design
 rules (what reveal, what difficulty) live in the `dcs-mission` skill; the pydcs
 `DoScript` mechanics are in PYDCS_REFERENCE.md §7.
+
+## JTAC coordinate-readout helper (project-owned)
+
+[`jtac`](src/dcs_mission_creator/core/jtac.py) fixes the one thing about a DCS
+JTAC that no mission-editor setting reaches: the coordinate system. The stock
+9-line and target call both go through `MGRS:make(point, 4)` in the game's own
+`Scripts/Speech/NATO.lua`, so **every** airframe is read a 4-digit military
+grid — right for an A-10's CDU or an Apache's TSD, useless in an F-16 whose DED
+takes degrees and decimal minutes and cannot enter a grid at all.
+`arm_jtac_coords` adds a radio request that answers in the format of the
+airframe that asked:
+
+```python
+from dcs_mission_creator.core.jtac import CoordTarget, arm_jtac_coords
+
+arm_jtac_coords(
+    m,
+    [CoordTarget(convoy, label="Hammer 1-1", what="the resupply column",
+                 laser_code=1688)],
+    menu_title="Hammer 1-1",          # name it after the controller's callsign
+)
+```
+
+The format comes from the requesting *player group's* aircraft type via
+`COCKPIT_COORD_FORMAT` (only the grid cockpits are listed — A-10A/C/C II,
+AH-64D, OH-58D; everything else falls through to `default_format=DDM`), so one
+JTAC reads a grid to a Hog and degrees-and-minutes to a Viper in the same
+mission, and a player who swaps slots gets the new cockpit's format. Override
+per mission with `formats={planes.FA_18C_hornet.id: CoordFormat.MGRS}`.
+
+Two design consequences worth keeping: the position is read off a live unit on
+each request, so it is current for a column that is still driving (a briefing
+line would be stale by the run-in), and the reply is **text only** — the numbers
+are computed in the mission while `VoiceSynth` renders its audio ahead of time.
+This does not replace `tasking.fac_attack_group`: that is what makes the
+controller acquire, lase and talk. Arm both.
+
+**Pass `push_at_s`** (mission seconds, just after the controller's check-in
+call) unless there is a reason not to. It reads out the first target's position
+once, unprompted, to whoever is in the cockpit and to anyone slotting in later.
+Without it the feature is invisible: DCS keeps reading its own grid, the player
+has no reason to go looking in F10 → Other, and the mission looks like it never
+had the readout. Say where the entry is in the briefing too, and say that the
+stock nine-line is a grid — otherwise the two calls look like a bug.
 
 ## Mission Lua lives in `.lua` files
 
@@ -361,9 +573,10 @@ stock ED missions do.
 `lua.render(name, **subs)` replaces `__KEY__` placeholders with already-formatted
 Lua source and raises if a substitution names a placeholder the file lacks or if
 any `__PLACEHOLDER__` survives (a leftover would be a Lua syntax error at mission
-start). It does no quoting — build literals on the Python side (see `_lua_str` in
-[core/emcon.py](src/dcs_mission_creator/core/emcon.py)). `lua.source(name)`
-returns the raw text. New `.lua` files are picked up automatically; the
+start). It does no quoting itself — build string literals with `lua.quote(text)`,
+which also renders `None` as `nil` (an empty string would still pass a Lua truth
+test, so an absent radio call or laser code would print as a blank one).
+`lua.source(name)` returns the raw text. New `.lua` files are picked up automatically; the
 `[tool.setuptools.package-data]` entry ships them in the wheel.
 
 ## Script structure: small named functions
@@ -390,7 +603,8 @@ def _assemble(self, m: Mission) -> MapOverlay:
 
     self._add_end_triggers(m, convoy=convoy, hog=hog)
     self._conceal_red(russia)
-    self._draw_plan(m, scene, ...)
+    briefed_threats = self._draw_plan(m, scene, ...)
+    self._load_hsd_threats(m, scene, briefed_threats)
     self._add_briefing(m)
 
     return scene.overlay.overlay   # the base snaps base waypoints, then saves
@@ -532,7 +746,14 @@ remain only at the pydcs API layer (`airport.set_blue()`,
   Syria: F-16C out of Hatay against a Syrian resupply column with organic
   SHORAD, run through three SAM belts (SA-2 / SA-6 / SA-8 + EWR) that go dark
   on HARM fire and re-radiate (`core/emcon.py`). Trained difficulty, ~60 min.
-  The reference for missions that want realistic SEAD.
+  The reference for missions that want realistic SEAD — and for the other two
+  things that keep a sortie on its plan: a 90 km **front line** across the
+  ingress axis (`core/frontline.py`) whose S-125 shoulders price the flanks and
+  whose seam funnels the player into the SA-6's sector, plus rear-area batteries
+  behind it so the far side of the line is held ground. One of those, the
+  northern SA-11, is deliberately on no map and no cartridge: the briefing calls
+  it an emitter nobody fixed, `Magic` names it when the player crosses the seam,
+  and it only bites someone who flanks.
 
 All six missions ([coastal_cover](src/dcs_mission_creator/missions/coastal_cover.py),
 [kodori_strike](src/dcs_mission_creator/missions/kodori_strike.py),
@@ -545,6 +766,11 @@ map-drawing helper section above. The four trained missions (coastal_cover,
 kodori_strike, eastern_shield, idlib_gauntlet) draw estimated threat rings +
 NATO icons; the two ace missions (abkhaz_sweep, daryal_run) draw only the
 friendly plan plus a single vague threat zone (enemy positions withheld).
+
+Those same four then pass the rings their `_draw_plan` drew to a
+`_load_hsd_threats` step (`core/dtc.py`), so the F-16C player's HSD carries the
+briefed envelopes as pre-planned threats. The ace pair needs no exception:
+`PlanOverlay.threat` returns nothing there, so there is nothing to load.
 
 All six also run a `_conceal_red` step (`conceal_country`) immediately before
 `_draw_plan`, so no enemy group shows up as a unit icon on the F10 map, the
@@ -581,7 +807,8 @@ the stations first so no default survives on a station the list skips:
 
 ```python
 arm(player, planes.F_16C_50, [
-    (1, "AIM_9X_Sidewinder_IR_AAM"),
+    (1, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+    (2, "AIM_9X_Sidewinder_IR_AAM"),
     (3, "AGM_88C_HARM___High_Speed_Anti_Radiation_Missile_"),
     (4, "Fuel_tank_370_gal"),
     (10, "AN_ASQ_213_HTS___HARM_Targeting_System"),
@@ -593,6 +820,26 @@ force composition, and one mission's package should not constrain another's.
 The `PylonN` classes on each `PlaneType` enumerate what a station legally
 takes, so read the names off pydcs rather than guessing; a wrong one is an
 `AttributeError` at build time instead of a silent empty rail.
+
+**Legal is not realistic.** pydcs only checks that the station accepts the
+store, so a plausible-looking list can still be one no squadron would fly. The
+authority is the game's own payload tables, not memory — `<DCS>/CoreMods/
+aircraft/<module>/UnitPayloads/*.lua` and `<DCS>/MissionEditor/data/scripts/
+UnitPayloads/*.lua` list every ED-shipped loadout as (CLSID, station) pairs, so
+grep the store and see which stations it actually sits on. Two errors this
+caught, both legal in pydcs:
+
+- **F-16C wingtips (1/9) carry the AIM-120, not the AIM-9** — the Sidewinders go
+  on stations 2/8. Every mission had the pair the wrong way round.
+- **The F-15C never flies a single wing tank.** Its fuel stations are 2 (left
+  wing), 6 (centerline) and 10 (right wing); all eleven ED payloads that carry
+  fuel use 6, and the wing pair only ever comes as 2 + 10. A lone `(10, tank)`
+  is an asymmetric jet.
+
+Also check the loadout against the *sortie*, not only the airframe: a modern
+CAS or LGB tasking wants a targeting pod on the jet that needs one — except the
+A-10C, whose TGP is integrated (no ED payload lists an AAQ-28, so don't add
+one).
 
 ## Running
 

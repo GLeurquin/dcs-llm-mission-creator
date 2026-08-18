@@ -44,6 +44,7 @@ from dcs.unittype import VehicleType
 
 from dcs_mission_creator.core import (
     air_defense as ad,
+    dtc,
     routing,
     triggers as mission_triggers,
     waypoints,
@@ -165,6 +166,10 @@ NAV
   SA-6 ridge        : ~8 km north of Kuweires.
   Depot             : Kuweires airfield apron + truck park.
   PUSH waypoint     : 30 km southeast of Incirlik.
+  Your cartridge carries the Gainful and IR-launcher
+  estimates as pre-planned threats; select PRE on the HSD
+  to see the rings. They are as approximate as the fix
+  they came from — do not fly the edge of one.
 
 FREQUENCIES
   Magic AWACS    : 251.000 AM
@@ -253,6 +258,10 @@ map is an estimate — expect to find it with the HTS, not with the mark.
 - SA-6 ridge: ~8 km north of Kuweires.
 - Depot: Kuweires airfield apron and truck park.
 - PUSH waypoint: 30 km southeast of Incirlik.
+- Your data cartridge carries the Gainful and IR-launcher estimates as
+  pre-planned threats — select PRE on the HSD (and they show on the HAD) to
+  see the rings. They are the same estimates as the map, and no more precise
+  than the fix behind them.
 
 ## Frequencies
 
@@ -308,7 +317,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         )
 
         self._conceal_red(russia)
-        self._draw_plan(
+        briefed_threats = self._draw_plan(
             m,
             scene,
             sa6_pos=scene.sa6_anchor,
@@ -320,6 +329,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             awacs_track=awacs_track,
             tanker_track=tanker_track,
         )
+        self._load_hsd_threats(m, scene, briefed_threats)
         self._add_intro_voice(m)
         self._add_support_checkins(m)
         self._add_layered_triggers(
@@ -677,10 +687,10 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                 (3, "AIM_9M_Sidewinder_IR_AAM"),
                 (4, "AIM_120C_AMRAAM___Active_Radar_AAM"),
                 (5, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+                (6, "Fuel_tank_610_gal"),
                 (7, "AIM_120C_AMRAAM___Active_Radar_AAM"),
                 (8, "AIM_120C_AMRAAM___Active_Radar_AAM"),
                 (9, "AIM_9M_Sidewinder_IR_AAM"),
-                (10, "Fuel_tank_610_gal"),
                 (11, "AIM_9M_Sidewinder_IR_AAM"),
             ],
         )
@@ -802,14 +812,14 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             player,
             planes.F_16C_50,
             [
-                (1, "AIM_9X_Sidewinder_IR_AAM"),
-                (2, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+                (1, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+                (2, "AIM_9X_Sidewinder_IR_AAM"),
                 (3, "AGM_88C_HARM___High_Speed_Anti_Radiation_Missile_"),
                 (4, "Fuel_tank_370_gal"),
                 (6, "Fuel_tank_370_gal"),
                 (7, "AGM_88C_HARM___High_Speed_Anti_Radiation_Missile_"),
-                (8, "AIM_120C_AMRAAM___Active_Radar_AAM"),
-                (9, "AIM_9X_Sidewinder_IR_AAM"),
+                (8, "AIM_9X_Sidewinder_IR_AAM"),
+                (9, "AIM_120C_AMRAAM___Active_Radar_AAM"),
                 (10, "AN_ASQ_213_HTS___HARM_Targeting_System"),
             ],
         )
@@ -875,28 +885,46 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         tarcap_track: tuple[Point, Point],
         awacs_track: tuple[Point, Point],
         tanker_track: tuple[Point, Point],
-    ) -> None:
-        """Paint the plan on the F10 map (trained: coarse, estimated threats)."""
+    ) -> list[dtc.ThreatPoint]:
+        """Paint the plan on the F10 map (trained: coarse, estimated threats).
+
+        Returns the estimated air-defense rings as HSD threat points, so the
+        cockpit shows the same claim as the map. The EWRs and the armor reserve
+        stay map-only — neither is a missile envelope to stay outside of.
+        """
         plan = PlanOverlay(m, self.difficulty)
         plan.objective(scene.depot_anchor, "Depot — Kuweires", radius=5_000.0)
         plan.route(corridor, "Springfield ingress")
         plan.orbit(*tarcap_track, "Eagle TARCAP")
         plan.orbit(*awacs_track, "Magic AWACS")
         plan.orbit(*tanker_track, "Texaco tanker")
-        plan.threat(
-            sa6_pos, radius=12_000.0, label="SA-6", icon=StandardIcon.AirDefense
+        hsd = dtc.briefed(
+            plan.threat(
+                sa6_pos, radius=12_000.0, label="SA-6", icon=StandardIcon.AirDefense
+            ),
+            dtc.SA_6,
         )
-        plan.threat(
-            shorad_pos, radius=6_000.0, label="SA-13", icon=StandardIcon.AirDefense
+        hsd += dtc.briefed(
+            plan.threat(
+                shorad_pos, radius=6_000.0, label="SA-13", icon=StandardIcon.AirDefense
+            ),
+            dtc.SA_13,
         )
         for pos in ewr_positions:
             plan.threat(pos, radius=4_000.0, label="EWR", icon=StandardIcon.SearchRadar)
-        plan.threat(
-            reserve_origin,
-            radius=3_000.0,
-            label="Reserve (Aleppo rd)",
-            icon=StandardIcon.Mechanized,
+        # The reserve is a road column that is not even on the ground yet, so it
+        # gets a mark on the road it will come up: a ring would claim reach
+        # around a laager it leaves the moment it matters.
+        plan.mobile_threat(
+            reserve_origin, "Reserve (Aleppo rd)", icon=StandardIcon.Mechanized
         )
+        return hsd
+
+    def _load_hsd_threats(
+        self, m: Mission, scene: _Scene, points: list[dtc.ThreatPoint]
+    ) -> None:
+        """Load the briefed SAM rings as pre-planned threats on the player's cartridge."""
+        dtc.arm_hsd_threats(m, points, overlay=scene.overlay.overlay)
 
     # -- triggers and briefing ----------------------------------------------
 

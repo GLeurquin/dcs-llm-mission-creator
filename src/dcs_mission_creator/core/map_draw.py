@@ -78,6 +78,31 @@ class PlanOverlay:
         """Drop a plain friendly text label at `pos`."""
         self._label(pos, text, _FRIENDLY)
 
+    # -- ground truth both sides already have ------------------------------
+
+    def frontline(self, trace: Sequence[Point], label: Optional[str] = None) -> None:
+        """Draw a front line — the forward edge of the enemy's ground forces.
+
+        Drawn precisely at **every** difficulty, unlike anything else red on the
+        map. A front line is where two armies have been dug in facing each other
+        for weeks: the side the player flies for holds the other half of it, so
+        withholding the trace would model an ignorance nobody has, and the
+        briefing's "cross at the seam" would have nothing to point at.
+
+        What the reveal policy still governs is the air defence *on* the line —
+        that goes through `threat` / `mobile_threat` like any other site, and a
+        position the intel never fixed gets nothing at all.
+        """
+        pts = [p for p in trace]
+        if len(pts) < 2:
+            return
+        anchor = pts[0]
+        self._layer.add_line_segments(
+            anchor, [p - anchor for p in pts], color=_ENEMY, line_thickness=6
+        )
+        if label:
+            self._label(pts[len(pts) // 2], label, _ENEMY)
+
     # -- objective area: precision scales with difficulty ------------------
 
     def objective(self, center: Point, label: str, *, radius: float = 6_000.0) -> None:
@@ -113,23 +138,54 @@ class PlanOverlay:
         radius: float,
         label: str,
         icon: Optional[StandardIcon] = None,
-    ) -> None:
-        """Mark an enemy threat, revealed per difficulty.
+    ) -> Optional[tuple[Point, float]]:
+        """Mark an **emplaced** enemy threat, revealed per difficulty.
 
         recruit  → exact icon + true-radius ring, plain label.
         trained  → icon + slightly coarse ring at a small offset, "(est.)".
         veteran  → no per-unit mark (use `threat_area` for a vague zone).
         ace      → nothing; the player builds the picture from RWR / AWACS.
+
+        A ring is a claim that the envelope *is there*, so it belongs only to a
+        site that stays put. Air defence riding with a column has driven out of
+        any ring by the time the player is overhead, and the ring then reads as
+        a safe area everywhere it no longer covers — use `mobile_threat`.
+
+        Returns the `(center, radius)` actually drawn, or `None` where the
+        difficulty withholds the site. That is what a cockpit display of the
+        same briefing has to be built from — see `core/dtc.py`, which loads it
+        onto the F-16C's HSD. Handing back the drawn estimate rather than
+        letting the caller re-derive it keeps the reveal policy in this one
+        method, and keeps the two pictures from disagreeing: `_offset` draws a
+        fresh random bearing per call, so a second guess at "the trained
+        estimate" would land somewhere else.
         """
         if self._d == Difficulty.RECRUIT:
             self._ring(center, radius, label, icon)
+            return center, radius
+        if self._d == Difficulty.TRAINED:
+            estimate, coarse = self._offset(center, 2_000.0), radius * 1.15
+            self._ring(estimate, coarse, f"{label} (est.)", icon)
+            return estimate, coarse
+        # veteran / ace: intentionally no per-unit reveal.
+        return None
+
+    def mobile_threat(
+        self, center: Point, label: str, icon: Optional[StandardIcon] = None
+    ) -> None:
+        """Mark air defence that moves — an icon and a label, never an envelope.
+
+        Same reveal policy as `threat` (exact at `recruit`, offset at `trained`,
+        withheld above), and deliberately no return value: a mark with no
+        radius is not something `core/dtc.py` can turn into a pre-planned
+        threat point, which is the right answer for a system that will not be
+        where the cartridge says. Name what it rides with ("Convoy SHORAD") so
+        the label carries the reach the briefing prose states.
+        """
+        if self._d == Difficulty.RECRUIT:
+            self._mark(center, label, icon)
         elif self._d == Difficulty.TRAINED:
-            self._ring(
-                self._offset(center, 2_000.0),
-                radius * 1.15,
-                f"{label} (est.)",
-                icon,
-            )
+            self._mark(self._offset(center, 2_000.0), f"{label} (est.)", icon)
         # veteran / ace: intentionally no per-unit reveal.
 
     def threat_area(self, center: Point, radius: float, label: str) -> None:
@@ -157,6 +213,11 @@ class PlanOverlay:
         self._layer.add_circle(
             center, radius=radius, color=_ENEMY, fill=_ENEMY_FILL, line_thickness=2
         )
+        self._mark(center, label, icon)
+
+    def _mark(
+        self, center: Point, label: str, icon: Optional[StandardIcon] = None
+    ) -> None:
         if icon is not None:
             self._layer.add_icon(center, icon, scale=1.0, color=_ENEMY)
         self._label(center, label, _ENEMY)

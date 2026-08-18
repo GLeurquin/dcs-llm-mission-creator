@@ -43,7 +43,12 @@ from dcs.unit import Skill
 from dcs.unitgroup import VehicleGroup
 from dcs.unittype import VehicleType
 
-from dcs_mission_creator.core import routing, triggers as mission_triggers, waypoints
+from dcs_mission_creator.core import (
+    dtc,
+    routing,
+    triggers as mission_triggers,
+    waypoints,
+)
 from dcs_mission_creator.core.cli import run_cli
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.map_draw import PlanOverlay
@@ -156,6 +161,10 @@ NAV
   Ingress           : terrain-masked corridor, routed to keep
                       ridgelines between you and the reported
                       radars and the Gudauta approach.
+  Cartridge         : the Gainful and the IR launchers are
+                      loaded as pre-planned threats — select
+                      PRE on the HSD for the rings. Estimates,
+                      same as the map, no better than the cut.
 
 FREQUENCIES
   Magic AWACS   : 251.000 AM
@@ -244,6 +253,10 @@ are drawn as estimates for that reason.
 - Ingress: terrain-masked corridor, routed to keep ridgelines between you and
   the reported radar positions and the Gudauta approach.
 - TANK orbit: standoff track behind Kutaisi.
+- Your data cartridge carries the Gainful and the IR launchers as pre-planned
+  threats — select PRE on the HSD (they show on the HAD too) for the rings.
+  They are the same estimates as the map, and no better than the cut they
+  came from.
 
 ## Frequencies
 
@@ -296,7 +309,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
         self._add_end_triggers(m, fob=fob, sa6=sa6, weasel=weasel)
         self._conceal_red(russia)
-        self._draw_plan(
+        briefed_threats = self._draw_plan(
             m,
             scene,
             fob=fob,
@@ -308,6 +321,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             awacs_track=awacs_track,
             tanker_track=tanker_track,
         )
+        self._load_hsd_threats(m, scene, briefed_threats)
         self._add_briefing(m)
         return scene.overlay.overlay
 
@@ -717,12 +731,14 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             weasel,
             planes.F_16C_50,
             [
-                (1, "AIM_9X_Sidewinder_IR_AAM"),
+                (1, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+                (2, "AIM_9X_Sidewinder_IR_AAM"),
                 (3, "AGM_88C_HARM___High_Speed_Anti_Radiation_Missile_"),
                 (4, "Fuel_tank_370_gal"),
                 (6, "Fuel_tank_370_gal"),
                 (7, "AGM_88C_HARM___High_Speed_Anti_Radiation_Missile_"),
-                (9, "AIM_9X_Sidewinder_IR_AAM"),
+                (8, "AIM_9X_Sidewinder_IR_AAM"),
+                (9, "AIM_120C_AMRAAM___Active_Radar_AAM"),
                 (10, "AN_ASQ_213_HTS___HARM_Targeting_System"),
             ],
         )
@@ -808,10 +824,10 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                 (3, "AIM_9M_Sidewinder_IR_AAM"),
                 (4, "AIM_120C_AMRAAM___Active_Radar_AAM"),
                 (5, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+                (6, "Fuel_tank_610_gal"),
                 (7, "AIM_120C_AMRAAM___Active_Radar_AAM"),
                 (8, "AIM_120C_AMRAAM___Active_Radar_AAM"),
                 (9, "AIM_9M_Sidewinder_IR_AAM"),
-                (10, "Fuel_tank_610_gal"),
                 (11, "AIM_9M_Sidewinder_IR_AAM"),
             ],
         )
@@ -845,14 +861,14 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             player,
             planes.F_16C_50,
             [
-                (1, "AIM_9X_Sidewinder_IR_AAM"),
-                (2, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+                (1, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+                (2, "AIM_9X_Sidewinder_IR_AAM"),
                 (3, "AIM_120C_AMRAAM___Active_Radar_AAM"),
                 (4, "Fuel_tank_370_gal"),
                 (6, "Fuel_tank_370_gal"),
                 (7, "AIM_120C_AMRAAM___Active_Radar_AAM"),
-                (8, "AIM_120C_AMRAAM___Active_Radar_AAM"),
-                (9, "AIM_9X_Sidewinder_IR_AAM"),
+                (8, "AIM_9X_Sidewinder_IR_AAM"),
+                (9, "AIM_120C_AMRAAM___Active_Radar_AAM"),
             ],
         )
         player.add_runway_waypoint(scene.kutaisi)
@@ -901,8 +917,13 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         escort_track: tuple[Point, Point],
         awacs_track: tuple[Point, Point],
         tanker_track: tuple[Point, Point],
-    ) -> None:
-        """Paint the plan on the F10 map (trained: coarse, estimated threats)."""
+    ) -> list[dtc.ThreatPoint]:
+        """Paint the plan on the F10 map (trained: coarse, estimated threats).
+
+        Returns the estimated air-defense rings as HSD threat points, so the
+        Weasel's cockpit shows the same claim as the map. The FOB and the EWR
+        stay map-only — neither is a missile envelope to stay outside of.
+        """
         plan = PlanOverlay(m, self.difficulty)
         plan.objective(scene.ao_center, "AO — FOB Kodori", radius=6_000.0)
         plan.route(corridor, "Dodge ingress")
@@ -915,14 +936,27 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             label="FOB",
             icon=StandardIcon.Mechanized,
         )
-        plan.threat(
-            sa6_pos, radius=10_000.0, label="SA-6", icon=StandardIcon.AirDefense
+        hsd = dtc.briefed(
+            plan.threat(
+                sa6_pos, radius=10_000.0, label="SA-6", icon=StandardIcon.AirDefense
+            ),
+            dtc.SA_6,
         )
         for pos in sa13_positions:
-            plan.threat(
-                pos, radius=6_000.0, label="SA-13", icon=StandardIcon.AirDefense
+            hsd += dtc.briefed(
+                plan.threat(
+                    pos, radius=6_000.0, label="SA-13", icon=StandardIcon.AirDefense
+                ),
+                dtc.SA_13,
             )
         plan.threat(ewr_pos, radius=4_000.0, label="EWR", icon=StandardIcon.SearchRadar)
+        return hsd
+
+    def _load_hsd_threats(
+        self, m: Mission, scene: _Scene, points: list[dtc.ThreatPoint]
+    ) -> None:
+        """Load the briefed SAM rings as pre-planned threats on the Weasel's cartridge."""
+        dtc.arm_hsd_threats(m, points, overlay=scene.overlay.overlay)
 
     # -- triggers and briefing ----------------------------------------------
 

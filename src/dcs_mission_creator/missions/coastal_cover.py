@@ -37,6 +37,7 @@ from dcs.unittype import VehicleType
 
 from dcs_mission_creator.core import (
     air_defense as ad,
+    dtc,
     routing,
     triggers as mission_triggers,
 )
@@ -142,6 +143,10 @@ NAV
   Bullseye (own side): {bx:.0f}, {by:.0f} (DCS world m)
   AO center         : ~18 km north-northeast of Senaki.
   PUSH waypoint     : 25 km north of Batumi (corridor IP).
+  Cartridge         : the SHORAD estimate is loaded as a
+                      pre-planned threat — select PRE on the
+                      HSD for the ring. It is where the feed
+                      last had the launcher, not a fix.
 
 FREQUENCIES
   Magic AWACS   : 251.000 AM
@@ -216,6 +221,9 @@ No tanker — F-16C internal fuel covers the sortie with a ~10 min margin.
 - PUSH waypoint: 25 km north of Batumi (corridor IP).
 - Your route is a terrain-masked corridor that keeps ridgelines between you
   and the reported launcher and radar positions for as long as it can.
+- Your data cartridge carries the SHORAD estimate as a pre-planned threat —
+  select PRE on the HSD for the ring. It marks where the feed last had the
+  launcher, which is the same claim the map makes, not a fix.
 
 ## Frequencies
 
@@ -262,7 +270,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         if self._reserve is not None:
             self._add_reserve_trigger(m, convoy=convoy, reserve=self._reserve)
         self._conceal_red(russia)
-        self._draw_plan(
+        briefed_threats = self._draw_plan(
             m,
             scene,
             convoy=convoy,
@@ -272,6 +280,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             cap_track=cap_track,
             awacs_track=awacs_track,
         )
+        self._load_hsd_threats(m, scene, briefed_threats)
         self._add_briefing(m)
         return scene.overlay.overlay
 
@@ -671,10 +680,10 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                 (3, "AIM_9M_Sidewinder_IR_AAM"),
                 (4, "AIM_120C_AMRAAM___Active_Radar_AAM"),
                 (5, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+                (6, "Fuel_tank_610_gal"),
                 (7, "AIM_120C_AMRAAM___Active_Radar_AAM"),
                 (8, "AIM_120C_AMRAAM___Active_Radar_AAM"),
                 (9, "AIM_9M_Sidewinder_IR_AAM"),
-                (10, "Fuel_tank_610_gal"),
                 (11, "AIM_9M_Sidewinder_IR_AAM"),
             ],
         )
@@ -704,14 +713,14 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             player,
             planes.F_16C_50,
             [
-                (1, "AIM_9X_Sidewinder_IR_AAM"),
-                (2, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+                (1, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+                (2, "AIM_9X_Sidewinder_IR_AAM"),
                 (3, "AIM_120C_AMRAAM___Active_Radar_AAM"),
                 (4, "Fuel_tank_370_gal"),
                 (6, "Fuel_tank_370_gal"),
                 (7, "AIM_120C_AMRAAM___Active_Radar_AAM"),
-                (8, "AIM_120C_AMRAAM___Active_Radar_AAM"),
-                (9, "AIM_9X_Sidewinder_IR_AAM"),
+                (8, "AIM_9X_Sidewinder_IR_AAM"),
+                (9, "AIM_120C_AMRAAM___Active_Radar_AAM"),
             ],
         )
         player.add_runway_waypoint(scene.batumi)
@@ -765,24 +774,39 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         corridor: list[Point],
         cap_track: tuple[Point, Point],
         awacs_track: tuple[Point, Point],
-    ) -> None:
-        """Paint the plan on the F10 map (trained: coarse, estimated threats)."""
+    ) -> list[dtc.ThreatPoint]:
+        """Paint the plan on the F10 map (trained: coarse, estimated threats).
+
+        Returns the estimated air-defense ring as an HSD threat point, so the
+        escort's cockpit shows the same claim as the map. The column and the
+        EWRs stay map-only — neither is a missile envelope to stay outside of.
+        """
         plan = PlanOverlay(m, self.difficulty)
         plan.objective(scene.ao_center, "AO — convoy axis", radius=6_000.0)
         plan.route(corridor, "Dodge ingress")
         plan.orbit(*cap_track, "Eagle CAP")
         plan.orbit(*awacs_track, "Magic AWACS")
-        plan.threat(
-            convoy.units[0].position,
-            radius=2_500.0,
-            label="Convoy",
-            icon=StandardIcon.Mechanized,
+        # The column and the Shilka riding in it are on the road, so they get a
+        # mark and no envelope — a ring at the spawn point would claim reach
+        # over ground the column has already driven off.
+        plan.mobile_threat(
+            convoy.units[0].position, "Convoy", icon=StandardIcon.Mechanized
         )
-        plan.threat(
-            sa13_pos, radius=8_000.0, label="SA-13", icon=StandardIcon.AirDefense
+        hsd = dtc.briefed(
+            plan.threat(
+                sa13_pos, radius=8_000.0, label="SA-13", icon=StandardIcon.AirDefense
+            ),
+            dtc.SA_13,
         )
         for pos in ewr_positions:
             plan.threat(pos, radius=4_000.0, label="EWR", icon=StandardIcon.SearchRadar)
+        return hsd
+
+    def _load_hsd_threats(
+        self, m: Mission, scene: _Scene, points: list[dtc.ThreatPoint]
+    ) -> None:
+        """Load the briefed SHORAD as a pre-planned threat on the escort's cartridge."""
+        dtc.arm_hsd_threats(m, points, overlay=scene.overlay.overlay)
 
     # -- triggers and briefing ----------------------------------------------
 

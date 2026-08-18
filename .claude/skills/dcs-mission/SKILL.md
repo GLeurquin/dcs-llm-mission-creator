@@ -132,6 +132,13 @@ A "realistic" mission is more than spawning aircraft. Hit these before done:
   with bombs.
 - **Threats layered, not stacked.** One SA-6 + a few Shilkas reads harder
   than five SA-10s on one hill.
+- **The objective cannot be reached from any bearing.** Contested ground gets a
+  front line across the approach and rear-area coverage behind it, or the player
+  arcs wide and every threat you placed watches from behind. See *Front lines
+  and territory control*.
+- **No air defence in the canopy or the water.** Positions off the placement
+  helpers, `overlay` + `terrain` into the site builders, `snap_units_clear`
+  after any scattered formation.
 - **Build whole SAM sites, not lone launchers.** A real site is search radar
   + track/fire-control radar + command post + launchers. Use the site
   builders — pydcs `VehicleTemplate` for SA-6/10/11/15 + Patriot/Hawk, project
@@ -153,7 +160,10 @@ A "realistic" mission is more than spawning aircraft. Hit these before done:
   the terrain under them. See *Waypoints that mark the ground*.
 - **JTAC for CAS.** A CAS or CAP-over-ground mission gets a ground or
   airborne FAC that lases targets and talks the player on
-  (`tasking.fac_attack_group`). Brief its frequency + designation.
+  (`tasking.fac_attack_group`). Brief its frequency + designation. Arm
+  `jtac.arm_jtac_coords` with it: the stock controller reads a military grid to
+  every airframe, so without it the coordinates a Viper or Hornet driver is
+  given are a kneeboard conversion before they are a steerpoint.
 - **Briefing exists.** `set_description_text`, `*_bluetask_text`,
   `*_redtask_text` with bullseye, AO coords, ROE, callsigns, bingo fuel.
 - **Briefing reads like intel, not like the trigger list.** Sourced enemy
@@ -363,6 +373,102 @@ Guidelines:
 - Silent triggers OK for bookkeeping (flag plumbing, internal state) — the
   rule is about triggers with player-visible *effects*.
 
+## Front lines and territory control
+
+A target that can be attacked from any bearing has no mission design around it.
+Ring the objective with belts and the player simply arcs 40 km wide, comes in
+from the quarter nobody covered, and every threat the mission was built around
+watches from behind. The fix is two rules, and they are the default for any
+mission set over contested ground — not a special scenario:
+
+1. **Put a front line across the approach.** Ground forces are dug in facing
+   each other somewhere between the player's field and the objective, and the
+   air defence strung along it is what prices each way in.
+2. **Defend in depth behind it.** The far side of the line and the airspace
+   around the objective are *held* ground. Rear-area batteries mean skipping the
+   corridor buys a different envelope, not an empty sky.
+
+### The line
+
+Geometry comes from `core/frontline.py` (`plan_frontline`, see CLAUDE.md), which
+takes what the line stands in front of (`defends`, the AO), the side the threat
+comes from (`facing`, the player's field), how far short of the AO it sits
+(`standoff_m`), its frontage (`span_m`), how far the wings sweep back toward the
+player (`bow_m`), and the frontage left without a position on it (`seam_width_m`).
+It returns the trace, the sector positions, the two shoulders and the seam.
+
+What goes on it is force composition, so the mission decides — but the shape of
+the decision is always the same three prices:
+
+| Where | What | What it costs the player |
+|-------|------|--------------------------|
+| Shoulders (the tips) | An area SAM battery each — S-125, SA-6, Buk | Flanking at any altitude |
+| Sectors (the frontage) | Dug-in armour + guns + MANPADS | Crossing anywhere low |
+| Seam (the middle) | Nothing of its own | The crossing the briefing points at |
+
+Sizing rules that matter more than the exact numbers:
+
+- **The seam has to be honestly flyable.** Check the briefed corridor against
+  each shoulder's *real* DCS reach, not the briefed ring, and leave ≥ 10 km. A
+  player who complies and dies read a briefing that lied.
+- **The seam should lead into the mission's actual problem**, not into safety —
+  in `idlib_gauntlet` it is the SA-6's sector, which is what makes SEAD phase
+  one rather than an option.
+- **Make the frontage worth not flying round.** Span is the detour: 90 km of
+  line is a ~100 km arc plus the turn back in, which is real minutes and real
+  fuel on a jet that already needs the tanker. Bow the wings so the flanks are
+  the long way in as well as the far way round.
+- **The line is not the target.** Two HARMs will not open a shoulder battery,
+  so say so in the ROE and leave the strongpoints to the ground war. A line the
+  player is expected to fight through is a wall, and a wall is not a plan.
+- **Check every friendly orbit against the new rings.** A TARCAP or tanker
+  track that was fine before the line existed may now sit inside a shoulder's
+  envelope; measure it and re-station. A CAP belongs on the friendly side of the
+  line, covering the crossing.
+
+### Depth (territory control)
+
+Behind the line, and around the objective, ask of every quadrant: *whose
+envelope is this?* If a quarter of the reachable airspace answers "nobody's",
+that is where the player will go and none of the design applies to them.
+
+- One rear-area battery per sector, level with the objective on each beam, is
+  usually enough — plus the belts that cover the objective itself.
+- Their envelopes should overlap the flanking arcs, not the briefed corridor:
+  the same ≥ 10 km margin check as the shoulders.
+- Depth coverage is also what makes the corridor read as a *choice*. The
+  briefing can then say what a real one says: this is the cheapest way in, not
+  the only one.
+- Rear areas are where a **radar-only EWR** belongs as well; it cannot shoot,
+  so it is not a ring, but it is what feeds GCI.
+
+### Placement hygiene
+
+Air defence in canopy or water neither sees nor shoots, and a front line of
+Shilkas parked under trees reads as decoration:
+
+- Positions come from the placement helpers, which exclude forest and water
+  (`plan_frontline` snaps every position it returns when handed
+  `overlay` + `terrain`).
+- Pass `overlay` **and** `terrain` to the `air_defense.build_*_site` builders
+  so the launcher ring is snapped too — clearing the centre is not enough.
+- A scattered platoon spreads further than any placement buffer, so call
+  `snap_units_clear` on it after pydcs has applied the formation. Anything built
+  from a raw pydcs `VehicleTemplate` needs the same treatment.
+
+### Drawing it
+
+The **trace is drawn precisely at every difficulty**, unlike everything else
+red: two armies have been sitting on it for weeks and the player's side holds
+the other half of it, so withholding it models an ignorance nobody has — and
+"cross at the seam" needs something on the map to point at. Use
+`PlanOverlay.frontline(trace, label)`; label the seam as friendly plan.
+
+The air defence *on* the line follows the ordinary reveal policy (`threat` /
+`mobile_threat`), and per-position rings for every ZU-23 pit are clutter: plot
+the line, and let one label carry what the frontage is worth ("guns and MANPADS
+below 10,000").
+
 ## Ground formations
 
 `vehicle_group*` defaults to `Formation.Line` — straight row, 20 m spacing.
@@ -464,7 +570,7 @@ reserves — gets all three map channels turned off. Do it in one
 grows:
 
 ```python
-from dcs_mission_creator.core.map_draw import conceal_country
+from dcs_mission_creator.core.visibility import conceal_country
 
 def _conceal_red(self, russia: Country) -> None:
     """Keep every Russian group off the F10 map, the planner and the datalink."""
@@ -524,12 +630,73 @@ Rules:
 - **Mark estimates as estimates.** On trained+ append "(est.)" to labels
   and offset the mark from the true unit so a precise ring can't be
   reverse-engineered.
+- **Only emplaced systems get a ring.** A threat ring says the envelope *is
+  there*. Air defence that moves — a convoy's organic SHORAD, a launcher on a
+  road march, a mobile reserve — has driven out of any ring by the time the
+  player arrives, and the ring is then worse than nothing: everywhere it no
+  longer covers reads as clear. Mark those with an icon and a label
+  (`PlanOverlay.mobile_threat`, no circle) and let the prose carry the reach
+  ("the column's SHORAD holds anything inside 8 km at risk"). Rule of thumb: a
+  group with waypoints does not get a ring.
 - **Colour convention.** Enemy in red (`Rgba(255,0,0,·)`), friendly plan in
   blue/cyan, notes/neutral in white — fills low-alpha, outlines opaque.
 - **Don't clutter.** A handful of purposeful marks beats a busy map; if it
   wouldn't appear on a real kneeboard, leave it off.
 - **Honour overrides.** "Recruit but I want to find them myself" → pull the
   reveal down without touching other dials.
+
+### Not every SAM has to be on the map
+
+The table above is a ceiling, not a checklist. Intelligence is *incomplete* in
+real life, and a threat the player was never shown is one of the few honest ways
+a mission can still surprise someone who read the briefing carefully. So
+deliberately leaving a site off the map is allowed and encouraged — under
+conditions, because the difference between an intelligence gap and a cheat is
+entirely in the setup:
+
+- **Say where the picture is thin.** The briefing must not imply completeness.
+  Name the hole with a source, the way an intel officer would: "a Gadfly-class
+  emitter came up on the net overnight and we never got a fix — no ring on your
+  map because we would be drawing a guess". The player then knows they are
+  flying with a gap, which is a different feeling from being ambushed.
+- **It must not threaten the briefed plan.** Measure the withheld site against
+  the corridor, the IP, the orbits and the target run — with margin. A surprise
+  that punishes the player for doing exactly what they were told is a bug
+  wearing a fog-of-war costume. Aim it at the *deviation*: the wide flank, the
+  greedy second pass, the loiter over the target.
+- **Give them the moment.** An AWACS ESM call on a trigger ("new emitter, no
+  fix, north of the corridor") or the RWR chirp is what makes it read as the
+  morning's intel having a hole rather than as the mission spawning something.
+  Without any moment, a withheld site is just an unexplained death.
+- **Never plan the friendly package around it.** No `ThreatRing`, no cartridge
+  point, no bend in an AI route — the planner has no position either. That is
+  precisely the case `tasking.apply_threat_reaction` exists for.
+- **Withhold one thing, not the mission.** The objective's own defences and the
+  belts the sortie is built around stay briefed; what goes unmarked is the extra
+  battery, the relocated launcher, the reserve. One or two per mission.
+
+### Put the same rings in the cockpit
+
+A ring the player can only see on the F10 map is a ring they lose the moment
+they are heads-down in the jet. An F-16C reads pre-planned threats off its data
+cartridge and draws them on the HSD and the HAD, so a briefed belt belongs
+there too — `core/dtc.py`, wired from the `_draw_plan` step (see CLAUDE.md).
+
+The rules are the ones above, unchanged, because it is the *same* claim in a
+second channel:
+
+- Load what the map drew — the coarsened, offset estimate on trained — not the
+  site's true position. `PlanOverlay.threat` hands its estimate back for
+  exactly this; withholding on veteran/ace then loads nothing, which is right.
+- Only systems the briefing names, and only ones with an envelope: an EWR, a
+  convoy or an armor reserve is not a ring. The jet holds fifteen points, and
+  they are better spent on belts than on every MANPADS in the AO.
+- **A pre-planned point is a static claim, so mobile air defence never gets
+  one.** A cartridge ring cannot be updated in flight: load the convoy's 2S6
+  and the player flies a picture that was wrong from the first road mile, and
+  is most wrong exactly where the column has driven to. Sites only; a moving
+  SHORAD threat belongs in the prose and in the AWACS calls, and on the map as
+  a mark with no envelope.
 
 ## Player airframe
 

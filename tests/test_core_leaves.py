@@ -15,7 +15,6 @@ import pytest
 from dcs_mission_creator.core import lua
 from dcs_mission_creator.core.dcs_install import _local_path, _variant_suffix
 from dcs_mission_creator.core.difficulty import Difficulty
-from dcs_mission_creator.core.emcon import _lua_str
 
 
 # ------------------------------------------------------------------- lua.source
@@ -53,7 +52,7 @@ def test_render_rejects_a_leftover_placeholder() -> None:
         lua.render("emcon.lua", SITES="{}")
 
 
-# --------------------------------------------------------------- emcon._lua_str
+# ----------------------------------------------------------------- lua.quote
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
@@ -63,13 +62,13 @@ def test_render_rejects_a_leftover_placeholder() -> None:
         ("back\\slash", '"back\\\\slash"'),
     ],
 )
-def test_lua_str_quotes_and_escapes(value: str | None, expected: str) -> None:
-    assert _lua_str(value) == expected
+def test_quote_quotes_and_escapes(value: str | None, expected: str) -> None:
+    assert lua.quote(value) == expected
 
 
-def test_lua_str_escapes_backslash_before_quote() -> None:
+def test_quote_escapes_backslash_before_quote() -> None:
     """Order matters: escaping quotes first would double-escape the backslash."""
-    assert _lua_str('a\\"b') == '"a\\\\\\"b"'
+    assert lua.quote('a\\"b') == '"a\\\\\\"b"'
 
 
 # ------------------------------------------------------------ dcs_install paths

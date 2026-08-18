@@ -4,9 +4,9 @@ Out of the box a DCS SAM site keeps its radar lit while a HARM rides the beam
 all the way in: the crew never reacts, so every anti-radiation shot is a
 guaranteed kill and SEAD degenerates into a shooting gallery. Real crews do the
 opposite — the launch is called over the IADS net, the fire-control radar drops
-emissions within seconds, the missile loses its emitter and goes for the last
-known point, and the site comes back up several minutes later once the shooter
-is assumed dry.
+emissions once that call reaches the crew and they act on it, the missile loses
+its emitter and goes for the last known point, and the site comes back up
+several minutes later once the shooter is assumed dry.
 
 `arm_emcon_reaction` builds that behaviour as a mission-start `DoScript`: one
 Lua event handler on `S_EVENT_SHOT` that recognises anti-radiation weapons,
@@ -17,7 +17,12 @@ through `ALARM_STATE GREEN` (radars off, weapons hold) and back to
 - **Not every crew reacts.** Each site has its own `probability`; a green crew
   keeps radiating and eats the missile.
 - **Reaction takes time.** `delay_s` seconds pass between launch and emissions
-  drop, so a HARM already close still kills.
+  drop — tens of seconds, the same order as a HARM's time of flight, because
+  nobody in the site gets a launch warning: the shot has to be spotted, called
+  down the net, believed, and acted on. So the shooter's range at launch is
+  what decides the duel, and a HARM fired from close in still kills. The draw
+  is triangular within the band rather than flat, so the middle of it is the
+  common case and both a snap reaction and a badly slow one stay rare.
 - **The site comes back.** `shutdown_s` seconds later the radar re-radiates —
   suppression is temporary, destruction is not.
 - **Repeat fire makes crews shy.** A second launch while a site is dark extends
@@ -25,6 +30,11 @@ through `ALARM_STATE GREEN` (radars off, weapons hold) and back to
 - **Range gates the reaction.** Only sites within `react_range_m` of the
   shooter hear about the launch; a HARM fired at one end of the map does not
   shut down the whole theater.
+- **A dead site says nothing.** A site whose radars are gone is destroyed, not
+  suppressed, so it neither reacts nor makes a radio call. The check is a live
+  radar unit, not a live *group*: DCS keeps the group alive while a launcher or
+  the command post stands, and gating on that had a site the player had just
+  killed announce that it was going dark and then that it was radiating again.
 
 Only radar-guided sites belong in the list. Optically/IR-guided SHORAD (SA-13,
 MANPADS) has nothing to shut down, and putting a mixed convoy in here would
@@ -62,15 +72,21 @@ class ArmSite:
 
     `label` is what the radio call names ("SA-6", "EWR"). `probability` is the
     chance this crew catches a given launch, `delay_s` the recognition delay
-    and `shutdown_s` how long the site stays dark, both randomised per event
-    within the given range. `react_range_m` is how far from the site a launch
-    still gets passed down the net.
+    and `shutdown_s` how long the site stays dark, both drawn per event within
+    the given range (triangular, so the middle of the band is the common case).
+    `react_range_m` is how far from the site a launch still gets passed down the
+    net.
+
+    `delay_s` defaults to tens of seconds, not single digits: a site gets no
+    launch warning, so the shot has to be seen, called down the net and acted
+    on. Anything shorter darkens the radar while the missile is still in the
+    first third of its flight and no HARM ever connects.
     """
 
     group: "VehicleGroup"
     label: str
     probability: float = 0.85
-    delay_s: tuple[float, float] = (3.0, 8.0)
+    delay_s: tuple[float, float] = (20.0, 60.0)
     shutdown_s: tuple[float, float] = (240.0, 360.0)
     react_range_m: float = 60_000.0
 
@@ -78,14 +94,6 @@ class ArmSite:
 # The Lua handler itself lives in `core/lua/emcon.lua`; the placeholders it
 # declares (`__SITES__` / `__SIDE__` / `__SPACING__`) are filled in below.
 _SCRIPT = "emcon.lua"
-
-
-def _lua_str(text: Optional[str]) -> str:
-    """Quote `text` as a Lua string literal (or `nil`)."""
-    if text is None:
-        return "nil"
-    escaped = text.replace("\\", "\\\\").replace('"', '\\"')
-    return f'"{escaped}"'
 
 
 def arm_emcon_reaction(
@@ -126,17 +134,17 @@ def arm_emcon_reaction(
             "delayMax={dmax:.1f}, downMin={smin:.1f}, downMax={smax:.1f}, "
             "range={rng:.1f}, downText={dtext}, upText={utext}, "
             "downSound={dsound}, upSound={usound}}},".format(
-                name=_lua_str(site.group.name),
+                name=lua.quote(site.group.name),
                 prob=site.probability,
                 dmin=site.delay_s[0],
                 dmax=site.delay_s[1],
                 smin=site.shutdown_s[0],
                 smax=site.shutdown_s[1],
                 rng=site.react_range_m,
-                dtext=_lua_str(down_text),
-                utext=_lua_str(up_text),
-                dsound=_lua_str(down_sound),
-                usound=_lua_str(up_sound),
+                dtext=lua.quote(down_text),
+                utext=lua.quote(up_text),
+                dsound=lua.quote(down_sound),
+                usound=lua.quote(up_sound),
             )
         )
 
