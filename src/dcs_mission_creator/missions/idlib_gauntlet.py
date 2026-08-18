@@ -17,14 +17,22 @@ option. Beyond the northern shoulder sits a Gadfly battery the intel never
 fixed: it is on no map and no cartridge, it covers the wide northern arc, and
 it exists to charge for the flank the briefing said not to fly.
 
-The SAM belts react to HARM fire the way real crews do (see
-`core/emcon.py`): the launch goes out over the IADS net, the crew spends most
-of a minute seeing the shot and acting on the call, the fire-control radar drops
-emissions, the missile goes for the last known point, and the site comes back up
-several minutes later. HARMs therefore *suppress* more often than they *kill* —
-but a shot taken from inside the belt arrives before the transmitter dies, so
-the player chooses between a standoff shot for the dark window and a close one
-for the radar.
+Every radar-guided site is one net (see `core/iads.py`), and that decides both
+halves of the SEAD problem. The batteries sit dark; the early-warning chain
+holds the picture and hands each one its target as the package comes into that
+battery's reach, so the RWR fills in belt by belt rather than all at once on the
+runway, and a site nobody flew near never announces itself.
+
+Then they react to HARM fire the way real crews do: the missile is passive and
+warns nobody, so what the crew gets is the *shooter* — a launch the site could
+not see, and that nobody on its net saw either, is a launch it never learns
+about. Otherwise the call goes out, the crew spends most of a minute acting on
+it, the fire-control radar drops emissions, the missile goes for the last known
+point, and the site is released several minutes later — to cold, so it comes
+back only if there is still something to shoot at. HARMs therefore *suppress*
+more often than they *kill*, and the player chooses between a standoff shot for
+the dark window, a close one for the radar, and a masked one the crew never
+sees.
 
 Composition (difficulty: trained):
   - Syrian convoy `Nasr` (11 vehicles): 3x T-72B, 2x BTR-80, 2x Ural-375,
@@ -80,8 +88,8 @@ from dcs_mission_creator.core import (
 )
 from dcs_mission_creator.core.cli import run_cli
 from dcs_mission_creator.core.difficulty import Difficulty
-from dcs_mission_creator.core.emcon import ArmSite, arm_emcon_reaction
 from dcs_mission_creator.core.frontline import Frontline, plan_frontline
+from dcs_mission_creator.core.iads import Site, arm_iads
 from dcs_mission_creator.core.jtac import CoordTarget, arm_jtac_coords
 from dcs_mission_creator.core.map_draw import PlanOverlay
 from dcs_mission_creator.core.mission_builder import MissionBuilder
@@ -295,7 +303,15 @@ INTELLIGENCE
         about 25 km, and it is the one that owns the
         road; a mobile SA-8 at the Taftanaz off-load,
         about 10 km. Early-warning radars behind them
-        feed the whole net. The SA-6 crew is the sharpest
+        hold the picture and hand the batteries their
+        targets — the batteries themselves stay off the
+        air until you are worth shooting at, so a quiet
+        RWR out of PUSH is the net working, not the net
+        being absent. Killing the search radars does not
+        turn the belts off: cut off from the net they
+        search on their own and radiate continuously
+        from then on. That buys you emitters you can
+        find, not silence. The SA-6 crew is the sharpest
         of the three; the SA-2 site is conscripts.
   SHORAD: Reaper imagery shows tracked IR launchers, a
         gun-missile vehicle and a Shilka riding with the
@@ -321,6 +337,11 @@ ROE / FRAGS
     fuel is not there for any of it.
   - HARM suppresses; a dark site is not a dead site.
     Work the window, do not loiter in the MEZ.
+  - The missile is passive and warns nobody. A crew
+    that could not see you shoot has nothing to react
+    to — shoot from behind terrain and the round gets
+    a live emitter, shoot in the open and you are
+    racing their reaction time.
   - Tank from Texaco before the push if the SEAD phase
     runs long. Bingo fuel 3500 lb, RTB Hatay.
 
@@ -492,8 +513,15 @@ picture, and the last bullet is there to say where it is thin.
 - **Organic SHORAD:** the Reaper feed shows tracked IR launchers, a
   gun-missile vehicle and a Shilka in the column itself. Capable crews, and
   none of it can be suppressed with a HARM.
-- **EWR:** early-warning radars behind the belts feeding the net and the GCI
-  picture.
+- **EWR:** early-warning radars behind the belts, holding the picture for the
+  whole net. The batteries do not sit on the air waiting for you — they are
+  handed a track and come up when you are close enough to be worth shooting
+  at, so a quiet RWR early in the push is the net working, not the net being
+  absent. Killing the search radars does not turn the belts off: a battery cut
+  off from the net reverts to searching on its own, which means it radiates
+  continuously from then on. That is worth doing — every belt becomes an
+  emitter you can find and shoot, and nobody is being handed a hand-off any
+  more — but it buys visibility, not silence.
 - **Air:** ELINT puts a MiG-29S pair on cockpit alert at Bassel Al-Assad,
   experienced crews. Cockpit alert is minutes from the runway and the field is
   minutes from the corridor; whether they are released and when is the Syrian
@@ -516,6 +544,10 @@ picture, and the last bullet is there to say where it is thin.
 - Cleared to engage Syrian and Russian aircraft inside the corridor.
 - HARM suppresses; a dark site is not a dead site. Do not loiter in a MEZ
   waiting for a radar that will come back up.
+- A crew that never saw you shoot has nothing to react to — the missile is
+  passive and warns nobody. Shoot from behind terrain where you can and the
+  round arrives on a live emitter; shoot in plain view of the belt and you are
+  racing their reaction time.
 - Tank from `Texaco` before the push if SEAD runs long — F-16C internal fuel
   does not cover a 60-minute sortie plus a MEZ fight.
 - Bingo fuel: 3500 lb. RTB Hatay (no divert).
@@ -634,7 +666,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             tanker_track=tanker_track,
         )
         self._load_hsd_threats(m, scene, briefed_threats)
-        self._add_harm_reaction(
+        self._add_iads(
             m,
             sa2=sa2,
             sa6=sa6,
@@ -1664,9 +1696,9 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         """Load the briefed belts as pre-planned threats on the player's cartridge."""
         dtc.arm_hsd_threats(m, points, overlay=scene.overlay.overlay)
 
-    # -- HARM reaction ------------------------------------------------------
+    # -- integrated air defence ---------------------------------------------
 
-    def _add_harm_reaction(
+    def _add_iads(
         self,
         m: Mission,
         *,
@@ -1678,47 +1710,83 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         rear: VehicleGroup,
         unfixed: VehicleGroup,
     ) -> None:
-        """Wire realistic emissions control for every radar-guided site.
+        """Wire every radar-guided site into one net.
 
         The tuned dials are the difficulty statement for the SEAD half of this
-        mission. Nobody in a site gets a launch warning, so every band is tens
-        of seconds — the same order as a HARM's flight — and the shot's range
-        decides the duel: the SA-8's own crew works its own radar and is off
-        the air in well under a minute, the drilled SA-6 crew not far behind,
-        the conscript SA-2 belt misses the call almost a third of the time and
-        takes over a minute when it does, and the EWRs — furthest from the
-        shooter, and not the ones being shot at — react slowest and come back
-        up soonest. A suppressed site stays dark ~4–6 min, long enough that a
-        HARM buys the package a real run at the column instead of a one-minute
-        gap.
+        mission, and they run in two halves.
+
+        **When a site is on the air.** Only the EWR chain radiates from the
+        start — that is its job, and it is the trip wire the whole gauntlet
+        hangs off. Every battery sits dark until the chain hands it a track
+        inside its own reach, so the run out of Hatay is quiet, the RWR fills
+        in belt by belt as the package works up the corridor, and a site the
+        player never flew near never announces itself. Each `go_live_percent`
+        is over 100 on purpose: a battery that waits until the target is inside
+        its launch envelope comes up and watches, because a DCS site needs
+        something like half a minute from cold to a shot.
+
+        Two consequences the mission wants. The unlocated Gadfly stays off the
+        air until somebody is well into the northern arc, so it is an ambush
+        rather than a strobe the player could have avoided. And killing the EWR
+        chain does not switch the belts off — a battery cut off from the net
+        goes to autonomous search, which is doctrine, so it radiates
+        continuously from then on. That is a trade rather than a win: no more
+        layered hand-off and every belt is now an emitter you can find, but
+        nothing is dark any more either.
+
+        **How a site reacts to being shot at.** Nobody gets a launch warning
+        from a passive missile, so every band is tens of seconds — the same
+        order as a HARM's flight — and the shot's range decides the duel: the
+        SA-8's own crew works its own radar and is off the air in well under a
+        minute, the drilled SA-6 crew not far behind, the conscript SA-2 belt
+        misses the call almost a third of the time and takes over a minute when
+        it does, and the EWRs — furthest from the shooter, and not the ones
+        being shot at — react slowest and come back up soonest. A suppressed
+        site stays dark ~4–6 min, long enough that a HARM buys the package a
+        real run at the column instead of a one-minute gap.
+
+        The `net_relay` values say who is trusted to call a launch nobody local
+        saw. The belts are on the same net and take each other's word readily;
+        the rear-area batteries, 45 km or more off the corridor, are told about
+        a shot at somebody else and mostly carry on regardless.
         """
         sites = [
-            ArmSite(
+            Site(
                 sa6,
                 "SA-6",
+                go_live_percent=150,
                 probability=0.9,
                 delay_s=(14.0, 40.0),
                 shutdown_s=(280.0, 400.0),
+                net_relay=0.6,
             ),
-            ArmSite(
+            Site(
                 sa8,
                 "SA-8",
+                go_live_percent=150,
                 probability=0.85,
                 delay_s=(10.0, 30.0),
                 shutdown_s=(220.0, 320.0),
                 react_range_m=40_000.0,
+                net_relay=0.6,
             ),
-            ArmSite(
+            Site(
                 sa2,
                 "SA-2",
+                go_live_percent=130,
                 probability=0.7,
                 delay_s=(25.0, 70.0),
                 shutdown_s=(260.0, 380.0),
+                net_relay=0.5,
             ),
+            # The chain itself: always on, and the only thing that is. A search
+            # radar is what an EWR is for, and with every battery behind it dark
+            # there has to be something holding the picture to hand down.
             *[
-                ArmSite(
+                Site(
                     ewr,
                     "early-warning radar",
+                    role="ewr",
                     probability=0.75,
                     delay_s=(30.0, 90.0),
                     shutdown_s=(200.0, 300.0),
@@ -1726,37 +1794,42 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                 )
                 for ewr in ewrs
             ],
-            # The line's own radars and the rear-area battery behind it. All of
-            # them react — same net — but a battery 45 km or more off the
-            # corridor hears the call rather than sees the shot, so it is slower
-            # than the belts and its dark window is worth nothing at all to a
-            # player who stays in the seam. It is worth something to one who did
-            # not, which is the only time these ever get shot at.
+            # The line's own radars and the rear-area battery behind it. Their
+            # dark window is worth nothing at all to a player who stays in the
+            # seam — they never come up for him. It is worth something to one
+            # who did not, which is the only time these ever get shot at.
             *[
-                ArmSite(
+                Site(
                     site,
                     "S-125 battery",
+                    go_live_percent=150,
                     probability=0.7,
                     delay_s=(30.0, 80.0),
                     shutdown_s=(240.0, 360.0),
                     react_range_m=70_000.0,
+                    net_relay=0.3,
                 )
                 for site in [*shoulders, rear]
             ],
-            ArmSite(
+            # Tighter than the rest: the Gadfly's whole job is to be found late,
+            # by someone already committed to the northern arc.
+            Site(
                 unfixed,
                 "the unlocated Gadfly",
+                go_live_percent=120,
                 probability=0.9,
                 delay_s=(12.0, 35.0),
                 shutdown_s=(240.0, 360.0),
                 react_range_m=70_000.0,
+                net_relay=0.3,
             ),
         ]
-        arm_emcon_reaction(
+        arm_iads(
             m,
             sites,
             voice=self._voice,
             coalition="blue",
+            name="Syrian air defence",
             down_call="Magic: {label} has ceased emissions, site is dark.",
             up_call="Magic: {label} is radiating again, expect it hot.",
         )

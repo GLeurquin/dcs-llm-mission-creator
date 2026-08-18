@@ -35,13 +35,18 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-"dcs_mission_creator.core.lua" = ["*.lua"]
+"dcs_mission_creator.core.lua" = ["*.lua", "vendor/*.lua", "vendor/*.txt", "vendor/*.md"]
 
 [dependency-groups]
 dev = [
     "ruff>=0.15.13",
     "ty>=0.0.38",
     "pytest>=8.0",
+    # An embedded Lua interpreter, so `tests/test_iads_runtime.py` can actually
+    # *run* the vendored IADS framework against a stubbed DCS scripting
+    # environment instead of only checking that the generated Lua compiles.
+    # Without it that one test skips; nothing else needs it.
+    "lupa>=2.0",
 ]
 
 [tool.pytest.ini_options]

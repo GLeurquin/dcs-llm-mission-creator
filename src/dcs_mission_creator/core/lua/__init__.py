@@ -8,7 +8,7 @@ script that still carries an unfilled one:
 ```python
 from dcs_mission_creator.core import lua
 
-script = lua.render("emcon.lua", SITES=rows, SIDE="coalition.side.BLUE")
+script = lua.render("iads.lua", SITES=rows, SIDE="coalition.side.BLUE")
 rule.add_action(lua.InlineDoScript(script))
 ```
 
@@ -16,14 +16,20 @@ Substitution is deliberately dumb (literal `__NAME__` → text): the values are
 already-formatted Lua source built on the Python side, so nothing here quotes
 or escapes for you — build string literals with `quote`.
 
-Use `InlineDoScript`, never pydcs's `action.DoScript` — see its docstring.
+Use `InlineDoScript`, never pydcs's `action.DoScript` — see its docstring. The
+one exception is a script too large to sensibly inline: the vendored IADS
+framework under `vendor/` goes in with `action.DoScriptFile` and a path from
+`file_path`, which is a different predicate and is not affected by the l10n bug.
 """
 
 from __future__ import annotations
 
 import re
+import shutil
+import tempfile
 from functools import lru_cache
 from importlib.resources import files
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from dcs import action
@@ -33,10 +39,46 @@ _PLACEHOLDER = re.compile(r"__[A-Z][A-Z0-9_]*__")
 
 @lru_cache(maxsize=None)
 def source(name: str) -> str:
-    """Return the raw text of `name` (e.g. `"emcon.lua"`) from this package."""
+    """Return the raw text of `name` (e.g. `"iads.lua"`) from this package.
+
+    Sub-paths work, which is how the vendored third-party scripts under
+    `vendor/` are reached (`source("vendor/skynet-iads.lua")`).
+    """
     if not name.endswith(".lua"):
         raise ValueError(f"lua script name must end in .lua, got {name!r}")
     return files(__name__).joinpath(name).read_text(encoding="utf-8")
+
+
+# Materialised copies of packaged scripts, for the zipped-wheel case below. Kept
+# alive for the life of the process because `Mission.map_resource` stores a path
+# and only reads it at `save()` time.
+_extracted: Optional[tempfile.TemporaryDirectory] = None
+
+
+@lru_cache(maxsize=None)
+def file_path(name: str) -> Path:
+    """Return `name` as a real file on disk.
+
+    For scripts too large to inline sensibly — the vendored IADS framework is
+    117 KB — `Mission.map_resource.add_resource_file` takes a filesystem path,
+    stores it, and reads it back when the `.miz` is written. Installed from
+    source that is just the packaged file; installed from a zipped wheel there is
+    no such file, so it is extracted once to a temporary directory that lives as
+    long as the process (the read happens at save time, not here).
+    """
+    if not name.endswith(".lua"):
+        raise ValueError(f"lua script name must end in .lua, got {name!r}")
+    resource = files(__name__).joinpath(name)
+    if isinstance(resource, Path) and resource.is_file():
+        return resource
+    global _extracted
+    if _extracted is None:
+        _extracted = tempfile.TemporaryDirectory(prefix="dcs-mission-creator-lua-")
+    target = Path(_extracted.name) / Path(name).name
+    if not target.is_file():
+        with resource.open("rb") as src, target.open("wb") as dst:
+            shutil.copyfileobj(src, dst)
+    return target
 
 
 def quote(text: Optional[str]) -> str:

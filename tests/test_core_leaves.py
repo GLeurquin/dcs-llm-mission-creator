@@ -20,16 +20,26 @@ from dcs_mission_creator.core.difficulty import Difficulty
 # ------------------------------------------------------------------- lua.source
 def test_source_rejects_a_name_that_is_not_lua() -> None:
     with pytest.raises(ValueError, match="must end in .lua"):
-        lua.source("emcon.txt")
+        lua.source("iads.txt")
 
 
 def test_source_reads_a_real_script() -> None:
-    assert "function" in lua.source("emcon.lua")
+    assert "function" in lua.source("iads.lua")
 
 
 # ------------------------------------------------------------------- lua.render
+_IADS_SUBS = {
+    "SITES": "{}",
+    "SIDE": "coalition.side.BLUE",
+    "SPACING": "7.0",
+    "UPDATE": "5.0",
+    "IADSNAME": '"Test"',
+    "DEBUG": "nil",
+}
+
+
 def test_render_substitutes_every_placeholder() -> None:
-    out = lua.render("emcon.lua", SITES="{}", SIDE="coalition.side.BLUE", SPACING="7.0")
+    out = lua.render("iads.lua", **_IADS_SUBS)
     assert "__SITES__" not in out
     assert "coalition.side.BLUE" in out
 
@@ -37,19 +47,13 @@ def test_render_substitutes_every_placeholder() -> None:
 def test_render_rejects_an_unknown_placeholder() -> None:
     """A typo'd key would otherwise be dropped on the floor."""
     with pytest.raises(KeyError, match="no placeholder __NOPE__"):
-        lua.render(
-            "emcon.lua",
-            SITES="{}",
-            SIDE="coalition.side.BLUE",
-            SPACING="7.0",
-            NOPE="x",
-        )
+        lua.render("iads.lua", **_IADS_SUBS, NOPE="x")
 
 
 def test_render_rejects_a_leftover_placeholder() -> None:
     """An unsubstituted token reaches DCS as a Lua syntax error."""
     with pytest.raises(KeyError, match="left unsubstituted"):
-        lua.render("emcon.lua", SITES="{}")
+        lua.render("iads.lua", SITES="{}")
 
 
 # ----------------------------------------------------------------- lua.quote

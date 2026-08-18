@@ -459,48 +459,134 @@ tasking.scramble_on_trigger(m, reserve,               # cold-ramp alert-5
   with a queued `StartCommand` and pushes it on the condition(s); generalizes
   pydcs `FlyingGroup.delay_start` (time-only) to any condition.
 
-## SAM EMCON / HARM-reaction helper (project-owned)
+## Integrated air-defence helper (project-owned)
 
-[`emcon`](src/dcs_mission_creator/core/emcon.py) gives radar sites the one
-behaviour DCS does not model: reacting to an anti-radiation shot. Left alone, a
-site radiates while the HARM rides the beam in, so every SEAD shot is a free
-kill. `arm_emcon_reaction` writes one mission-start `DoScript` whose Lua hooks
-`S_EVENT_SHOT`, recognises ARM weapons, and cycles the listed sites through
-`ALARM_STATE GREEN` (radars off, weapons hold) and back to `RED`:
+[`iads`](src/dcs_mission_creator/core/iads.py) gives radar sites the two
+behaviours DCS does not model. Left alone, every SAM radiates from mission start
+— the player's RWR is full before anyone has detected him — and then keeps
+radiating while a HARM rides the beam in, so every SEAD shot is a free kill.
+`arm_iads` fixes both by shipping walder's
+[Skynet-IADS](https://github.com/walder/Skynet-IADS) inside the `.miz` and
+driving it, while keeping this project's own model of what a crew knows about an
+anti-radiation launch:
 
 ```python
-from dcs_mission_creator.core.emcon import ArmSite, arm_emcon_reaction
+from dcs_mission_creator.core.iads import Site, arm_iads
 
-arm_emcon_reaction(
+arm_iads(
     m,
-    [ArmSite(sa6, "SA-6", probability=0.9, delay_s=(14, 40), shutdown_s=(280, 400)),
-     ArmSite(sa2, "SA-2", probability=0.7), *ewr_groups],   # bare groups OK
-    voice=self._voice,                       # calls are spoken as well as printed
+    [Site(sa6, "SA-6", go_live_percent=150, probability=0.9,
+          delay_s=(14, 40), shutdown_s=(280, 400)),
+     Site(sa2, "SA-2", go_live_percent=130, probability=0.7),
+     Site(ewr, "EWR", role="ewr"),          # a unit, not a group — see below
+     Site(sa10, "SA-10", act_as_ew=True, point_defence=sa15)],
+    voice=self._voice,                      # calls are spoken as well as printed
     down_call="Magic: {label} has ceased emissions, site is dark.",
     up_call="Magic: {label} is radiating again, expect it hot.",
+    debug=False,                            # Skynet's own live/dark log output
 )
 ```
 
+It adds **three** mission-start triggers the first time it is called, in order:
+`core/lua/mist_shim.lua`, `core/lua/vendor/skynet-iads.lua` (both as
+`a_do_script_file` resources — 117 KB is not inline material), then the generated
+setup as an `InlineDoScript`. A second call reuses the loaded framework.
+
+**The framework owns when a site radiates.** It knows each system's real
+envelopes, analyses every launcher and radar against them individually, cues
+sites off whichever radars are live, tracks ammunition, and degrades the net when
+links or power go. Per site the mission states `go_live_percent` — a fraction of
+the system's *own* reach, so an SA-8 and an S-200 are configured identically
+without anyone looking up either envelope; go **over 100** or a battery comes up
+and watches rather than shoots, since a DCS site needs ~30 s from cold. Plus
+`engagement_zone` (`"kill"` / `"search"`), `act_as_ew` for a radar that stays up
+throughout, `autonomous`, and `point_defence`.
+
+Two things to get right or the feature silently does nothing:
+- `role="ewr"` registers a **unit**, `role="sam"` a **group** — different classes
+  inside the framework. An `"ewr"` group must hold exactly one unit (the helper
+  raises rather than guess which one is the radar).
+- **Something must radiate**: an all-cued net has nothing to hand tracks down.
+  The helper warns when no site is `role="ewr"` or `act_as_ew`.
+
+The consequence that is easy to get backwards, and that briefings depend on:
+killing the early-warning chain does **not** switch the belts off. A battery with
+no live parent radar goes *autonomous*, and with `autonomous="ai"` (the default,
+and doctrine) that means it searches on its own — radiating continuously from
+then on. A real trade for the player, not a win: every belt becomes an emitter
+that can be found and shot, but nothing is dark any more either.
+`autonomous="dark"` shuts it down instead — do not do that to a whole net, or two
+HARMs on the search radars end the SAM threat.
+
+**We own the reaction to being shot at**, and Skynet's own HARM detection is
+switched off at setup. It identifies the *missile* in flight (>800 kt, few
+flight-path changes) and darkens radars ahead of its track, which hands a crew
+knowledge of a passive weapon they cannot have. Here a launch only reaches sites
+that could observe it: line of sight to the launch point earns the site's own
+`probability`; a masked launch earns `probability * net_relay`, and only if some
+*other* radiating site in reach did see it. Mask the launch from the whole net
+and nobody reacts — a lofted shot from behind a ridge is a real tactic.
+
 Per-site dials are the SEAD difficulty statement: `probability` (does this crew
-catch the launch at all), `delay_s` (recognition lag — **tens of seconds**, the
+act on a launch it saw), `delay_s` (recognition lag — **tens of seconds**, the
 same order as a HARM's time of flight, because nobody in the site gets a launch
 warning: the shot must be seen, called down the net and acted on. Single-digit
 seconds darken the radar in the first third of the missile's flight and no HARM
 ever connects; at these bands the shooter's range at launch decides the duel),
-`shutdown_s` (how long it stays dark — minutes, not seconds, so a HARM buys a
-real working window; repeat fire extends it), `react_range_m` (how far down the
-net the launch travels). Both time bands are drawn triangularly, so the middle
-of the band is the common case. Radio calls are queued and played
-`announce_spacing_s` apart, so a shot that darkens a whole belt still gets one
-call per site instead of only the first. A site whose **radars** are dead is
-destroyed rather than suppressed and drops out of the whole cycle — silently,
-with no call: the gate is a live radar unit, because DCS keeps the group alive
+`shutdown_s` (how long it stays dark — minutes, not Skynet's 180 s cap past
+impact, so a HARM buys a real working window; repeat fire extends it),
+`react_range_m` (how far down the net the launch travels). Both time bands are
+drawn triangularly, so the middle of the band is the common case. A suppressed
+site is released to *cold*, not hot — it re-radiates only if there is still
+something to shoot at.
+
+Radio calls are queued and played `announce_spacing_s` apart, so a shot that
+darkens a whole belt gets one call per site instead of only the first. A site
+coming up for the **first** time says nothing (`hot_call` defaults to `None`):
+the player's RWR is that call, and announcing it would give away a battery the
+briefing deliberately left off the map. One coming *back* after being shot off
+the air uses `up_call`, since that is news; one going quiet because the package
+left is silent, because `down_call` means "SEAD worked" and must not be borrowed.
+A site whose **radars** are dead is destroyed rather than suppressed and drops
+out silently — the gate is a live radar unit, because DCS keeps the group alive
 while one launcher stands, and gating on the group had a site the player had just
-killed report that it was going dark and then that it was radiating again. Only list
-**radar-guided** sites — SA-13/MANPADS have nothing to shut down, and listing a
-mixed convoy would make the whole column hold fire on every HARM shot. Design
-rules (what reveal, what difficulty) live in the `dcs-mission` skill; the pydcs
-`DoScript` mechanics are in PYDCS_REFERENCE.md §7.
+killed report that it was going dark and then that it was radiating again.
+
+Only list **radar-guided** sites — SA-13/MANPADS have nothing to shut down, and
+listing a mixed convoy would make the whole column hold fire on every HARM shot.
+Design rules (what reveal, what difficulty) live in the `dcs-mission` skill; the
+pydcs `DoScript` mechanics are in PYDCS_REFERENCE.md §7.
+
+### The vendored framework
+
+`core/lua/vendor/` holds Skynet 3.3.0 verbatim (Apache-2.0) plus its licence and
+a README covering provenance and how to update. **There is no MIST**, although
+Skynet documents it as a prerequisite: MIST is GPL-3.0, and putting a copyleft
+library inside every generated mission is not a decision this project makes on a
+user's behalf. Skynet calls exactly thirteen MIST functions — a scheduler pair,
+seven conversions and vector helpers, `mist.random`, `mist.getHeading`, and two
+name-lookup tables only the `*ByPrefix` registration paths use (this project
+registers by exact name) — so `core/lua/mist_shim.lua` is a first-party
+implementation of that surface.
+
+Two tests keep the seams honest, and both are the reason a version bump is safe:
+- `tests/test_iads.py` asserts every Skynet method, constant and field the
+  generated setup touches exists in the pinned build, and that the shim covers
+  every `mist.*` the build calls.
+- `tests/test_iads_runtime.py` **runs** the whole stack — shim, framework,
+  generated setup — under an embedded Lua (`lupa`, a dev dependency; the test
+  skips without it) against `tests/lua/dcs_env.lua`, a stub of the DCS scripting
+  environment, and drives the clock: batteries start dark, come up when the jet
+  is inside the cue range, go dark on an observed HARM after the recognition
+  delay, stay dark for the window, come back, ignore a launch masked from the
+  whole net, and go autonomous when the chain dies. Writing it caught four real
+  things, including that "killing the EWRs blinds the belts" is false.
+
+If a future Skynet build is dropped in, run both. The stub is shaped the way DCS
+actually behaves because the framework leans on the details — a group's metatable
+must be `Group` itself, a live site stays live only because its own radar still
+holds the contact, and `S_EVENT_DEAD` is what tells a battery its parent radar is
+gone.
 
 ## JTAC coordinate-readout helper (project-owned)
 
@@ -550,13 +636,13 @@ stock nine-line is a grid — otherwise the two calls look like a bug.
 
 Never embed mission-script Lua as a Python string literal. Every `DoScript`
 payload is a real file under
-[core/lua/](src/dcs_mission_creator/core/lua/) (e.g. `emcon.lua`), loaded via
+[core/lua/](src/dcs_mission_creator/core/lua/) (e.g. `iads.lua`), loaded via
 that package's loader:
 
 ```python
 from dcs_mission_creator.core import lua
 
-script = lua.render("emcon.lua", SITES=rows, SIDE="coalition.side.BLUE",
+script = lua.render("iads.lua", SITES=rows, SIDE="coalition.side.BLUE",
                     COOLDOWN="20.0")
 rule.add_action(lua.InlineDoScript(script))
 ```
@@ -745,7 +831,7 @@ remain only at the pydcs API layer (`airport.set_blue()`,
 - [idlib_gauntlet.py](src/dcs_mission_creator/missions/idlib_gauntlet.py) —
   Syria: F-16C out of Hatay against a Syrian resupply column with organic
   SHORAD, run through three SAM belts (SA-2 / SA-6 / SA-8 + EWR) that go dark
-  on HARM fire and re-radiate (`core/emcon.py`). Trained difficulty, ~60 min.
+  on HARM fire and re-radiate (`core/iads.py`). Trained difficulty, ~60 min.
   The reference for missions that want realistic SEAD — and for the other two
   things that keep a sortie on its plan: a 90 km **front line** across the
   ingress axis (`core/frontline.py`) whose S-125 shoulders price the flanks and

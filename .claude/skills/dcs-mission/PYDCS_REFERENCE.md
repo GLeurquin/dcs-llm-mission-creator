@@ -502,12 +502,24 @@ m.triggerrules.triggers.append(t)
   `AI.Option.Ground.id.ALARM_STATE` / `.ROE` toggle a SAM site between
   radiating and dark, `world.addEventHandler` sees `S_EVENT_SHOT`, and
   `timer.scheduleFunction(fn, arg, t)` schedules the way back.
+- Two more from the same env carry the "what can this site *know*" half:
+  `land.isVisible(vec3From, vec3To)` is a terrain-only LOS trace (lift a ground
+  unit's point a few metres or the trace starts inside its own hill), and
+  `group:getController():getDetectedTargets(Controller.Detection.RADAR)` is
+  what a radar actually holds — DCS's own detection, so radar horizon and
+  masking are already in it. Together they are how a site is cued by the
+  early-warning net instead of radiating from mission start.
 - Sounds played from Lua are addressed **by file name**
   (`trigger.action.outSoundForCoalition(side, "x.wav")`), not by resource key —
   register the WAV with `m.map_resource.add_resource_file(path)`; it lands at
   `l10n/DEFAULT/<basename>` (project wrapper: `VoiceSynth.register`).
-- **Project wrapper:** `emcon.arm_emcon_reaction(m, sites, …)` generates the
-  HARM-reaction script; see CLAUDE.md before hand-rolling one.
+- **Project wrapper:** `iads.arm_iads(m, sites, …)` builds the whole net —
+  cueing off the early-warning chain (a vendored Skynet-IADS) plus this
+  project's launch-observed HARM reaction; see CLAUDE.md before hand-rolling
+  any of it.
+- `action.DoScriptFile(res_key)` with `m.map_resource.add_resource_file(path)` is
+  how a script too large to inline gets in (the 117 KB vendored framework). It is
+  a different predicate from `a_do_script`, so the l10n bug above does not apply.
 
 ### Briefing setters (on `Mission`)
 `set_description_text`, `set_description_bluetask_text`,
