@@ -435,6 +435,13 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         tel.heading = 315
         tel.skill = Skill.High
         sa6.add_unit(tel)
+        # After the third rail, or it stays where the template's neighbours were.
+        ad.disperse_site(
+            sa6,
+            radius_m=300.0,
+            overlay=scene.overlay.overlay,
+            terrain=self._terrain,
+        )
         aaa_offset = offset(ridge, east_m=-150, north_m=250)
         aaa = m.vehicle_group(
             russia,
@@ -584,7 +591,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             zone=intrusion_zone,
             late_activation=True,
             start_type=StartType.Warm,
-            speed=440,
+            speed=900,
             altitude=7500,
             max_engage_distance=90_000,
             group_size=2,
@@ -619,7 +626,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             race_distance=track.race_distance,
             heading=track.heading,
             altitude=9000,
-            speed=410,
+            speed=740,
             start_type=StartType.Warm,
             frequency=251,
         )
@@ -645,7 +652,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             race_distance=track.race_distance,
             heading=track.heading,
             altitude=6500,
-            speed=407,
+            speed=750,
             start_type=StartType.Warm,
             frequency=270,
             tacanchannel="10X",
@@ -673,7 +680,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             pos1=p1,
             pos2=p2,
             start_type=StartType.Warm,
-            speed=430,
+            speed=800,
             altitude=8000,
             max_engage_distance=90_000,
             group_size=2,
@@ -767,10 +774,10 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             )[1:],
             start=1,
         ):
-            hog.add_waypoint(pt, altitude=4_600, speed=400, name=f"INGRESS-{i}")
+            hog.add_waypoint(pt, altitude=4_600, speed=520, name=f"INGRESS-{i}")
         # Above the SA-13 sitting inside the depot wire, and inside Maverick
         # range of it. pydcs's own attack waypoint would have been at zero.
-        attack = hog.add_waypoint(target, altitude=4_000, speed=400, name="ATTACK")
+        attack = hog.add_waypoint(target, altitude=4_000, speed=500, name="ATTACK")
         attack.tasks.append(
             task.AttackGroup(
                 depot.id,
@@ -785,7 +792,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             )[1:-1],
             start=1,
         ):
-            hog.add_waypoint(pt, altitude=4_600, speed=430, name=f"EGRESS-{i}")
+            hog.add_waypoint(pt, altitude=4_600, speed=540, name=f"EGRESS-{i}")
         hog.add_runway_waypoint(scene.incirlik)
         hog.land_at(scene.incirlik)
 
@@ -835,15 +842,15 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         ov = scene.overlay.overlay
         for i, pt in enumerate(corridor[:-1]):
             name = "PUSH" if i == 0 else f"INGRESS-{i}"
-            player.add_waypoint(pt, altitude=7000, speed=400, name=name)
+            player.add_waypoint(pt, altitude=7000, speed=800, name=name)
         # Both remaining steerpoints mark something on the ground — the SA-6
         # site the corridor ends on, then the depot — so they sit on the
         # terrain; the INGRESS legs above carry the run-in altitude.
         waypoints.add_ground_waypoint(
-            player, corridor[-1], overlay=ov, speed=400, name="SA6 TGT"
+            player, corridor[-1], overlay=ov, speed=800, name="SA6 TGT"
         )
         waypoints.add_ground_waypoint(
-            player, scene.depot_anchor, overlay=ov, speed=400, name="DEPOT"
+            player, scene.depot_anchor, overlay=ov, speed=800, name="DEPOT"
         )
         player.add_runway_waypoint(scene.incirlik)
         player.land_at(scene.incirlik)

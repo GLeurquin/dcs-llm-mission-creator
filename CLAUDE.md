@@ -226,6 +226,44 @@ helpers (`sam_site_on_ridge`, etc.) as usual. Design rules (what threat where,
 per difficulty) live in the `dcs-mission` skill; unit-type catalog and the
 pydcs `VehicleTemplate` split in PYDCS_REFERENCE.md §5.
 
+**Sites are laid out dispersed, and that is two families of distance rather
+than one number.** A prepared, fixed site is genuinely compact — an S-75 or
+S-125 fires from built revetments 60–100 m from its fire-control radar, and
+spreading those would be less realistic, not more — so what disperses there is
+the **search radar and command post**, pushed 250–400 m off the position. A
+self-propelled system has no revetments at all: its TELARs deploy across 300–400
+m, and that dispersion is what keeps them alive. Every placement is also wobbled
+(`_JITTER_DEG` / `_JITTER_FRAC`), because a perfectly even ring at a constant
+radius reads as generated through a TGP, and because a site with a real gap in
+its fan means the axis a stick of bombs is laid down actually matters. The
+launcher ring is offset half a step so no launcher shares a bearing with a
+radar.
+
+`disperse_site(group, *, radius_m, overlay=None, terrain=None)` applies the same
+treatment to a group this module did not build — in practice a pydcs
+`VehicleTemplate` site, which is the worst heap in the project: `sa6_site` parks
+both launchers **30 m** from the radar, and `sa10_site`/`sa11_site` put
+everything inside 100 m, so one CBU or a stick of two Mk-82s takes the battery
+and the player never has to find the individual vehicles. It *inflates* the
+template's own layout (each unit keeps its bearing, distances scaled so the
+outermost sits at `radius_m`, then jittered), so the radar stays out in front of
+its fan and — what missions depend on — **unit order is untouched**, keeping
+`units[0]` the radar for every `unit_of_type` objective. Call it *after* any
+extra units the mission adds to the group, or those stay where the mission put
+them. All five missions that use a pydcs template now do (SA-6 → 300 m, SA-11 →
+400 m, SA-10 → 500 m).
+
+Two bounds hold it honest. The footprint stays well inside the 2 km offset
+`PlanOverlay.threat` already applies to an estimated ring at `trained`, so
+dispersing a site does not make the drawn ring or the HSD cartridge wrong. And
+`snap_units_clear` now refuses to place two units of a group within
+`MIN_UNIT_SEPARATION_M`, or to move one further than its search radius: with
+65 m sites neither mattered, but at 300 m several units land in the same treeline
+and `find_placement` **samples** cells rather than sorting them, so they were
+handed the same one — a wooded coastal ridge turned abkhaz_sweep's SA-6 into a
+1.3 km smear with two vehicles inside each other. A unit left in the canopy is
+the smaller lie.
+
 ## Waypoint-altitude helper (project-owned)
 
 [`waypoints`](src/dcs_mission_creator/core/waypoints.py) puts on the terrain
@@ -257,6 +295,57 @@ into the terrain. Missions with no other overlay need (`daryal_run`,
 this. Design rules (which waypoints, where the run-in altitude goes) live in
 the `dcs-mission` skill; the pydcs waypoint API and the gotcha in
 PYDCS_REFERENCE.md §4.3.
+
+## Every speed is km/h true airspeed
+
+**Write speeds in km/h and check them against the airframe.** Every pydcs
+speed argument — `add_waypoint`, `OrbitAction`, `awacs_flight`,
+`refuel_flight`, `patrol_flight`, `intercept_flight`,
+`flight_group_inflight`, and `waypoints.add_ground_waypoint` on top of them —
+is **km/h true airspeed**, stored as `speed / 3.6` m/s. None of them says so
+in its signature and none of them validates the number, so a knots-shaped
+value is accepted in silence and commands roughly **54 % of the intended
+speed**.
+
+All six missions shipped that way. Every `patrol_flight` / `awacs_flight` /
+`refuel_flight` / `intercept_flight` call held a knots-shaped number (380–490)
+while the hand-built `add_waypoint` routes in the same files held km/h-shaped
+ones (750–850) — so the repo disagreed with itself, and the AI package was
+ordered to hold **137–167 KIAS at FL210–FL295**:
+
+| flight | was | commanded | should be |
+|---|---|---|---|
+| E-3A orbit @9000 m | 410 | 221 kt TAS / **137 KIAS** | 740 |
+| KC-135 track @6500 m | 407 | 220 kt TAS / **157 KIAS** | 750 |
+| F-15C CAP @8000 m | 430 | 232 kt TAS / **152 KIAS** | 800 |
+| MiG-29S intercept @7500 m | 440 | 238 kt TAS / 160 KIAS | 900 |
+| A-10C ingress @4600 m | 400 | 216 kt TAS / 171 KIAS | 520 |
+
+The symptom is **the friendly package flying its whole sortie in
+afterburner**: at those speeds a fighter is far below best-climb speed and
+deep on the back side of the drag curve, and the AI holds the commanded
+altitude on the throttle. Nothing caps it, either — `OptRestrictAfterburner`
+is set in exactly one place (`tasking.apply_ai_difficulty`, the *enemy* dial,
+and only at `recruit`), while `apply_threat_reaction` — what every blue AI
+flight gets — never touches the throttle, and the DCS default is unrestricted.
+Leave it that way: the airframes that should not be burning (E-3A, KC-135,
+A-10C) have no afterburner to restrict, and the ones that do (CAP, SEAD) need
+it in a merge. Fix the speed, not the option.
+
+Sanity bound: `FlyingType.max_speed` is km/h too, so a cruise or orbit speed
+lands around **0.3–0.4 of `max_speed`** and anything under ~0.2 is the unit
+error:
+
+```
+F-15C 2650   F-16C 2120   A-10C 720   E-3A 860   KC-135 980   MQ-9 400
+```
+
+Correct per airframe, **never by a blanket ×1.852** — 400 kt is 740 km/h,
+which is *above* the A-10C's never-exceed. Where a bare number would be
+ambiguous, name the unit like `idlib_gauntlet`'s `_FAC_SPEED_KPH` does. The
+pydcs-side gotcha, including the `strike_flight` / `sead_flight` helpers that
+pick `max_speed * 0.8` (Mach 1.4 for a Viper) for themselves, is in
+PYDCS_REFERENCE.md §4.2.
 
 ## Datalink-identity helper (project-owned)
 
@@ -431,6 +520,43 @@ major road in Abkhazia is the coastal highway, so `near_road_m` was unsatisfiabl
 in the mountains and `find_clear_spot` escalated out of the region. A still would
 have put that contradiction on the briefing screen, which is a good argument for
 publishing one: **imagery is a consistency check on a mission's own geography.**
+
+**Landmarks are what make a still usable.** A frame of speckled ground with a
+bracket on it is convincing and useless: nothing in it ties to the map the player
+is planning on. `landmark_marks(overlay, frame, avoid=<the marks you are about to
+draw>)` labels the settlements — a dot and an upper-case name, drawn in a register
+deliberately unlike the sensor's own symbology, so a place cannot be read as
+something the radar found. Three rules, all enforced in code:
+
+- **Only what the raster drew.** The names come from a `places.geojson` sidecar
+  holding just the OSM place classes `buildings.zarr` was rasterized from, so a
+  label always sits on a built-up return the picture actually paints (measured:
+  urban coverage 0.35 under every label against a 0.014–0.028 frame background).
+  This is the rule the reverted `eastern_shield` label broke.
+- **Collision is tested on the ink**, via `render.mark_extent`, which returns the
+  pixel box a mark covers — symbol *and* text. A radius round the target's centre
+  is not enough: a group label like `7 DET  TRK 222  40 KM/H` is 190 px, i.e.
+  4.7 km of ground at 25 m/px, so a village 3 km clear of the bracket still had
+  its name printed straight through the target's.
+- **Not a reveal channel.** A settlement is on every map both sides have, so this
+  does not go through `detections`; ranking is class then distance to the frame
+  centre (by name it produced six labels beginning with A), and it is a sort plus
+  a greedy walk, never a sample, because the render cache keys on the marks.
+
+The sidecar is its own build layer, cheap and independent of the rasters, so it can
+be added to an overlay that is already built:
+
+```bash
+uv run dcs-mission-creator map-overlay build caucasus --layers places
+```
+
+It is a `node["place"]` Overpass query per tile — ~100 KB each, cached beside the
+main tiles, resumable — **not** a re-parse of those tiles, which are 100 files and
+19 GB for Caucasus. `MapOverlay.places` returns `[]` with one warning when the
+sidecar is absent, so an older overlay yields a still with no labels instead of a
+failed build. Names come from `name:en` and must be ASCII: the native Abkhaz and
+Georgian names are the more accurate label, but DejaVu Sans Mono has no glyph for
+several Abkhaz letters and they render as tofu, which reads as a broken product.
 
 Also load the column with `road_column`, not from `group.units[*].position`:
 pydcs `vehicle_group_platoon` uses `Formation.Line`, which stacks units 20 m apart

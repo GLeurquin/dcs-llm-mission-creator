@@ -67,10 +67,12 @@ from dataclasses import dataclass
 from typing import Literal, Sequence
 
 import numpy as np
+from dcs.mapping import Point
 from PIL import Image, ImageDraw
 from scipy.ndimage import gaussian_filter
 
 from dcs_mission_creator.core.recon.chrome import mono_font
+from dcs_mission_creator.core.recon.frame import Frame
 from dcs_mission_creator.core.recon.sample import Scene
 
 #: Backscatter coefficients, linear power. Radar polarity, not optical — see the
@@ -128,10 +130,11 @@ _DISPLAY_LO_DB, _DISPLAY_HI_DB = -26.0, 1.0
 #: Grey level painted where the frame left the overlay.
 _NO_DATA = 12
 
-#: Glyph size for annotation labels.
-_LABEL_SIZE = 14
+#: Glyph size for annotation labels. Public because `landmark` measures a place
+#: name against this exact size to decide whether it fits in the frame.
+LABEL_SIZE = 14
 
-MarkKind = Literal["detection", "group", "aimpoint", "label"]
+MarkKind = Literal["detection", "group", "aimpoint", "label", "place"]
 
 
 @dataclass(frozen=True)
@@ -146,7 +149,12 @@ class Mark:
     column at a 120 m march interval is 4.8 px between vehicles at 25 m/px, so
     eleven individual boxes overlap into one unreadable ladder. A real wide-area
     MTI display solves that the same way — small ticks for the individual returns,
-    one box round the cluster carrying the count.
+    one box round the cluster carrying the count. It doubles as the target-area box
+    on a static graphic, where there is no track to draw: leave `track_deg` unset.
+
+    `place` is the other register entirely — a named settlement, drawn as a plain
+    dot so it cannot be read as something the sensor found. Reference points, not
+    detections; see `landmark.py`.
     """
 
     x: float
@@ -276,29 +284,78 @@ def _to_display(power: np.ndarray) -> np.ndarray:
 # -- annotation --------------------------------------------------------------
 
 
+#: Where `_draw_marks` puts a label relative to its anchor, and how tall a line of
+#: `LABEL_SIZE` glyphs plus its stroke is. Shared with `mark_extent` so the
+#: collision geometry cannot drift from the drawing.
+_TEXT_DX_PX = 8.0
+_TEXT_DY_PX = -7.0
+_TEXT_HEIGHT_PX = LABEL_SIZE + 6.0
+
+
+def _symbol_half_px(mark: Mark, gsd_m: float) -> float:
+    """Half-width of a mark's symbol, in pixels — the numbers the drawers use."""
+    if mark.kind == "group":
+        return max(max(mark.radius_m / gsd_m, 6.0), 4.0)
+    if mark.kind == "aimpoint":
+        return 7.0
+    if mark.kind == "detection":
+        return 1.0
+    if mark.kind == "place":
+        return 2.0
+    return 0.0
+
+
+def _label_dx_px(mark: Mark, gsd_m: float) -> float:
+    """Horizontal offset of a mark's text. A group box pushes its text clear."""
+    if mark.kind == "group":
+        return _symbol_half_px(mark, gsd_m) + 4.0
+    return _TEXT_DX_PX
+
+
+def mark_extent(frame: Frame, mark: Mark) -> tuple[float, float, float, float]:
+    """Pixel box `(x0, y0, x1, y1)` covering everything a mark draws.
+
+    Symbol *and* text, because the text is the part that reaches: a group label
+    like `11 DET  TRK 314  35 KM/H` is ~190 px, which at 25 m/px is 4.7 km of
+    ground — so a place name three kilometres away from a bracket's centre can
+    still be printed straight through its label, which is what happened before
+    this existed. Lives here, next to the drawing it measures.
+    """
+    px, py = frame.world_to_px(Point(mark.x, mark.y, frame.center._terrain))
+    half = _symbol_half_px(mark, frame.gsd_m)
+    x0, y0, x1, y1 = px - half, py - half, px + half, py + half
+    if mark.text:
+        text_x0 = px + _label_dx_px(mark, frame.gsd_m)
+        text_y0 = py + _TEXT_DY_PX
+        x1 = max(x1, text_x0 + mono_font(LABEL_SIZE).getlength(mark.text))
+        y0 = min(y0, text_y0)
+        y1 = max(y1, text_y0 + _TEXT_HEIGHT_PX)
+    return x0, y0, x1, y1
+
+
 def _draw_marks(img: Image.Image, scene: Scene, marks: Sequence[Mark]) -> None:
     """Draw product symbology at full contrast, after the sensor chain."""
-    from dcs.mapping import Point
-
     draw = ImageDraw.Draw(img)
     terrain = scene.frame.center._terrain
     frame = scene.frame
     for mark in marks:
         px, py = frame.world_to_px(Point(mark.x, mark.y, terrain))
-        label_dx = 8.0
+        label_dx = _label_dx_px(mark, frame.gsd_m)
         if mark.kind == "detection":
             _detection_tick(draw, px, py)
         elif mark.kind == "group":
-            label_dx = _group_box(draw, px, py, mark, frame.gsd_m, frame.heading_deg)
+            _group_box(draw, px, py, mark, frame.gsd_m, frame.heading_deg)
         elif mark.kind == "aimpoint":
             _aimpoint(draw, px, py)
+        elif mark.kind == "place":
+            _place_dot(draw, px, py)
         if mark.text:
             # Same face as the chrome, and stroked: the default PIL bitmap font is
             # tiny and unstroked, which left labels unreadable over speckle.
             draw.text(
-                (px + label_dx, py - 7),
+                (px + label_dx, py + _TEXT_DY_PX),
                 mark.text,
-                font=mono_font(_LABEL_SIZE),
+                font=mono_font(LABEL_SIZE),
                 fill=255,
                 stroke_width=2,
                 stroke_fill=0,
@@ -317,10 +374,10 @@ def _group_box(
     mark: Mark,
     gsd_m: float,
     frame_heading: float,
-) -> float:
+) -> None:
     """A bracket round a cluster of movers, with its track vector.
 
-    Returns how far right of centre a label should sit, so the text clears the box.
+    Label placement is `_label_dx_px`'s job, so `mark_extent` and the drawing agree.
     """
     half = max(mark.radius_m / gsd_m, 6.0)
     corner = max(half * 0.35, 4.0)
@@ -340,7 +397,16 @@ def _group_box(
             fill=255,
             width=1,
         )
-    return half + 4.0
+
+
+def _place_dot(draw: ImageDraw.ImageDraw, px: float, py: float) -> None:
+    """A named settlement: a small filled dot, outlined so it reads over speckle.
+
+    Deliberately not a box or a cross — those are the sensor's own vocabulary here
+    (a return, an aimpoint), and a place name is neither. It marks where a thing
+    the reader already has on their map is.
+    """
+    draw.ellipse((px - 2, py - 2, px + 2, py + 2), fill=255, outline=0, width=1)
 
 
 def _aimpoint(draw: ImageDraw.ImageDraw, px: float, py: float) -> None:

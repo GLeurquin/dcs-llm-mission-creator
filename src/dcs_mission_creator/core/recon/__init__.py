@@ -6,6 +6,7 @@ the frame geometry in `frame`; the caching and `.miz` wiring in `publish`.
 
 from dcs_mission_creator.core.recon.chrome import Chrome
 from dcs_mission_creator.core.recon.frame import Frame
+from dcs_mission_creator.core.recon.landmark import landmark_marks
 from dcs_mission_creator.core.recon.publish import (
     RENDER_VERSION,
     ReconStill,
@@ -20,6 +21,7 @@ __all__ = [
     "Chrome",
     "Frame",
     "Mark",
+    "landmark_marks",
     "ReconStill",
     "publish_stills",
     "road_column",

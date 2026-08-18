@@ -18,13 +18,14 @@ class BuildLayer(StrEnum):
     ELEVATION = "elevation"
     OSM = "osm"
     FOREST = "forest"
+    PLACES = "places"
     ALL = "all"
 
     @classmethod
     def expand(cls, selected: set[BuildLayer]) -> set[BuildLayer]:
         """Resolve the `ALL` sentinel into the concrete build steps."""
         if cls.ALL in selected:
-            return {cls.ELEVATION, cls.OSM, cls.FOREST}
+            return {cls.ELEVATION, cls.OSM, cls.FOREST, cls.PLACES}
         return selected
 
 

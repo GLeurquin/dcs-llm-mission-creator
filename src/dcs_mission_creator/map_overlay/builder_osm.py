@@ -55,6 +55,7 @@ from tenacity import (
 from dcs_mission_creator.map_overlay._zarr_io import save_zarr
 from dcs_mission_creator.map_overlay.coords import (
     LatLonBBox,
+    latlon_to_dcs,
     rendered_xz_bounds,
     terrain_bbox_latlon,
 )
@@ -163,6 +164,22 @@ out skel qt;
 """
 
 
+def _places_query(s: float, w: float, n: float, e: float) -> str:
+    """Named settlements only — the `node["place"]` slice of the main query.
+
+    A separate, far cheaper request rather than a re-parse of the cached tiles:
+    those are 100 files and 19 GB for Caucasus because they carry every highway
+    and building node, while the place nodes in them are a few thousand objects.
+    One `node["place"]` query per tile is ~100 KB and seconds.
+    """
+    return f"""[out:json][timeout:{_TIMEOUT_S - 30}];
+(
+  node["place"]({s},{w},{n},{e});
+);
+out body;
+"""
+
+
 def _log_overpass_retry(retry_state: RetryCallState) -> None:
     exc = retry_state.outcome.exception() if retry_state.outcome else None
     sleep_s = retry_state.next_action.sleep if retry_state.next_action else 0.0
@@ -181,9 +198,19 @@ def _log_overpass_retry(retry_state: RetryCallState) -> None:
 def _fetch_tile_json(s: float, w: float, n: float, e: float, cache_dir: Path) -> dict:
     """Fetch + cache one Overpass tile. Cache key: bbox to 3 dp."""
     cache = cache_dir / f"osm_{s:.3f}_{w:.3f}_{n:.3f}_{e:.3f}.json"
+    return _fetch_overpass(_overpass_query(s, w, n, e), cache)
+
+
+def _fetch_overpass(query: str, cache: Path) -> dict:
+    """POST one Overpass query, caching the raw response body at `cache`.
+
+    Shared by the full tile fetch and the far smaller places fetch: same endpoint
+    rotation, same retry policy, same on-disk cache, so a places run costs nothing
+    on the second invocation and a rate-limited endpoint is handled once.
+    """
     if cache.exists() and cache.stat().st_size > 0:
         return json.loads(cache.read_text())
-    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache.parent.mkdir(parents=True, exist_ok=True)
 
     for attempt in Retrying(
         stop=stop_after_attempt(6),
@@ -198,7 +225,7 @@ def _fetch_tile_json(s: float, w: float, n: float, e: float, cache_dir: Path) ->
             ]
             resp = requests.post(
                 url,
-                data={"data": _overpass_query(s, w, n, e)},
+                data={"data": query},
                 timeout=_TIMEOUT_S,
                 headers={
                     "User-Agent": "dcs-mission-creator/0.1 (+https://github.com/gleurquin)",
@@ -212,7 +239,7 @@ def _fetch_tile_json(s: float, w: float, n: float, e: float, cache_dir: Path) ->
             resp.raise_for_status()
             cache.write_text(resp.text)
             return resp.json()
-    raise RuntimeError(f"Overpass fetch exhausted retries for ({s},{w},{n},{e})")
+    raise RuntimeError(f"Overpass fetch exhausted retries for {cache.name}")
 
 
 def _tile_steps(bbox: LatLonBBox) -> tuple[list[int], list[int]]:
@@ -739,6 +766,103 @@ def _stream_rivers_geojson(jsonl_path: Path, out_path: Path) -> None:
                 out.write(json.dumps(feat))
                 first = False
         out.write("]}")
+
+
+def build_places(terrain: Terrain, theater_slug: str) -> Path:
+    """Write `places.geojson`: the named settlements, in DCS xz.
+
+    Why this exists at all: the OSM pass already reads these very nodes — they are
+    what `buildings.zarr` is built from, buffered into disks by class — and then
+    drops the name, so every bright settlement in a recon still was anonymous. The
+    names are what let a still be *located* rather than merely believed.
+
+    Only the classes in `_PLACE_DENSITY` are kept, and that is the honesty
+    constraint rather than a filter for tidiness: those are exactly the classes
+    the raster was rasterized from, so a label written from this sidecar always
+    names a return the picture actually draws. A `locality` or a `neighbourhood`
+    (5,700 of them on Caucasus) was never rasterized, so labelling one would put a
+    place name on empty ground.
+
+    Runs standalone (`overlay build <theater> --layers places`) and touches no
+    raster and no manifest, so it can be added to an overlay that is already
+    built. Per-tile fetches are cached beside the main tiles, so a re-run is
+    offline.
+    """
+    out_dir = overlay_root(theater_slug)
+    cache_dir = build_cache_root(theater_slug) / "osm"
+    bbox = terrain_bbox_latlon(terrain, theater_slug)
+    lat_steps, lon_steps = _tile_steps(bbox)
+    tiles = list(_iter_tile_bboxes(lat_steps, lon_steps))
+
+    # Keyed on rounded xz, not on the name: tiles share edges, so the same village
+    # comes back twice, and two distinct villages do share a name (three "Ахыуаа"
+    # inside one 25 km frame on this map).
+    found: dict[tuple[int, int], tuple[str, str]] = {}
+    for i, (s_lat, w_lon, n_lat, e_lon) in enumerate(tiles, start=1):
+        cache = (
+            cache_dir / f"places_{s_lat:.3f}_{w_lon:.3f}_{n_lat:.3f}_{e_lon:.3f}.json"
+        )
+        tile = _fetch_overpass(_places_query(s_lat, w_lon, n_lat, e_lon), cache)
+        added = 0
+        for el in tile.get("elements", ()):
+            tags = el.get("tags", {})
+            kind = tags.get("place")
+            name = _place_label(tags)
+            if kind not in _PLACE_DENSITY or not name:
+                continue
+            pt = latlon_to_dcs(float(el["lat"]), float(el["lon"]), terrain)
+            key = (round(pt.x), round(pt.y))
+            if key not in found:
+                found[key] = (name, kind)
+                added += 1
+        _LOGGER.info(
+            "places.tile",
+            theater=theater_slug,
+            tile=f"{i}/{len(tiles)}",
+            added=added,
+            total=len(found),
+        )
+
+    # Sorted so the sidecar is byte-stable across runs, like every other artefact.
+    items = sorted(found.items(), key=lambda kv: (kv[1][0], kv[0]))
+    out_path = out_dir / "places.geojson"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "crs": "DCS_xz",
+                "features": [
+                    {
+                        "type": "Feature",
+                        # (east, north), the order the other sidecars use.
+                        "geometry": {"type": "Point", "coordinates": [y, x]},
+                        "properties": {"name": name, "kind": kind},
+                    }
+                    for (x, y), (name, kind) in items
+                ],
+            }
+        )
+    )
+    _LOGGER.info("places.written", path=str(out_path), count=len(items))
+    return out_path
+
+
+def _place_label(tags: dict) -> str:
+    """The name to print on a product, or "" if there is none we can print.
+
+    Prefers `name:en`: the native names here are Abkhaz and Georgian, and the
+    briefing font (DejaVu Sans Mono, from matplotlib) has no glyph for several
+    Abkhaz letters — `Ԥshaԥ` and `Aӡҩybzha` come out as tofu boxes, which on a
+    product reads as a broken render. ASCII-only is also the right register for a
+    NATO graphic whose other furniture is `POST 50M` and `SECRET // REL FVEY`.
+    45 of 46 settlements around the Kodori delta carry `name:en`.
+    """
+    for key in ("name:en", "int_name", "name"):
+        value = (tags.get(key) or "").strip()
+        if value and value.isascii():
+            return value
+    return ""
 
 
 def build(terrain: Terrain, theater_slug: str) -> None:

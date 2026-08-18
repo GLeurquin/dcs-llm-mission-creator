@@ -61,6 +61,7 @@ from dcs_mission_creator.core.recon import (
     Frame,
     Mark,
     ReconStill,
+    landmark_marks,
     publish as recon,
     road_column,
 )
@@ -536,7 +537,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             zone=intrusion_zone,
             late_activation=True,
             start_type=StartType.Warm,
-            speed=450,
+            speed=900,
             altitude=7000,
             max_engage_distance=90_000,
             group_size=2,
@@ -583,7 +584,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             race_distance=track.race_distance,
             heading=track.heading,
             altitude=8500,
-            speed=410,
+            speed=740,
             start_type=StartType.Warm,
             frequency=251,
         )
@@ -663,11 +664,11 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             )[1:],
             start=1,
         ):
-            hog.add_waypoint(pt, altitude=4_600, speed=400, name=f"INGRESS-{i}")
+            hog.add_waypoint(pt, altitude=4_600, speed=520, name=f"INGRESS-{i}")
         # 4,000 m keeps the pair inside Maverick range of the column and above
         # the Strela-10 and the gun vehicles riding with it. pydcs's own attack
         # waypoint would have put this at zero.
-        attack = hog.add_waypoint(target, altitude=4_000, speed=400, name="ATTACK")
+        attack = hog.add_waypoint(target, altitude=4_000, speed=500, name="ATTACK")
         attack.tasks.append(
             task.AttackGroup(
                 convoy.id,
@@ -682,7 +683,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             )[1:-1],
             start=1,
         ):
-            hog.add_waypoint(pt, altitude=4_600, speed=430, name=f"EGRESS-{i}")
+            hog.add_waypoint(pt, altitude=4_600, speed=540, name=f"EGRESS-{i}")
         hog.add_runway_waypoint(scene.kutaisi)
         hog.land_at(scene.kutaisi)
 
@@ -707,7 +708,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             pos1=p1,
             pos2=p2,
             start_type=StartType.Warm,
-            speed=420,
+            speed=800,
             altitude=7500,
             max_engage_distance=80_000,
             group_size=2,
@@ -779,7 +780,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                 if i == 0
                 else ("STATION" if i == len(corridor) - 1 else f"INGRESS-{i}")
             )
-            player.add_waypoint(pt, altitude=6500, speed=380, name=name)
+            player.add_waypoint(pt, altitude=6500, speed=800, name=name)
         player.add_runway_waypoint(scene.batumi)
         player.land_at(scene.batumi)
         return list(corridor)
@@ -901,8 +902,13 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         # tick has to point the way the picture shows the road running.
         tail, lead = returns[0], returns[-1]
         axis = tail.heading_between_point(lead)
-        marks = [Mark(x=p.x, y=p.y) for p in returns]
-        marks.append(
+        # Centred on the column rather than on the route: the frame is 25.6 km
+        # wide against an 18 km march, so centring the route would put the column
+        # itself out at the edge. A quarter turn off the column axis lays the road
+        # across the long dimension.
+        frame = Frame.along_axis(tail, lead, heading_offset_deg=-90.0)
+        column_marks = [Mark(x=p.x, y=p.y) for p in returns]
+        column_marks.append(
             Mark(
                 x=tail.midpoint(lead).x,
                 y=tail.midpoint(lead).y,
@@ -912,13 +918,16 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                 text=f"{len(returns)} DET  TRK {axis:03.0f}  40 KM/H",
             )
         )
+        # Settlement names, so the reader can find the stretch of road this is.
+        # The column's symbology is passed as `avoid` and drawn last: it is what
+        # the frame is about, and nothing may print into it.
+        marks = [
+            *landmark_marks(scene.overlay.overlay, frame, avoid=column_marks),
+            *column_marks,
+        ]
         self._still = recon.sensor_still(
             m,
-            # Centred on the column rather than on the route: the frame is
-            # 25.6 km wide against an 18 km march, so centring the route would
-            # put the column itself out at the edge. A quarter turn off the
-            # column axis lays the road across the long dimension.
-            Frame.along_axis(tail, lead, heading_offset_deg=-90.0),
+            frame,
             marks,
             Chrome(
                 platform="MQ-9 / AN-APY-8 LYNX II",
@@ -935,7 +944,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                     "moving-target returns, not imagery — count them for how long "
                     "the column is and which road it is on, not for what is in it. "
                     "The gun vehicle riding with the column is one of these "
-                    "returns and cannot be told from the rest."
+                    "returns and cannot be told from the rest. Named villages are "
+                    "on the frame to tie it to your map."
                 ),
             ),
             overlay=scene.overlay.overlay,

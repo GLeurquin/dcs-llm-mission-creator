@@ -106,6 +106,7 @@ from dcs_mission_creator.core.recon import (
     Frame,
     Mark,
     ReconStill,
+    landmark_marks,
     publish as recon,
     road_column,
 )
@@ -978,7 +979,12 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             prefix="Gadfly ",
             skill=Skill.High,
         )
-        snap_units_clear(scene.overlay.overlay, self._terrain, buk)
+        ad.disperse_site(
+            buk,
+            radius_m=400.0,
+            overlay=scene.overlay.overlay,
+            terrain=self._terrain,
+        )
         return buk
 
     def _spawn_red_rear_sam(
@@ -1065,6 +1071,14 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             tel.heading = heading
             tel.skill = Skill.High
             sa6.add_unit(tel)
+        # After the extra rails, and wide: this is the SEAD target, so it is the
+        # one site the package plans a pass against rather than avoiding.
+        ad.disperse_site(
+            sa6,
+            radius_m=300.0,
+            overlay=scene.overlay.overlay,
+            terrain=self._terrain,
+        )
         return sa6, pos
 
     def _spawn_red_sa8_belt(
@@ -1220,7 +1234,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             race_distance=track.race_distance,
             heading=track.heading,
             altitude=9000,
-            speed=410,
+            speed=740,
             start_type=StartType.Warm,
             frequency=_FREQ_AWACS,
         )
@@ -1251,7 +1265,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             race_distance=track.race_distance,
             heading=track.heading,
             altitude=6500,
-            speed=407,
+            speed=750,
             start_type=StartType.Warm,
             frequency=_FREQ_TANKER,
             tacanchannel="10X",
@@ -1284,7 +1298,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             pos1=p1,
             pos2=p2,
             start_type=StartType.Warm,
-            speed=430,
+            speed=800,
             altitude=8000,
             max_engage_distance=90_000,
             group_size=2,
@@ -1761,8 +1775,13 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
         axis = scene.convoy_origin.heading_between_point(scene.convoy_destination)
         head, tail = returns[0], returns[-1]
-        marks = [Mark(x=p.x, y=p.y) for p in returns]
-        marks.append(
+        # Centred on the column, not on the route midpoint — the frame is
+        # 25.6 km wide against a 24 km march, so centring on the route would
+        # push the column itself out to the edge. A quarter turn off the axis
+        # puts the road across the long dimension.
+        frame = Frame.along_axis(head, tail, heading_offset_deg=-90.0)
+        column_marks = [Mark(x=p.x, y=p.y) for p in returns]
+        column_marks.append(
             Mark(
                 x=head.midpoint(tail).x,
                 y=head.midpoint(tail).y,
@@ -1772,13 +1791,19 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                 text=f"{len(returns)} DET  TRK {axis:03.0f}  35 KM/H",
             )
         )
+        # Settlement names, and this frame is the one that gains most from them —
+        # not because it is empty (at 25.6 km it holds the road net and a dozen
+        # villages; the "no road, no water, no tree" measurement in `recon.render`
+        # is a 6 km frame at the route midpoint) but because every one of those
+        # returns is an anonymous white blob until it is named. One of the names is
+        # Abu adh-Dhuhour itself, which is the road in the footer.
+        marks = [
+            *landmark_marks(scene.overlay.overlay, frame, avoid=column_marks),
+            *column_marks,
+        ]
         self._still = recon.sensor_still(
             m,
-            # Centred on the column, not on the route midpoint — the frame is
-            # 25.6 km wide against a 24 km march, so centring on the route would
-            # push the column itself out to the edge. A quarter turn off the axis
-            # puts the road across the long dimension.
-            Frame.along_axis(head, tail, heading_offset_deg=-90.0),
+            frame,
             marks,
             Chrome(
                 platform="MQ-9 / AN-APY-8 LYNX II",
@@ -1792,7 +1817,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                     "`Hammer`'s radar took a wide-area cut of the Abu al-Duhur road "
                     "before push. The base is a 50 m radar mosaic and the brackets "
                     "are moving-target returns, not imagery — count them for the "
-                    "size of the column, not for what is in it."
+                    "size of the column, not for what is in it. Named villages are "
+                    "on the frame to tie it to your map."
                 ),
             ),
             overlay=scene.overlay.overlay,

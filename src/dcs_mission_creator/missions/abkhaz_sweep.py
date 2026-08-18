@@ -44,7 +44,7 @@ from dcs.terrain.terrain import Airport
 from dcs.unit import Skill
 from dcs.unitgroup import VehicleGroup
 
-from dcs_mission_creator.core import triggers as mission_triggers
+from dcs_mission_creator.core import air_defense as ad, triggers as mission_triggers
 from dcs_mission_creator.core.cli import run_cli
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.map_draw import PlanOverlay
@@ -374,7 +374,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     def _spawn_red_ground(self, m: Mission, russia: Country, scene: _Scene):
         """SA-6 radar + launchers on coastal ridge, Shilka SHORAD, EWR chain."""
-        sa6 = self._spawn_sa6_site(m, russia, scene.sa6_site)
+        sa6 = self._spawn_sa6_site(m, russia, scene)
         shilkas = self._spawn_shilkas(m, russia, scene.shilka_pos)
         ewr_su27 = self._spawn_ewr(
             m, russia, scene.ewr_su27, "Box Spring 1", vehicles.AirDefence.X_55G6_EWR
@@ -384,17 +384,29 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         )
         return sa6, shilkas, ewr_su27, ewr_mig29
 
-    def _spawn_sa6_site(self, m: Mission, russia: Country, pos: Point):
+    def _spawn_sa6_site(self, m: Mission, russia: Country, scene: _Scene):
         """SA-6 site: 1S91 (Snow Drum) + 2x 2P25 launchers in one group.
 
         The Kub launchers only engage while the 1S91 (`units[0]`) shares their
         group, so radar and TELs must not be split — kill the 1S91 and the
-        whole site goes blind.
+        whole site goes blind. Dispersed out of the template's 30 m huddle: at
+        ace difficulty the site is on no map at all, so the player has to find
+        it, and a heap that tight is one pass with a CBU once he has.
         """
         sa6 = templates.VehicleTemplate.sa6_site(
-            m, russia, pos, heading=180, prefix="Snow Drum ", skill=Skill.Excellent
+            m,
+            russia,
+            scene.sa6_site,
+            heading=180,
+            prefix="Snow Drum ",
+            skill=Skill.Excellent,
         )
-        return sa6
+        return ad.disperse_site(
+            sa6,
+            radius_m=300.0,
+            overlay=scene.overlay.overlay,
+            terrain=self._terrain,
+        )
 
     def _spawn_shilkas(self, m: Mission, russia: Country, pos: Point):
         """2x ZSU-23-4 inside the SAM perimeter — terminal AAA coverage."""
@@ -438,7 +450,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             zone=zone,
             late_activation=True,
             start_type=StartType.Warm,
-            speed=470,
+            speed=920,
             altitude=8000,
             max_engage_distance=120_000,
             group_size=4,
@@ -476,7 +488,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             zone=zone,
             late_activation=True,
             start_type=StartType.Warm,
-            speed=490,
+            speed=900,
             altitude=8500,
             max_engage_distance=100_000,
             group_size=2,
@@ -511,7 +523,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             race_distance=90_000,
             heading=300,
             altitude=8500,
-            speed=410,
+            speed=740,
             start_type=StartType.Warm,
             frequency=251,
         )
@@ -544,14 +556,14 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         )
 
         player.add_runway_waypoint(scene.batumi)
-        player.add_waypoint(scene.push, altitude=6000, speed=400, name="PUSH")
+        player.add_waypoint(scene.push, altitude=6000, speed=800, name="PUSH")
         player.add_waypoint(
-            scene.station_south, altitude=7500, speed=420, name="STATION_SOUTH"
+            scene.station_south, altitude=7500, speed=780, name="STATION_SOUTH"
         )
         player.add_waypoint(
-            scene.station_north, altitude=7500, speed=420, name="STATION_NORTH"
+            scene.station_north, altitude=7500, speed=780, name="STATION_NORTH"
         )
-        player.add_waypoint(scene.egress, altitude=5000, speed=420, name="EGRESS")
+        player.add_waypoint(scene.egress, altitude=5000, speed=820, name="EGRESS")
         player.add_runway_waypoint(scene.batumi)
         player.land_at(scene.batumi)
         return player

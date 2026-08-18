@@ -10,6 +10,15 @@ Each builder assembles one complete site — search radar, track/fire-control
 radar, command post and launchers, wired into a single `VehicleGroup` — from
 one call, so missions stop copy-pasting component type lists and offset math.
 
+Every site is laid out *dispersed* — a launcher ring sized to what the system
+really is, radars and command posts pushed off it, and every placement wobbled
+so no ring reads as a drawn circle. See the offset constants below for why that
+is two families of distance rather than one. `disperse_site` applies the same
+treatment to a group this module did not build, which in practice means a pydcs
+`VehicleTemplate` site: those park every launcher 30-50 m from the radar, and a
+battery in a heap that tight dies to one CBU without the player ever having to
+find the individual vehicles.
+
 Design rule (mirrors `core/placement.py` / `core/map_draw.py` / `core/tts`):
 the mission passes in an **absolute** world `Point` and a `heading`; this
 helper does the component placement (`point_from_heading` offsets), uniform
@@ -22,6 +31,7 @@ it does for `mission.vehicle_group(...)`.
 
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, Sequence
 
@@ -42,11 +52,38 @@ if TYPE_CHECKING:
 
 log = structlog.get_logger(__name__)
 
-# Standard component/launcher offsets (m) from the site centre. Radars sit
-# close to the centre; launchers ring the site so the fan covers all azimuths.
-_RADAR_DIST = 80.0
-_CP_DIST = 60.0
-_LAUNCHER_RING = 65.0
+# Component/launcher offsets (m) from the site centre, and the reason there are
+# two families of them rather than one number.
+#
+# A prepared, fixed site is genuinely compact: an S-75 or S-125 fires from built
+# revetments 60-100 m from its fire-control radar, and spreading those would be
+# less realistic, not more. What a battery of that kind does push out is its
+# *search radar and command post* — hundreds of metres, often off the position
+# entirely. A self-propelled system has no revetments at all: its vehicles
+# deploy across the whole position, and that dispersion is what keeps them
+# alive. So the fixed sites disperse in their radars and the mobile ones in
+# their launchers.
+#
+# The stakes are concrete. Everything here used to sit inside a 160 m circle,
+# and pydcs's own `VehicleTemplate.sa6_site` is worse — both launchers 30 m from
+# the radar, which one CBU or a pair of Mk-82s removes whole. `disperse_site` is
+# the post-pass for those.
+_REVETTED_RING = 90.0  # launchers in prepared emplacements
+_MOBILE_RING = 330.0  # self-propelled launchers / TELARs, deployed wide
+_FC_RADAR = 150.0  # fire-control radar, clear of the launcher ring
+_SUPPORT = 250.0  # search radar, command post, power — well off the site
+_LAUNCHER_RING = _REVETTED_RING  # default when a spec does not say
+
+# Every placement is wobbled by this much. A perfectly even ring at a constant
+# radius is the signature of a generated site — it reads as one on the F10 map,
+# through a TGP and out the canopy — and it also means a single stick of bombs
+# laid down the wrong axis misses everything or hits everything.
+_JITTER_DEG = 14.0
+_JITTER_FRAC = 0.18
+
+# Past this footprint a site is wide enough that some unit will find water or
+# canopy on any interesting terrain, so skipping the snap stops being free.
+_WIDE_FOOTPRINT_M = 150.0
 
 
 # -- shared placement primitives -------------------------------------------
@@ -62,6 +99,31 @@ def set_skill(group: Group, skill: Skill) -> None:
         u.skill = skill
 
 
+def _jitter(bearing: float, distance: float) -> tuple[float, float]:
+    """Wobble one placement off its nominal bearing and distance.
+
+    Drawn from the stdlib `random`, which `MissionBuilder.generate` seeds from
+    the mission slug — so a site is scattered but the same scatter every build.
+    """
+    return (
+        bearing + random.uniform(-_JITTER_DEG, _JITTER_DEG),
+        distance * (1.0 + random.uniform(-_JITTER_FRAC, _JITTER_FRAC)),
+    )
+
+
+def footprint_m(group: Group) -> float:
+    """How far the outermost unit of a site sits from its leader.
+
+    The leader is the site centre: `Mission.vehicle_group` puts it on the
+    position the caller passed, which is also the position the briefing drew a
+    ring around, so this is the radius of the real thing under that ring.
+    """
+    if not group.units:
+        return 0.0
+    centre = group.units[0].position
+    return max(centre.distance_to_point(u.position) for u in group.units)
+
+
 def _add(
     m: Mission,
     vg: VehicleGroup,
@@ -75,7 +137,7 @@ def _add(
 ) -> None:
     """Add one unit to `vg` at `bearing`/`distance` from the site centre."""
     u = m.vehicle(name, type_)
-    u.position = center.point_from_heading(bearing, distance)
+    u.position = center.point_from_heading(*_jitter(bearing, distance))
     u.heading = site_heading
     vg.add_unit(u)
 
@@ -97,10 +159,17 @@ def _ring(
     `start=1` is the self-contained SHORAD case: the group leader is itself a
     launcher sitting at the centre, so the ring only holds the other `count-1`.
 
-    Bearings are absolute, not relative to `site_heading`. For a full, evenly
-    spaced ring that is merely a rotation of the same shape, so it has never
-    mattered — but it does mean rotating a site turns its radars and not its
-    launcher ring. Changing it would move units, so it is left alone here.
+    Bearings are relative to `site_heading`, so rotating a site turns its
+    launchers with its radars. They were absolute until the dispersion pass, on
+    the grounds that changing it would move units — which that pass does anyway,
+    and it matters once a two- or three-launcher site is spread wide enough for
+    the gap in its fan to be somewhere in particular.
+
+    The ring is offset half a step so no launcher shares a bearing with a
+    component: a spec puts its radars on the site heading and its command post
+    behind, and a launcher on the same bearing ends up a few metres radially off
+    one of them once both are jittered — which is the heap this pass exists to
+    break, in miniature.
     """
     step = 360.0 / count
     for i in range(start, count):
@@ -111,8 +180,47 @@ def _ring(
             type_,
             center,
             site_heading,
-            bearing=i * step,
+            bearing=site_heading + (i + 0.5) * step,
             distance=radius,
+        )
+
+
+def _snap(
+    vg: VehicleGroup,
+    overlay: MapOverlay | None,
+    terrain: Terrain | None,
+) -> None:
+    """Nudge units off canopy and water, or say why that did not happen."""
+    if overlay is not None and terrain is not None:
+        # Imported here, not at module scope: core.placement reaches into
+        # map_overlay.query, which pulls in numpy and the whole raster stack.
+        # A module about SAM component layouts should not cost that to import
+        # when the caller never asks for snapping.
+        from dcs_mission_creator.core.placement import snap_units_clear
+
+        snap_units_clear(overlay, terrain, vg)
+        return
+    if overlay is not None or terrain is not None:
+        # Snapping needs both. Passing one alone used to skip it in silence,
+        # leaving launchers in the canopy on exactly the rough terrain the
+        # caller was trying to handle.
+        log.warning(
+            "air-defense site not snapped to clear ground: pass overlay and terrain",
+            name=vg.name,
+            overlay=overlay is not None,
+            terrain=terrain is not None,
+        )
+        return
+    if footprint_m(vg) > _WIDE_FOOTPRINT_M:
+        # Opting out of snapping is a normal choice on flat, dry ground. It is a
+        # different bet now that a dispersed site spans hundreds of metres:
+        # somewhere in that circle is the lake or the treeline the site centre
+        # was chosen to avoid.
+        log.warning(
+            "dispersed air-defense site placed with no terrain check — a unit may "
+            "sit in water or canopy; pass overlay and terrain",
+            name=vg.name,
+            footprint_m=round(footprint_m(vg)),
         )
 
 
@@ -124,26 +232,67 @@ def _finish(
 ) -> VehicleGroup:
     """Set uniform skill and, if an overlay is given, snap units off canopy."""
     set_skill(vg, skill)
-    if overlay is not None and terrain is not None:
-        # Imported here, not at module scope: core.placement reaches into
-        # map_overlay.query, which pulls in numpy and the whole raster stack.
-        # A module about SAM component layouts should not cost that to import
-        # when the caller never asks for snapping.
-        from dcs_mission_creator.core.placement import snap_units_clear
-
-        snap_units_clear(overlay, terrain, vg)
-    elif overlay is not None or terrain is not None:
-        # Snapping needs both. Passing one alone used to skip it in silence,
-        # leaving launchers in the canopy on exactly the rough terrain the
-        # caller was trying to handle.
-        log.warning(
-            "air-defense site not snapped to clear ground: pass overlay and terrain",
-            name=vg.name,
-            overlay=overlay is not None,
-            terrain=terrain is not None,
-        )
-    log.debug("built air-defense site", name=vg.name, units=len(vg.units))
+    _snap(vg, overlay, terrain)
+    log.debug(
+        "built air-defense site",
+        name=vg.name,
+        units=len(vg.units),
+        footprint_m=round(footprint_m(vg)),
+    )
     return vg
+
+
+def disperse_site(
+    group: VehicleGroup,
+    *,
+    radius_m: float,
+    overlay: MapOverlay | None = None,
+    terrain: Terrain | None = None,
+) -> VehicleGroup:
+    """Spread an already-built site out to `radius_m`, in place.
+
+    For groups this module did not build — above all pydcs's
+    `dcs.templates.VehicleTemplate` sites, which park every launcher 30-50 m from
+    the radar. A battery in a heap that tight is one CBU, or a stick of two
+    Mk-82s, and the player never has to find the individual vehicles.
+
+    It *inflates* the layout rather than replacing it: each unit keeps its
+    bearing from the leader and its share of the site's shape, scaled so the
+    outermost sits at `radius_m`, then wobbled. So a template's radar stays out
+    in front of its launcher fan, and — the part missions depend on — the unit
+    *order* is untouched, which is what keeps `units[0]` the radar and any
+    `unit_of_type` objective pointing at the same vehicle it did before.
+
+    Call it after any extra units the mission adds to the group, or those stay
+    where the mission put them. Pass `overlay` + `terrain` (both, or neither):
+    the wider the site, the likelier some unit lands in water or canopy.
+    """
+    units = group.units
+    if len(units) < 2:
+        return group
+    centre = units[0].position
+    offsets = [
+        (centre.heading_between_point(u.position), centre.distance_to_point(u.position))
+        for u in units[1:]
+    ]
+    widest = max(d for _, d in offsets)
+    for u, (bearing, distance) in zip(units[1:], offsets):
+        if widest <= 0.0:
+            # Every unit stacked on the leader: there is no shape to scale, so
+            # fall back to an even ring rather than leaving the heap alone.
+            i = units.index(u)
+            bearing, distance = (i - 1) * 360.0 / (len(units) - 1), radius_m
+        else:
+            distance = distance * radius_m / widest
+        u.position = centre.point_from_heading(*_jitter(bearing, distance))
+    _snap(group, overlay, terrain)
+    log.debug(
+        "dispersed air-defense site",
+        name=group.name,
+        units=len(units),
+        footprint_m=round(footprint_m(group)),
+    )
+    return group
 
 
 # -- site catalogue ----------------------------------------------------------
@@ -245,8 +394,8 @@ _SA2 = _SiteSpec(
     site_name="SA-2 site",
     leader=AirDefence.P_19_s_125_sr,
     components=(
-        _Component("Fan Song TR", AirDefence.SNR_75V, 0.0, _RADAR_DIST),
-        _Component("RD-75", AirDefence.RD_75, 180.0, _CP_DIST),
+        _Component("Fan Song TR", AirDefence.SNR_75V, 0.0, _FC_RADAR),
+        _Component("RD-75", AirDefence.RD_75, 180.0, _SUPPORT),
     ),
     launcher_label="S-75 launcher",
     launcher=AirDefence.S_75M_Volhov,
@@ -256,7 +405,7 @@ _SA2 = _SiteSpec(
 _SA3 = _SiteSpec(
     site_name="SA-3 site",
     leader=AirDefence.P_19_s_125_sr,
-    components=(_Component("Low Blow TR", AirDefence.Snr_s_125_tr, 0.0, _RADAR_DIST),),
+    components=(_Component("Low Blow TR", AirDefence.Snr_s_125_tr, 0.0, _FC_RADAR),),
     launcher_label="S-125 launcher",
     launcher=AirDefence.X_5p73_s_125_ln,
     default_launchers=4,
@@ -265,31 +414,33 @@ _SA3 = _SiteSpec(
 _SA5 = _SiteSpec(
     site_name="SA-5 site",
     leader=AirDefence.RLS_19J6,
-    components=(_Component("Square Pair TR", AirDefence.RPC_5N62V, 0.0, _RADAR_DIST),),
+    components=(_Component("Square Pair TR", AirDefence.RPC_5N62V, 0.0, 400.0),),
     launcher_label="S-200 launcher",
     launcher=AirDefence.S_200_Launcher,
     default_launchers=4,
-    launcher_radius=90.0,
+    launcher_radius=220.0,
 )
 
 _NASAMS = _SiteSpec(
     site_name="NASAMS site",
     leader=AirDefence.NASAMS_Radar_MPQ64F1,
     components=(
-        _Component("NASAMS C2", AirDefence.NASAMS_Command_Post, 180.0, _CP_DIST),
+        _Component("NASAMS C2", AirDefence.NASAMS_Command_Post, 180.0, _SUPPORT),
     ),
     launcher_label="NASAMS launcher",
     launcher=AirDefence.NASAMS_LN_C,
     default_launchers=3,
+    launcher_radius=_MOBILE_RING,
 )
 
 _IRIST = _SiteSpec(
     site_name="IRIS-T SLM site",
     leader=AirDefence.CHAP_IRISTSLM_STR,
-    components=(_Component("IRIS-T C2", AirDefence.CHAP_IRISTSLM_CP, 180.0, _CP_DIST),),
+    components=(_Component("IRIS-T C2", AirDefence.CHAP_IRISTSLM_CP, 180.0, _SUPPORT),),
     launcher_label="IRIS-T launcher",
     launcher=AirDefence.CHAP_IRISTSLM_LN,
     default_launchers=3,
+    launcher_radius=_MOBILE_RING,
 )
 
 _ROLAND = _SiteSpec(
@@ -298,6 +449,7 @@ _ROLAND = _SiteSpec(
     launcher_label="Roland ADS",
     launcher=AirDefence.Roland_ADS,
     default_launchers=2,
+    launcher_radius=300.0,
 )
 
 _RAPIER = _SiteSpec(
@@ -308,12 +460,13 @@ _RAPIER = _SiteSpec(
             "Rapier tracker",
             AirDefence.Rapier_fsa_optical_tracker_unit,
             180.0,
-            _CP_DIST,
+            200.0,
         ),
     ),
     launcher_label="Rapier launcher",
     launcher=AirDefence.Rapier_fsa_launcher,
     default_launchers=2,
+    launcher_radius=220.0,
 )
 
 _HQ7 = _SiteSpec(
@@ -322,6 +475,7 @@ _HQ7 = _SiteSpec(
     launcher_label="HQ-7 TELAR",
     launcher=AirDefence.HQ_7_LN_SP,
     default_launchers=4,
+    launcher_radius=_MOBILE_RING,
 )
 
 _SA8 = _SiteSpec(
@@ -330,6 +484,7 @@ _SA8 = _SiteSpec(
     launcher_label="Osa",
     launcher=AirDefence.Osa_9A33_ln,
     default_launchers=3,
+    launcher_radius=400.0,
     leader_is_launcher=True,
 )
 
@@ -339,6 +494,7 @@ _SA13 = _SiteSpec(
     launcher_label="Strela-10",
     launcher=AirDefence.Strela_10M3,
     default_launchers=2,
+    launcher_radius=300.0,
     leader_is_launcher=True,
 )
 
@@ -348,6 +504,7 @@ _SA15 = _SiteSpec(
     launcher_label="Tor",
     launcher=AirDefence.Tor_9A331,
     default_launchers=2,
+    launcher_radius=_MOBILE_RING,
     leader_is_launcher=True,
 )
 
@@ -357,10 +514,11 @@ _SA19 = _SiteSpec(
     launcher_label="Tunguska",
     launcher=AirDefence.X_2S6_Tunguska,
     default_launchers=2,
+    launcher_radius=300.0,
     leader_is_launcher=True,
 )
 
-_DOG_EAR = _Component("Dog Ear SR", AirDefence.Dog_Ear_radar, 0.0, _RADAR_DIST)
+_DOG_EAR = _Component("Dog Ear SR", AirDefence.Dog_Ear_radar, 0.0, _SUPPORT)
 
 
 # -- public builders ---------------------------------------------------------

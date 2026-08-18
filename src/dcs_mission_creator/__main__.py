@@ -149,6 +149,10 @@ def _cmd_overlay_build(theater: str, layers: list[BuildLayer]) -> int:
         builder_osm.build(terrain, theater)
     if BuildLayer.FOREST in selected:
         builder_forest.build(terrain, theater)
+    if BuildLayer.PLACES in selected:
+        # Cheap and independent of the rasters — safe to run on an overlay that
+        # is already built, which is how the existing two got their sidecar.
+        builder_osm.build_places(terrain, theater)
     return 0
 
 

@@ -45,6 +45,12 @@ FOREST_BUFFER_M = 80.0
 # Search radius for `snap_units_clear` per-unit relocation.
 UNIT_SNAP_RADIUS_M = 250.0
 
+#: Closest two units of one group may be placed by a snap. A DCS ground vehicle
+#: is up to ~10 m long, so this is "not inside each other" rather than any
+#: tactical spacing — groups that deliberately sit tighter than this keep their
+#: own layout, since a unit that cannot be moved clear is simply left alone.
+MIN_UNIT_SEPARATION_M = 15.0
+
 
 def find_clear_spot(
     overlay: MapOverlay,
@@ -109,21 +115,57 @@ def snap_units_clear(
     the group origin, so a 9-unit platoon can blow past any reasonable
     placement-time `forest_buffer_m`. Call this once after the group is
     built — it mutates `group.units[*].position` in place.
+
+    Two rules keep the group a group, and both only started to bite once
+    `core/air_defense.py` began dispersing sites across hundreds of metres
+    instead of sixty:
+
+    - **A snapped unit lands clear of the others.** `find_placement` samples
+      cells, it does not sort them by distance, so two neighbours in the same
+      treeline were handed the same cell and ended up inside each other.
+    - **It lands within `search_radius_m` of where it started.** The escalating
+      fallback in `find_clear_spot` reaches four times that radius and then
+      spirals, which turned a 300 m SAM site on a wooded coastal ridge into a
+      1.3 km smear with two units stacked. A single unit left in the canopy is a
+      smaller lie than a battery spread over a kilometre.
+
+    A unit that can satisfy neither stays where it is.
     """
     require = Placement(not_in=NO_FOREST)
-    for u in group.units:
-        pt = Point(u.position.x, u.position.y, terrain)
+    taken = [Point(u.position.x, u.position.y, terrain) for u in group.units]
+
+    def usable(cand: Point, index: int) -> bool:
+        if taken[index].distance_to_point(cand) > search_radius_m:
+            return False
+        return all(
+            cand.distance_to_point(other) >= MIN_UNIT_SEPARATION_M
+            for j, other in enumerate(taken)
+            if j != index
+        )
+
+    for i, u in enumerate(group.units):
+        pt = taken[i]
         if overlay.vegetation_at(pt) not in NO_FOREST:
             continue
-        spots = overlay.find_placement(pt, search_radius_m, require)
-        if spots:
-            target = spots[0]
-        else:
-            target = find_clear_spot(
+        # Several candidates rather than one: the first clear cell may be the one
+        # the unit's neighbour already took.
+        options = overlay.find_placement(pt, search_radius_m, require, count=8)
+        target = next((c for c in options if usable(c, i)), None)
+        if target is None:
+            escalated = find_clear_spot(
                 overlay, pt, terrain, radius_m=search_radius_m, require=require
             )
+            target = escalated if usable(escalated, i) else None
+        if target is None:
+            log.debug(
+                "unit left in place: no clear spot within reach of its neighbours",
+                group=group.name,
+                unit=u.name,
+            )
+            continue
         u.position.x = target.x
         u.position.y = target.y
+        taken[i] = target
 
 
 def convoy_spawn(

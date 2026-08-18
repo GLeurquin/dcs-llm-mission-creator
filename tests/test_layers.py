@@ -7,7 +7,7 @@ from dcs_mission_creator.map_overlay.layers import BuildLayer, QueryLayer, Rende
 
 def test_build_layer_expand_all():
     out = BuildLayer.expand({BuildLayer.ALL})
-    assert out == {BuildLayer.ELEVATION, BuildLayer.OSM, BuildLayer.FOREST}
+    assert out == set(BuildLayer) - {BuildLayer.ALL}
     assert BuildLayer.ALL not in out
 
 
@@ -18,7 +18,7 @@ def test_build_layer_expand_subset_unchanged():
 
 def test_build_layer_expand_all_with_extras_collapses():
     out = BuildLayer.expand({BuildLayer.ALL, BuildLayer.OSM})
-    assert out == {BuildLayer.ELEVATION, BuildLayer.OSM, BuildLayer.FOREST}
+    assert out == set(BuildLayer) - {BuildLayer.ALL}
 
 
 def test_render_layer_expand_all_drops_sentinel():

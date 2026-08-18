@@ -95,6 +95,11 @@ def add_ground_waypoint(
     For steerpoints that mark something on the ground — the convoy, the depot,
     the SAM site. The run-in altitude belongs on the preceding IP waypoint;
     this one only has to tell the jet how high the *target* is.
+
+    `speed` is **km/h true airspeed**, the unit every pydcs speed argument
+    takes and none of them name (`add_waypoint` stores `speed / 3.6` m/s).
+    A knots-shaped number here commands roughly half the intended speed —
+    see the unit rule in CLAUDE.md.
     """
     return group.add_waypoint(
         position, altitude=ground_elevation_m(overlay, position), speed=speed, name=name

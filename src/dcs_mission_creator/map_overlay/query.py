@@ -16,11 +16,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
+import structlog
 from dcs.mapping import Point
 
 from dcs_mission_creator import resources
 from dcs_mission_creator.map_overlay.manifest import Manifest
 from dcs_mission_creator.map_overlay.placement import Placement, Vegetation
+from dcs_mission_creator.map_overlay.terrains import terrain_for
 
 if TYPE_CHECKING:
     from shapely.geometry import LineString
@@ -33,6 +35,9 @@ Placement sampling is random, so an unseeded overlay would put the SAM belt
 somewhere new on every build. Fixing it here makes a mission reproducible:
 same overlay, same query, same answer.
 """
+
+
+log = structlog.get_logger(__name__)
 
 
 def _resources_root() -> Path:
@@ -73,6 +78,21 @@ class LayerWindow:
     valid: np.ndarray
 
 
+@dataclass(frozen=True)
+class Place:
+    """A named settlement from the `places.geojson` sidecar.
+
+    `kind` is the OSM `place` class, and only the classes `buildings.zarr` was
+    rasterized from ever reach the sidecar — so a `Place` always corresponds to a
+    built-up return in the raster, which is what lets a recon still label one
+    without claiming a feature the picture cannot show.
+    """
+
+    name: str
+    kind: str
+    position: Point
+
+
 @dataclass
 class MapOverlay:
     """Lazy, memory-mapped accessor for a built overlay.
@@ -90,6 +110,11 @@ class MapOverlay:
     #: see `_vector_index`.
     _vector_indexes: dict[str, tuple[STRtree, list[LineString]]] = field(
         default_factory=dict, init=False, repr=False, compare=False
+    )
+
+    #: Lazily built point index for `places.geojson` — see `_place_index`.
+    _place_index_cache: "tuple[STRtree, list[Place]] | None" = field(
+        default=None, init=False, repr=False, compare=False
     )
 
     #: Opened zarr arrays, keyed by layer name — see `_open_layer`.
@@ -207,6 +232,25 @@ class MapOverlay:
         tree, lines = self._vector_index(kind)
         query = ShPoint(center.y, center.x).buffer(radius_m)
         return [lines[int(i)] for i in tree.query(query)]
+
+    def places(self, center: Point, radius_m: float) -> list[Place]:
+        """Named settlements within `radius_m` of `center`, nearest first.
+
+        Returns `[]` — with one warning — when the overlay has no `places.geojson`.
+        The sidecar was added after both shipped overlays were built and is written
+        by its own build layer, so an older overlay is a normal state rather than a
+        broken one, and a caller (a recon still labelling landmarks) degrades to no
+        labels instead of failing a mission build.
+        """
+        from shapely.geometry import Point as ShPoint
+
+        index = self._place_index()
+        if index is None:
+            return []
+        tree, places = index
+        hits = tree.query(ShPoint(center.y, center.x).buffer(radius_m))
+        found = [places[int(i)] for i in hits]
+        return sorted(found, key=lambda pl: center.distance_to_point(pl.position))
 
     # ---------------------------------------------------------- point queries
     def vegetation_at(self, point: Point) -> Vegetation:
@@ -529,6 +573,43 @@ class MapOverlay:
             cached = (STRtree(lines), lines)
             self._vector_indexes[kind] = cached
         return cached
+
+    def _place_index(self) -> "tuple[STRtree, list[Place]] | None":
+        """Settlement points + their spatial index, read from disk once.
+
+        `None` (not an exception) when the sidecar is absent — see `places`.
+        """
+        from shapely.geometry import Point as ShPoint
+        from shapely.strtree import STRtree
+
+        if self._place_index_cache is None:
+            path = self.root / "places.geojson"
+            if not path.is_file():
+                log.warning(
+                    "overlay has no places sidecar; landmarks unavailable",
+                    theater=self.theater,
+                    hint="map-overlay build <theater> --layers places",
+                )
+                return None
+            data = json.loads(path.read_text())
+            terrain = terrain_for(self.theater)
+            places: list[Place] = []
+            points = []
+            for feat in data["features"]:
+                if feat["geometry"]["type"] != "Point":
+                    continue
+                east, north = feat["geometry"]["coordinates"]
+                props = feat["properties"]
+                places.append(
+                    Place(
+                        name=props["name"],
+                        kind=props["kind"],
+                        position=Point(float(north), float(east), terrain),
+                    )
+                )
+                points.append(ShPoint(float(east), float(north)))
+            self._place_index_cache = (STRtree(points), places)
+        return self._place_index_cache
 
     def _road_lines(self) -> tuple[STRtree, list[LineString]]:
         """Road polylines + their spatial index. See `_vector_index`."""

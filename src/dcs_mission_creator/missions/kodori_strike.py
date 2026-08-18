@@ -45,6 +45,7 @@ from dcs.unitgroup import VehicleGroup
 from dcs.unittype import VehicleType
 
 from dcs_mission_creator.core import (
+    air_defense as ad,
     dtc,
     routing,
     triggers as mission_triggers,
@@ -73,6 +74,7 @@ from dcs_mission_creator.core.recon import (
     Frame,
     Mark,
     ReconStill,
+    landmark_marks,
     publish as recon,
 )
 from dcs_mission_creator.core.routing import ThreatRing
@@ -558,7 +560,14 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         sa6 = templates.VehicleTemplate.sa6_site(
             m, russia, sa6_pos, heading=180, prefix="Kodori ", skill=Skill.High
         )
-        snap_units_clear(scene.overlay.overlay, self._terrain, sa6)
+        # Dispersed, then snapped — the wider the site, the more of it the
+        # inland slopes and the treeline can swallow.
+        ad.disperse_site(
+            sa6,
+            radius_m=300.0,
+            overlay=scene.overlay.overlay,
+            terrain=self._terrain,
+        )
         return sa6, sa6_pos
 
     def _spawn_red_shorad(
@@ -711,7 +720,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             zone=intrusion_zone,
             late_activation=True,
             start_type=StartType.Warm,
-            speed=460,
+            speed=920,
             altitude=7500,
             max_engage_distance=90_000,
             group_size=2,
@@ -756,7 +765,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             race_distance=track.race_distance,
             heading=track.heading,
             altitude=8500,
-            speed=410,
+            speed=740,
             start_type=StartType.Warm,
             frequency=251,
         )
@@ -782,7 +791,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             race_distance=track.race_distance,
             heading=track.heading,
             altitude=4500,
-            speed=380,
+            speed=700,
             start_type=StartType.Warm,
             frequency=252,
             tacanchannel="10Y",
@@ -899,7 +908,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             pos1=p1,
             pos2=p2,
             start_type=StartType.Warm,
-            speed=420,
+            speed=800,
             altitude=7500,
             max_engage_distance=90_000,
             group_size=2,
@@ -971,14 +980,14 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         )
         for i, pt in enumerate(corridor[:-1]):
             name = "PUSH" if i == 0 else f"INGRESS-{i}"
-            player.add_waypoint(pt, altitude=6500, speed=400, name=name)
+            player.add_waypoint(pt, altitude=6500, speed=800, name=name)
         # The corridor ends on the FOB itself: a ground target, so its
         # steerpoint sits on the ground rather than at ingress altitude.
         waypoints.add_ground_waypoint(
-            player, corridor[-1], overlay=scene.overlay.overlay, speed=400, name="TGT"
+            player, corridor[-1], overlay=scene.overlay.overlay, speed=800, name="TGT"
         )
         egress = offset(scene.ao_center, east_m=20_000, north_m=-15_000)
-        player.add_waypoint(egress, altitude=6500, speed=420, name="EGRESS")
+        player.add_waypoint(egress, altitude=6500, speed=820, name="EGRESS")
         player.add_runway_waypoint(scene.kutaisi)
         player.land_at(scene.kutaisi)
         return [*corridor, egress]
@@ -1077,22 +1086,28 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         if not aim:
             return
 
+        frame = Frame(center=scene.ao_center)
+        target = Mark(
+            x=aim[0].x,
+            y=aim[0].y,
+            kind="group",
+            radius_m=900.0,
+            # No vehicle count: at 50 m posts this frame cannot resolve one truck
+            # from the next, and the three passes that *did* count them are a
+            # different collection. `idlib_gauntlet` labels a count because
+            # counting movers is what an MTI product does.
+            text="FOB  STORES / VEH PARK",
+        )
+        # Settlement names, so the frame can be *located* against the F10 map
+        # rather than merely believed. Landmarks first, target last, so the
+        # bracket wins any overlap the separation rules did not prevent.
         marks = [
-            Mark(
-                x=aim[0].x,
-                y=aim[0].y,
-                kind="group",
-                radius_m=900.0,
-                # No vehicle count: at 50 m posts this frame cannot resolve one
-                # truck from the next, and the three passes that *did* count them
-                # are a different collection. `idlib_gauntlet` labels a count
-                # because counting movers is what an MTI product does.
-                text="FOB  STORES / VEH PARK",
-            )
+            *landmark_marks(scene.overlay.overlay, frame, avoid=[target]),
+            target,
         ]
         self._still = recon.sensor_still(
             m,
-            Frame(center=scene.ao_center),
+            frame,
             marks,
             Chrome(
                 platform="SAR SATELLITE  X-BAND",
@@ -1109,7 +1124,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                     "off a spot collect on the same pass. Black is water: the sea "
                     "across the bottom and down the left, the delta channel running "
                     "to it. The coast road is the thin dark line through the "
-                    "bracket. Neither the launchers dug in around the base nor the "
+                    "bracket, and the named villages are there to tie the frame to "
+                    "your map. Neither the launchers dug in around the base nor the "
                     "graded ground inland resolves at this spacing, which is why "
                     "the rings on your map are estimates."
                 ),

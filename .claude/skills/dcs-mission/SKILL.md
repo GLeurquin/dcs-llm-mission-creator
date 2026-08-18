@@ -158,6 +158,10 @@ A "realistic" mission is more than spawning aircraft. Hit these before done:
   steerpoints and base (take-off / landing) waypoints sit on the terrain, not
   at ingress altitude and not at pydcs's default 0; en-route waypoints clear
   the terrain under them. See *Waypoints that mark the ground*.
+- **Waypoint speeds are km/h and the airframe can hold them.** Every pydcs
+  speed argument is km/h TAS; a knots-shaped number commands about half the
+  intended speed and puts the AI package in permanent afterburner. See
+  *Waypoint speeds are a flight profile*.
 - **JTAC for CAS.** A CAS or CAP-over-ground mission gets a ground or
   airborne FAC that lases targets and talks the player on
   (`tasking.fac_attack_group`). Brief its frequency + designation. Arm
@@ -554,6 +558,38 @@ ground events already.
 While you are checking altitudes, check the *en-route* ones against the
 terrain too: a "valley run" waypoint at 800 m over ground that is 2600 m high
 is inside the mountain. `overlay.elevation_at(point)` is the check.
+
+## Waypoint speeds are a flight profile
+
+Every pydcs speed argument is **km/h true airspeed** (the unit rule and the
+sanity bound are in CLAUDE.md; the API detail in PYDCS_REFERENCE.md §4.2).
+Design-side, the number is a profile statement and each leg wants its own:
+
+- **Transit / ingress** — a jet cruises around Mach 0.7–0.8: 800 km/h at
+  6000–8000 m. This is also the climb speed, so it is the one to get right.
+- **CAP or sweep station** — same order, a little slower for endurance
+  (780–800 km/h). An orbit's `OrbitAction` speed must match the speed on its
+  own waypoints or the flight fights itself.
+- **AWACS / tanker orbit** — 740–750 km/h, ≈250–290 KIAS at FL215–FL295.
+- **Interceptor scramble** — faster than the package it is chasing:
+  900–920 km/h.
+- **Low-level run** — 630–700 km/h; the airframe is IAS-limited down there,
+  not Mach-limited.
+- **Attack leg** — a touch below the ingress speed, not above it.
+- **A-10C and other slow movers** — 500–540 km/h. Its never-exceed is
+  720 km/h, so it does not scale with the fast jets.
+
+Two failure modes to check for, both silent:
+
+- **Too slow.** A fighter ordered 150 KIAS at FL260 is far below best-climb
+  speed and behind the drag curve; the AI holds altitude on the throttle and
+  flies the sortie in afterburner, arriving late and out of fuel. A heavy
+  (E-3A, KC-135) simply cannot make the lift and never reaches station.
+- **Too fast.** Above roughly 0.85 of `max_speed` the flight is in burner by
+  definition and will not make its planned time on station.
+
+Sanity-check with `FlyingType.max_speed` (km/h): a cruise or orbit speed is
+about 0.3–0.4 of it.
 
 ## What the player can see (F10 map, planner, datalink)
 

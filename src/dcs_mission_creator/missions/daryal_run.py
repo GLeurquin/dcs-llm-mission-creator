@@ -35,7 +35,11 @@ from dcs.terrain.caucasus.caucasus import Caucasus
 from dcs.terrain.terrain import Airport
 from dcs.unit import Skill
 
-from dcs_mission_creator.core import triggers as mission_triggers, waypoints
+from dcs_mission_creator.core import (
+    air_defense as ad,
+    triggers as mission_triggers,
+    waypoints,
+)
 from dcs_mission_creator.core.cli import run_cli
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.map_draw import PlanOverlay
@@ -364,13 +368,13 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     def _spawn_red_ground(self, m: Mission, russia: Country, scene: _Scene):
         """SA-10 radars + launchers, SA-15 SHORAD, ZSU-23-4 AAA, 1L13 EWR."""
-        sa10 = self._spawn_sa10_site(m, russia, scene.sa10_site)
+        sa10 = self._spawn_sa10_site(m, russia, scene)
         tor = self._spawn_shorad(m, russia, scene.shorad)
         shilkas = self._spawn_shilkas(m, russia, scene.sa10_site)
         ewr = self._spawn_ewr(m, russia, scene.ewr_pos)
         return sa10, tor, shilkas, ewr
 
-    def _spawn_sa10_site(self, m: Mission, russia: Country, pos: Point):
+    def _spawn_sa10_site(self, m: Mission, russia: Country, scene: _Scene):
         """Full SA-10 site from the pydcs template: SR + TR + CP + launchers.
 
         Radar and launchers must share the group — an S-300 launcher only
@@ -385,6 +389,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         # The template registers the group with Russia itself — it takes no
         # country argument, unlike `sa6_site`. Adding it again duplicates the
         # whole site.
+        pos = scene.sa10_site
         sa10 = templates.VehicleTemplate.Russia.sa10_site(
             m, pos, 180, prefix="Grumble ", skill=Skill.Excellent
         )
@@ -393,7 +398,16 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         launcher.heading = 180
         launcher.skill = Skill.Excellent
         sa10.add_unit(launcher)
-        return sa10
+        # After the fourth rail, or it stays in the template's huddle. An S-300
+        # battalion occupies most of a kilometre; the template gives it 100 m,
+        # and this one guards the only pass on the route, so it is the site the
+        # player has the most reason to try to remove in one pass.
+        return ad.disperse_site(
+            sa10,
+            radius_m=500.0,
+            overlay=scene.overlay.overlay,
+            terrain=self._terrain,
+        )
 
     def _spawn_shorad(self, m: Mission, russia: Country, pos: Point):
         """SA-15 Tor adjacent to the SAM site — terminal SHORAD vs HARM and bombs."""
@@ -449,7 +463,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             zone=intrusion_zone,
             late_activation=True,
             start_type=StartType.Warm,
-            speed=480,
+            speed=900,
             altitude=8000,
             max_engage_distance=110_000,
             group_size=2,
@@ -485,7 +499,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             race_distance=100_000,
             heading=270,
             altitude=8500,
-            speed=410,
+            speed=740,
             start_type=StartType.Warm,
             frequency=251,
         )
@@ -527,30 +541,30 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         egress_s = Point(-240000, 830000, t)
 
         player.add_runway_waypoint(scene.vaziani)
-        player.add_waypoint(push, altitude=3000, speed=380, name="PUSH")
-        player.add_waypoint(descend, altitude=1500, speed=360, name="DESCEND")
+        player.add_waypoint(push, altitude=3000, speed=700, name="PUSH")
+        player.add_waypoint(descend, altitude=1500, speed=670, name="DESCEND")
         player.add_waypoint(
-            scene.valley_entry, altitude=800, speed=340, name="VALLEY_IN"
+            scene.valley_entry, altitude=800, speed=630, name="VALLEY_IN"
         )
         player.add_waypoint(
-            scene.valley_mid, altitude=700, speed=340, name="VALLEY_MID"
+            scene.valley_mid, altitude=700, speed=630, name="VALLEY_MID"
         )
         player.add_waypoint(
-            scene.valley_exit, altitude=800, speed=340, name="VALLEY_OUT"
+            scene.valley_exit, altitude=800, speed=630, name="VALLEY_OUT"
         )
-        player.add_waypoint(scene.ip, altitude=600, speed=360, name="IP")
+        player.add_waypoint(scene.ip, altitude=600, speed=670, name="IP")
         # The target steerpoint marks the SA-10 site on the ground; the pop
         # altitude is flown off the IP leg above, not written into the target.
         waypoints.add_ground_waypoint(
             player,
             scene.sa10_site,
             overlay=scene.overlay.overlay,
-            speed=380,
+            speed=700,
             name="TARGET",
         )
         # Egress: west, then south around the western ridges. Do NOT re-cross Daryal.
-        player.add_waypoint(egress_w, altitude=1500, speed=400, name="EGRESS_W")
-        player.add_waypoint(egress_s, altitude=4500, speed=420, name="EGRESS_S")
+        player.add_waypoint(egress_w, altitude=1500, speed=740, name="EGRESS_W")
+        player.add_waypoint(egress_s, altitude=4500, speed=780, name="EGRESS_S")
         player.add_runway_waypoint(scene.vaziani)
         player.land_at(scene.vaziani)
         route = [

@@ -132,17 +132,39 @@ grp = m.flight_group_from_airport(
 ### 4.2 Purpose-built helpers
 | Helper | Signature highlights | Builds |
 |---|---|---|
-| `awacs_flight` | `(country, name, plane_type, airport, position, race_distance=30_000, heading=90, altitude=4500, speed=550, start_type=Cold, frequency=140)` | Race-track AWACS. `airport=None` → spawns airborne. |
-| `refuel_flight` | same as awacs + `tacanchannel="10X"`, `speed=407` | Tanker on `task.Refueling`. |
-| `patrol_flight` | `(country, name, patrol_type, airport, pos1, pos2, start_type=Cold, speed=600, altitude=4000, max_engage_distance=60_000, group_size=2)` | **CAP** — two-point race-track that engages air within `max_engage_distance`. There is **no `cap_flight`**. |
+| `awacs_flight` | `(country, name, plane_type, airport, position, race_distance=30_000, heading=90, altitude=4500, speed=550, start_type=Cold, frequency=140)` | Race-track AWACS. `airport=None` → spawns airborne. `speed` is **km/h TAS** and is used for the transit waypoints *and* the `OrbitAction`. |
+| `refuel_flight` | same as awacs + `tacanchannel="10X"`, `speed=407` | Tanker on `task.Refueling`. `speed` is **km/h TAS** — and the 407 default is 220 kt TAS, far too slow for a KC-135; override it. |
+| `patrol_flight` | `(country, name, patrol_type, airport, pos1, pos2, start_type=Cold, speed=600, altitude=4000, max_engage_distance=60_000, group_size=2)` — `speed` is **km/h TAS**, used for the transit waypoints *and* the orbit | **CAP** — two-point race-track that engages air within `max_engage_distance`. There is **no `cap_flight`**. |
 | `escort_flight` | `(country, name, escort_type, airport, group_to_escort, …)` | Escort tasked to a target group. |
-| `intercept_flight` | `(country, name, patrol_type, airport, zone, late_activation=True, …, group_size=2)` | Scrambles when blue enters `zone`. **Needs a `TriggerZoneCircular`** (§8). Auto-creates a `TriggerContinious` + `AITaskPush`. |
+| `intercept_flight` | `(country, name, patrol_type, airport, zone, late_activation=True, speed=600, altitude=4000, …, group_size=2)` — `speed` is **km/h TAS** | Scrambles when blue enters `zone`. **Needs a `TriggerZoneCircular`** (§8). Auto-creates a `TriggerContinious` + `AITaskPush`. |
 | `sead_flight` | `(country, name, plane_type, target_pos, airport, start_type=Cold, max_engage_distance=20_000, group_size=2)` | SEAD at a position. |
 | `strike_flight` | `(country, name, _type, target, airport, start_type=Cold, group_size=2)` | Strike a single **`Unit`** (e.g. `group.units[0]`), not a group. IP/attack/fence-out/RTB added automatically when `airport` given. |
 
 `*_to_group` variants (`patrol_flight_to_group`, `sead_flight_to_group`,
 `strike_flight_to_group`) take an already-created `FlyingGroup` and just add
 the tasking waypoints — use when you built the group yourself.
+
+`sead_flight_to_group` / `strike_flight_to_group` pick their own speed as
+`flight_type().max_speed * 0.8` — for an F-16C that is **1696 km/h, Mach 1.4**,
+i.e. the entire route in afterburner. One more reason to build strike routes by
+hand (§4.3).
+
+> **Gotcha — every pydcs speed argument is km/h true airspeed, and not one of
+> them says so.** `add_waypoint`, `OrbitAction`, `awacs_flight`,
+> `refuel_flight`, `patrol_flight`, `intercept_flight` and
+> `flight_group_inflight` all store `speed / 3.6` as the m/s the mission file
+> wants. Nothing validates the number, so a knots-shaped value is accepted in
+> silence and commands **~54 % of the intended speed** — which is how all six
+> missions once ordered their CAP, AWACS, tanker and interceptors to hold
+> 137–167 KIAS at FL210–FL295. The symptom is the friendly package flying its
+> whole sortie in afterburner: at those speeds a fighter is far below
+> best-climb speed and deep on the back side of the drag curve, and the AI
+> holds the commanded altitude on the throttle. Sanity bound:
+> `FlyingType.max_speed` is km/h as well (F-15C 2650, F-16C 2120, A-10C
+> **720**, E-3A 860, KC-135 980, MQ-9 400), so a cruise or orbit speed sits
+> around 0.3–0.4 of it and anything under ~0.2 is the unit error. Note the
+> A-10C bound especially — 400 kt is 740 km/h, *above* its never-exceed — so
+> the correction is per-airframe km/h values, never a blanket ×1.852.
 
 ### 4.3 Manual waypoints (`unitgroup.FlyingGroup`)
 ```python
@@ -152,8 +174,9 @@ grp.land_at(airport)                                          # RTB waypoint
 ```
 
 `altitude` is **metres AMSL** — the point's `alt_type` is `"BARO"` unless you
-set `mp.alt_type = "RADIO"` (AGL) on the returned `MovingPoint` yourself. Speed
-is km/h in, m/s in the file (pydcs divides by 3.6).
+set `mp.alt_type = "RADIO"` (AGL) on the returned `MovingPoint` yourself.
+`speed` is **km/h true airspeed** in, m/s in the file (pydcs divides by 3.6) —
+see the unit gotcha in §4.2.
 
 > **Gotcha — pydcs has no height map, so ground-level waypoints come out
 > wrong.** `land_at()` writes `alt = 0`, and the take-off point built by
@@ -262,7 +285,7 @@ right and does nothing — the column still cuts cross-country. Pass
 SKILL.md.
 
 `speed` on `add_waypoint` is **km/h** (pydcs divides by 3.6 into the m/s the
-`.miz` stores). Other useful actions: `OffRoad` (cross-country),
+`.miz` stores) — same unit as the flying-group call, ground or air. Other useful actions: `OffRoad` (cross-country),
 `OnRailroads` (trains), and the formation-while-moving values `LineAbreast`
 (serialises as `"Rank"`), `Cone`, `Vee`, `Diamond`, `EchelonLeft`,
 `EchelonRight`.
@@ -358,6 +381,9 @@ gets no radio option and no laser spot, with nothing logged:
    mid-sortie. Hold it with `task.OrbitAction(alt, speed, RaceTrack)` on the
    first race-track waypoint, the far end as the next waypoint (the shape
    `mission.awacs_flight` uses). Skip `land_at` — the orbit never ends.
+   `alt` is metres AMSL and `speed` **km/h TAS** — `OrbitAction` divides by 3.6
+   exactly like `add_waypoint`, so give the orbit and its waypoints the same
+   number or the flight fights itself.
 3. **Callsign.** `callsign=` is an index into the fixed DCS FAC callname table
    (`Axeman, Darknight, Warrior, Pointer, Eyeball, Moonbeam, Whiplash, Finger,
    Pinpoint, Ferret, Shaba, Playboy, Hammer, Jaguar, Deathstar, Anvil,
@@ -439,7 +465,8 @@ condition variants. Generalizes the `AITaskPush` intercept trick.
 
 ### 6.6 Carrier recovery tanker
 `task.RecoveryTanker(groupId, speed, altitude, lastWaypoint)` on the tanker's
-`points[0].tasks` — `groupId` is the carrier group it recovers to.
+`points[0].tasks` — `groupId` is the carrier group it recovers to, `speed` is
+**km/h TAS** and `altitude` metres AMSL.
 
 ---
 
