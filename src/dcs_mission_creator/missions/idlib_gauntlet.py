@@ -82,6 +82,7 @@ from dcs.unittype import VehicleType
 from dcs_mission_creator.core import (
     air_defense as ad,
     dtc,
+    kneeboard,
     routing,
     triggers as mission_triggers,
     waypoints,
@@ -89,7 +90,7 @@ from dcs_mission_creator.core import (
 from dcs_mission_creator.core.cli import run_cli
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.frontline import Frontline, plan_frontline
-from dcs_mission_creator.core.iads import Site, arm_iads
+from dcs_mission_creator.core.iads import Listener, Site, arm_iads
 from dcs_mission_creator.core.jtac import CoordTarget, arm_jtac_coords
 from dcs_mission_creator.core.map_draw import PlanOverlay
 from dcs_mission_creator.core.mission_builder import MissionBuilder
@@ -324,6 +325,11 @@ INTELLIGENCE
         from then on. That buys you emitters you can
         find, not silence. The SA-6 crew is the sharpest
         of the three; the SA-2 site is conscripts.
+        Magic holds an ESM watch on the belts and calls
+        a site off or back on the air when he hears it.
+        That is his receiver, not a guarantee: high
+        ground between him and a battery, or Magic off
+        station, and nobody calls it for you.
   SHORAD: Reaper imagery shows tracked IR launchers, a
         gun-missile vehicle and a Shilka riding with the
         column. None of that shuts down for a HARM —
@@ -490,6 +496,11 @@ net. When they see an anti-radiation shot:
   longer;
 - when they judge it safe the radar comes back up, and `Magic` calls that too.
 
+Both of those calls are `Magic`'s ESM watch, not a certainty. He hears an
+antenna he has line of sight to, so a battery shielded from his track by high
+ground can go quiet without anybody saying so — and if he is off station or off
+the air, nobody is listening for you at all. Your own RWR is the primary.
+
 Practical consequence: a HARM taken from standoff buys you a working window
 rather than a kill, and the closer you shoot the more likely the emitter is
 still up when the missile arrives. Plan the run for the window, and remember the
@@ -557,7 +568,7 @@ picture, and the last bullet is there to say where it is thin.
   northern rear overnight and we never got a fix on it. There is no ring for it
   on the map and no point for it on your cartridge, because we would be drawing
   a guess. Fly as though that flank is covered — it very likely is — and expect
-  `Magic` to call it if it radiates while you are up.
+  `Magic` to call it if it radiates while you are up and he can hear it.
 
 ## ROE
 
@@ -666,7 +677,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             front=front,
         )
 
-        awacs_track = self._spawn_awacs(m, usa, scene)
+        magic, awacs_track = self._spawn_awacs(m, usa, scene)
         tanker_track = self._spawn_tanker(m, usa, scene)
         tarcap_track = self._spawn_tarcap(m, usa, scene, front=front)
         fac_track = self._spawn_fac(m, usa, scene, convoy=convoy)
@@ -701,6 +712,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self._render_recon(m, scene, plan=plan, convoy=convoy)
         self._add_iads(
             m,
+            magic=magic,
             sa2=sa2,
             sa6=sa6,
             sa8=sa8,
@@ -979,6 +991,14 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             prefix="Gadfly ",
             skill=Skill.High,
         )
+        # pydcs's template ships a rifleman with the battery, and a DCS group
+        # moves at its slowest member — so one man on foot is the whole reason
+        # `core/iads.py` refuses this site the shoot-and-scoot hop it is
+        # otherwise the best candidate in the layout for: every other unit here
+        # is a tracked TELAR, and this is the battery a flanker runs into with no
+        # ring on his map. A security detail is worth less than a battery that
+        # can leave the aimpoint of the HARM it just drew.
+        buk.units = [u for u in buk.units if u.type != vehicles.Infantry.Infantry_AK.id]
         ad.disperse_site(
             buk,
             radius_m=400.0,
@@ -1211,12 +1231,16 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     def _spawn_awacs(
         self, m: Mission, usa: Country, scene: _Scene
-    ) -> tuple[Point, Point]:
+    ) -> tuple[FlyingGroup, tuple[Point, Point]]:
         """E-3A Magic north-west of the corridor, 251.000 AM, 120 km legs.
 
         Heavies come off Incirlik — Hatay is a fighter strip with no parking
         for an E-3A — but the track is anchored on Hatay so the picture sits
         between the player and the corridor.
+
+        Returned as well as drawn, because this jet is the reason the mission may
+        say anything about Syrian radars going off and back on the air: it is the
+        ESM collector `_add_iads` gates those calls on.
         """
         p1, p2 = scene.overlay.place_awacs_track(
             home_base=scene.hatay.position,
@@ -1225,7 +1249,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             track_length_m=120_000.0,
         )
         track = race_track(p1, p2)
-        m.awacs_flight(
+        magic = m.awacs_flight(
             usa,
             "Magic",
             plane_type=planes.E_3A,
@@ -1238,7 +1262,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             start_type=StartType.Warm,
             frequency=_FREQ_AWACS,
         )
-        return p1, p2
+        return magic, (p1, p2)
 
     def _spawn_tanker(
         self, m: Mission, usa: Country, scene: _Scene
@@ -1437,18 +1461,22 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         )
         pontiac.late_activation = True
         lgb = "BRU_33_with_2_x_GBU_12___500lb_Laser_Guided_Bomb"
-        tank = "FPU_8A_Fuel_Tank_330_gallons"
+        # One centreline bag, not two wing bags. The sortie is a 91 km radius
+        # and Texaco is on tap, so the wing pair was ~1,140 kg and two lumps of
+        # drag the profile never needed — and it put the pair at 19.6 t, 83 %
+        # of the Hornet's max gross, which is the weight the AI was rotating
+        # and climbing at. The LGBs move to the inboard stations, which is
+        # where ED's own GBU-12 payload carries them.
         arm(
             pontiac,
             planes.FA_18C_hornet,
             [
                 (1, "AIM_9X_Sidewinder_IR_AAM"),
-                (2, lgb),
-                (3, tank),
+                (3, lgb),
                 (4, "AN_ASQ_228_ATFLIR___Targeting_Pod"),
+                (5, "FPU_8A_Fuel_Tank_330_gallons"),
                 (6, "AIM_120C_AMRAAM___Active_Radar_AAM"),
-                (7, tank),
-                (8, lgb),
+                (7, lgb),
                 (9, "AIM_9X_Sidewinder_IR_AAM"),
             ],
         )
@@ -1517,15 +1545,15 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         )
         for i, pt in enumerate(ingress[1:], start=1):
             name = "IP" if i == len(ingress) - 1 else f"INGRESS-{i}"
-            pontiac.add_waypoint(pt, altitude=6400, speed=800, name=name)
+            pontiac.add_waypoint(pt, altitude=6400, speed=700, name=name)
 
         run_in = routing.avoid_threats(ip, target, threats, clearance_m=3_000.0)
         for i, pt in enumerate(run_in[1:-1], start=1):
-            pontiac.add_waypoint(pt, altitude=5800, speed=800, name=f"RUN-IN-{i}")
+            pontiac.add_waypoint(pt, altitude=5800, speed=700, name=f"RUN-IN-{i}")
         # Release from 5,200 m: a GBU-12 reaches the column from there, and it
         # keeps the pair above the Strela / Tunguska / Shilka ceiling riding
         # with it — the SHORAD the SEAD phase never touches.
-        attack = pontiac.add_waypoint(target, altitude=5200, speed=750, name="ATTACK")
+        attack = pontiac.add_waypoint(target, altitude=5200, speed=680, name="ATTACK")
         attack.tasks.append(
             task.AttackGroup(
                 convoy.id,
@@ -1540,10 +1568,14 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             )[1:-1],
             start=1,
         ):
-            pontiac.add_waypoint(pt, altitude=7000, speed=850, name=f"EGRESS-{i}")
+            pontiac.add_waypoint(pt, altitude=7000, speed=750, name=f"EGRESS-{i}")
         pontiac.add_runway_waypoint(scene.hatay)
         pontiac.land_at(scene.hatay)
-        apply_threat_reaction(pontiac)
+        # The one flight in the package that gets the throttle stop: a bombed-up
+        # pair has nothing to gain from burner, and the DCS AI's own climb-out
+        # routine is not something the route can reach. The route is what keeps
+        # it alive instead — every leg above bends around the live rings.
+        apply_threat_reaction(pontiac, restrict_afterburner=True)
 
     def _spawn_player(
         self,
@@ -1832,6 +1864,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self,
         m: Mission,
         *,
+        magic: FlyingGroup,
         sa2: VehicleGroup,
         sa6: VehicleGroup,
         sa8: VehicleGroup,
@@ -1879,6 +1912,15 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         saw. The belts are on the same net and take each other's word readily;
         the rear-area batteries, 45 km or more off the corridor, are told about
         a shot at somebody else and mostly carry on regardless.
+
+        **Who reports it.** `Magic` is the only listener, so the emissions calls
+        the briefing promises are his ESM watch and nobody else's. That is the
+        honest chain — the E-3A is the one thing airborne here with a receiver
+        looking at those belts, the Rivet Joint cut the Intelligence section
+        quotes was flown overnight and is long gone — and it makes the calls
+        conditional on him: a battery on the far side of a ridge from his track,
+        or anything at all once he is dead or off station, goes dark without a
+        word. The player's own RWR still shows what it always showed.
         """
         sites = [
             Site(
@@ -1957,11 +1999,21 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         arm_iads(
             m,
             sites,
+            listeners=[Listener(magic, "Magic")],
             voice=self._voice,
             coalition="blue",
             name="Syrian air defence",
             down_call="Magic: {label} has ceased emissions, site is dark.",
             up_call="Magic: {label} is radiating again, expect it hot.",
+            # Debug build. This net has the most dials in the project and they
+            # are only tunable against what it actually did, so both logs are
+            # on: Skynet's own (which site it cued, off which radar, and every
+            # go-live) and ours (who saw the launch, what the reaction rolled,
+            # how long each site stayed off the air, where the SA-8 drove).
+            # Ours is `dcs.log` only — `grep 'IADS/Syrian' dcs.log`; Skynet's
+            # also prints on screen, which is the reason to turn this off again
+            # before flying the mission for real.
+            debug=True,
         )
 
     def _add_fac_coord_readout(self, m: Mission, *, convoy: VehicleGroup) -> None:
@@ -1990,6 +2042,15 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             ],
             menu_title="Hammer 1-1",
             push_at_s=_FAC_CHECKIN_S + 15,
+        )
+        # The two facts about the controller a card cannot derive: the laser code
+        # (DCS's own default, which pydcs writes nowhere) and where the readout
+        # lives in the radio menu.
+        kneeboard.remark(m, f"Hammer 1-1 lases the column on code {_LASER_CODE}.")
+        kneeboard.remark(
+            m,
+            "Target coordinates in your own cockpit's format: "
+            "F10 -> Other -> Hammer 1-1.",
         )
 
     # -- triggers and briefing ----------------------------------------------

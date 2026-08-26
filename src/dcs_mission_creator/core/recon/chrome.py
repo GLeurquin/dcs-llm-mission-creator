@@ -21,11 +21,10 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from functools import lru_cache
-from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
+from dcs_mission_creator.core import fonts
 from dcs_mission_creator.core.recon.frame import Frame
 
 #: Inset of the chrome from the image edge, in pixels.
@@ -152,23 +151,11 @@ def _text(
     )
 
 
-@lru_cache(maxsize=4)
 def mono_font(size: int) -> ImageFont.FreeTypeFont:
-    """DejaVu Sans Mono, taken from matplotlib's bundled data.
+    """The project's monospace face — see `core/fonts.py` for why it is that one.
 
-    matplotlib is already a hard dependency, so this needs no new font asset and
-    cannot vary with what fonts the host machine happens to have installed. Read
-    straight off `get_data_path` rather than through `font_manager.findfont`, which
-    would consult (and build) matplotlib's font cache. A missing file raises: a
-    silent fall back to `load_default` would change every pixel of the chrome and
-    quietly break the render cache's byte-identity.
+    Kept as recon's own name because the sensor chrome and the mark labels both
+    read better with a stated size at the call site; the loading and caching is
+    shared with the kneeboard pages.
     """
-    import matplotlib
-
-    path = Path(matplotlib.get_data_path()) / "fonts" / "ttf" / "DejaVuSansMono.ttf"
-    if not path.is_file():
-        raise FileNotFoundError(
-            f"no monospace font at {path} — matplotlib's bundled fonts are missing, "
-            "and falling back to a default would change the rendered chrome"
-        )
-    return ImageFont.truetype(str(path), size)
+    return fonts.mono(size)

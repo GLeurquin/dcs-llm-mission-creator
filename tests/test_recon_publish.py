@@ -15,6 +15,7 @@ import pytest
 from dcs.mapping import Point
 from dcs.mission import Mission
 from dcs.terrain import Syria
+from PIL import Image
 
 from dcs_mission_creator.core.recon import publish as recon
 from dcs_mission_creator.core.recon.chrome import Chrome
@@ -105,6 +106,13 @@ def test_mtime_and_mode_are_pinned(tmp_path: Path) -> None:
     st = still.cache_path.stat()
     assert st.st_mtime == recon._FIXED_MTIME
     assert st.st_mode & 0o777 == recon._FIXED_MODE
+
+
+def test_the_png_is_written_with_three_channels(tmp_path: Path) -> None:
+    """A mode-`L` PNG comes out of the DCS briefing screen in shades of red."""
+    still = _still(Mission(Syria()), tmp_path)
+    with Image.open(still.cache_path) as img:
+        assert img.mode == "RGB"
 
 
 def test_the_still_becomes_a_briefing_slide_in_the_miz(tmp_path: Path) -> None:

@@ -168,7 +168,8 @@ hand (§4.3).
 
 ### 4.3 Manual waypoints (`unitgroup.FlyingGroup`)
 ```python
-grp.add_runway_waypoint(airport)          # approach point, alt 300 m RADIO (AGL)
+grp.add_runway_waypoint(airport)          # departure/approach point, alt 300 m RADIO (AGL)
+                                          # speed hard-coded to 200 km/h — see below
 grp.add_waypoint(position, altitude, speed=600, name=None)   # returns MovingPoint
 grp.land_at(airport)                                          # RTB waypoint
 ```
@@ -199,6 +200,18 @@ see the unit gotcha in §4.2.
 > Only client-flown routes want a deck-level target steerpoint — an AI flight
 > flies its route altitudes into the terrain. Design rules in SKILL.md
 > (*Waypoints that mark the ground sit on the ground*).
+
+> **Gotcha — `add_runway_waypoint` commands 108 kt and takes no speed
+> argument.** It hard-codes `mp.speed = 200 / 3.6` at 300 m AGL, so the first
+> waypoint after rotation orders the flight to fly slower than it can: a loaded
+> F/A-18C at ~19.6 t needs CL 2.8 to hold that, against a CLmax near 1.8 —
+> 19 % below its stall speed. The AI pitches to max alpha and firewalls the
+> throttle, which reads as the jet standing on its tail in full afterburner off
+> the runway. Fix by overwriting the returned `MovingPoint`'s speed with the
+> flight's own climb-out speed; the project does it for every flight in
+> `MissionBuilder.build_miz` via `waypoints.set_departure_speeds`. The same
+> call is used for the **approach** point, where 108 kt is near enough a real
+> approach speed on a light jet and DCS runs its own pattern logic anyway.
 
 ### 4.4 Skills, clients, callsigns
 ```python
@@ -570,7 +583,28 @@ m.triggerrules.triggers.append(t)
     `recon.publish` raises on a collision rather than letting DCS show the wrong
     picture.
 - **Kneeboard:** `m.add_aircraft_kneeboard(aircraft_type, page_path)` — an
-  in-cockpit kneeboard page (freqs, laser codes, target photo) per airframe.
+  in-cockpit kneeboard page (freqs, laser codes, target photo) per airframe. DCS
+  reads them from `KNEEBOARD/<type id>/IMAGES/` inside the `.miz`, per aircraft
+  *type*: there is no per-flight kneeboard, so every pilot of that type sees
+  every page. **Project wrapper: `kneeboard.publish` — use that, not this.**
+  Two reasons, both in CLAUDE.md: this helper writes the entry as
+  `f'{directory}/{page.name}'` where `directory` already ends in `/`, giving
+  `KNEEBOARD/<type>/IMAGES//page.png` with an empty path component, and it
+  writes the file at save time with `zipf.write`, which records the source
+  file's mtime and mode into the archive (the same trap `add_picture_blue` sets,
+  see above).
+- **Navaids:** `Airport.beacons` is a list of ids and nothing else
+  (`AirportBeacon(id='airfield22_3')`) — no type, frequency or position — and
+  `Airport.tacan` is `None` even for a field that has one (Batumi, channel 16X).
+  `Runway`/`RunwayApproach` give the designator and its ×10 heading, never a
+  length or a threshold position. The real data is
+  `Mods/terrains/<Theater>/Beacons.lua` in the installed game; project wrapper
+  `kneeboard/beacons.py` reads it, and CLAUDE.md's kneeboard section covers the
+  id join and the `{x, altitude, z}` axis order. The theatre's own aerodrome
+  charts live next door in `Mods/terrains/<Theater>/Kneeboard/` and DCS shows them
+  in-game — but only for the fields it ships: 21 on Caucasus, **three** on Syria.
+  `kneeboard/charts.py` checks which, so a generated airfield page appears only
+  where the game provides none.
 
 ---
 

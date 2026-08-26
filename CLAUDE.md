@@ -40,10 +40,13 @@ This is a pydcs-based DCS mission generator. Three docs, one job each:
     hard-codes take-off/landing altitudes to zero, so a mission that skipped
     the snap shipped a jet spawned underground, and it writes no datalink
     identity at all, so a coop flight came up anonymous and blind to itself.
-    They are in the base precisely so they cannot be forgotten. One step runs
+    They are in the base precisely so they cannot be forgotten. Two steps run
     *after* the save for the mirror-image reason: any data cartridge a mission
-    armed (`core/dtc.py`) is a file inside the `.miz`, and `Mission.save` writes
-    a fixed set of zip entries with no hook for another one.
+    armed (`core/dtc.py`) and the kneeboard cards (`core/kneeboard.py`) are
+    files inside the `.miz`, and `Mission.save` writes a fixed set of zip
+    entries with no hook for another one. The kneeboard has to come last for a
+    second reason as well — its route card prints the take-off and landing
+    altitudes the snap has just corrected.
   - `_permit_crash_recovery` forces `permitCrash` on (the ME's "PERMIT CRASH
     RCVR", `m.forced_options`) for every mission, so a player who crashes
     lands back on the slot-selection screen and can take another jet instead
@@ -296,6 +299,25 @@ this. Design rules (which waypoints, where the run-in altitude goes) live in
 the `dcs-mission` skill; the pydcs waypoint API and the gotcha in
 PYDCS_REFERENCE.md §4.3.
 
+`set_departure_speeds(m)` fixes the same class of defect one field over.
+`add_runway_waypoint` hard-codes `speed = 200 / 3.6` — **108 kt at 300 m AGL**
+— and takes no speed parameter, so the first waypoint after rotation ordered
+every flight in every mission to fly slower than it can. Measured on
+`idlib_gauntlet`'s Pontiac, an F/A-18C at ~19.6 t (two 330 gal tanks, four
+GBU-12 on BRU-33 racks, ATFLIR, three AAMs): holding 300 m at 108 kt needs
+**CL 2.8** against a CLmax near 1.8, i.e. 19 % below that jet's stall speed.
+The AI's answer to an unflyable command is max alpha and full throttle, which
+is exactly what it looks like from the ground — the Hornet rotating, standing
+on its tail and lighting both burners all the way to the first en-route point.
+The helper writes the flight's **own next en-route speed** there, so no
+per-airframe table has to be invented and the mission's existing tuning is
+what applies; it only ever raises the value, so it is idempotent and a mission
+that sets its own departure speed keeps it. The **approach** runway waypoint
+carries the same 108 kt and is left alone on purpose: by then the jet is light
+and that is roughly its real approach speed, not a stall command, and DCS runs
+its own pattern logic off the landing waypoint. **Missions never call it** —
+`MissionBuilder.build_miz` does, right after `snap_base_waypoints`.
+
 ## Every speed is km/h true airspeed
 
 **Write speeds in km/h and check them against the airframe.** Every pydcs
@@ -324,21 +346,59 @@ ordered to hold **137–167 KIAS at FL210–FL295**:
 The symptom is **the friendly package flying its whole sortie in
 afterburner**: at those speeds a fighter is far below best-climb speed and
 deep on the back side of the drag curve, and the AI holds the commanded
-altitude on the throttle. Nothing caps it, either — `OptRestrictAfterburner`
-is set in exactly one place (`tasking.apply_ai_difficulty`, the *enemy* dial,
-and only at `recruit`), while `apply_threat_reaction` — what every blue AI
-flight gets — never touches the throttle, and the DCS default is unrestricted.
-Leave it that way: the airframes that should not be burning (E-3A, KC-135,
-A-10C) have no afterburner to restrict, and the ones that do (CAP, SEAD) need
-it in a merge. Fix the speed, not the option.
+altitude on the throttle. Fix the speed first — but do not stop there, because
+the speed is only ever half of it. **The DCS AI's own take-off and climb-out
+routine is high deck angle and both burners lit until it is established, and
+no waypoint reaches that.** Three route-level fixes went in against a report of
+`idlib_gauntlet`'s Pontiac climbing out in burner — the km/h units, the Hornet's
+cruise fraction, the 108 kt departure waypoint — and all three were real
+defects that changed nothing about the symptom.
 
-Sanity bound: `FlyingType.max_speed` is km/h too, so a cruise or orbit speed
-lands around **0.3–0.4 of `max_speed`** and anything under ~0.2 is the unit
-error:
+So `apply_threat_reaction` takes `restrict_afterburner` (default `False`, the
+DCS default). It is off by default because for most of the package it is
+pointless or harmful — an E-3A, a KC-135 and an A-10C have no afterburner to
+restrict, and a CAP or interceptor needs one in a merge. Set it on a **heavy
+strike flight**, where burner buys nothing and the fuel matters; Pontiac is the
+one flight in the project that carries it. The trade is that the flight cannot
+accelerate out of a SAM engagement either, so it belongs on a flight whose
+route already bends around the live rings (`core/routing.py`), not as a blanket
+setting.
+
+The other half is **weight**, and it is the half a mission actually controls.
+Pontiac launched at 19.6 t — **83 % of the Hornet's 23.5 t max gross** — on a
+**91 km radius** sortie, carrying full internal fuel *plus* two 330 gal wing
+tanks, with a tanker on station. It was the only flight in the project with two
+external bags; Uzi flies the same 182 km round trip on one centreline 300 gal
+and Eagle on one 610 gal. A jet at 83 % of max gross rotates at a high deck
+angle and climbs in burner because that is what the weight demands, not because
+a waypoint told it to. One centreline bag instead of the wing pair takes 1,140 kg
+and two lumps of drag off it. **Check gross weight against the sortie radius the
+same way you check speed against the airframe** — a package tanker is not a
+reason to launch heavy, it is the reason you do not have to.
+
+Sanity bound: `FlyingType.max_speed` is km/h too, so check every leg against
+it. On a **supersonic fighter** a cruise or orbit speed lands at **0.30–0.40 of
+`max_speed`**; under ~0.2 is the unit error, over ~0.40 is afterburner. The
+band does *not* transfer to subsonic types — their `max_speed` is barely above
+their cruise, so an E-3A at 0.86 and an A-10C at 0.72 are correct, and neither
+has an afterburner to worry about anyway.
 
 ```
-F-15C 2650   F-16C 2120   A-10C 720   E-3A 860   KC-135 980   MQ-9 400
+F-15C 2650   F-16C 2120   F/A-18C 1950   MiG-29S 2450   Su-27 2500
+A-10C 720    E-3A 860     KC-135 980     MQ-9 400
 ```
+
+**The ratio is the check, not the number.** Getting the unit right is only half
+of it: the same km/h is a different fraction of a different jet's ceiling, and
+the fast jets are not interchangeable. `idlib_gauntlet`'s Pontiac kept the 800 /
+850 km/h that read as a sane cruise for Uzi's F-16C next to it (0.38 / 0.40 of
+2120) and flew its whole sortie in burner, because on an F/A-18C — the slowest
+fast jet in the fleet at 1950 — the same numbers are **0.41 / 0.44**, and it is
+carrying the heaviest configuration any flight here launches with: two 330 gal
+tanks, four GBU-12 on BRU-33 racks, ATFLIR and three AAMs. It now flies
+680–750 (0.35–0.38, Mach 0.59–0.67, ~280 KIAS). Weigh the loadout as well as the
+airframe — a bombed-up jet sits at the bottom of the band, a clean CAP at the
+top.
 
 Correct per airframe, **never by a blanket ×1.852** — 400 kt is 740 km/h,
 which is *above* the A-10C's never-exceed. Where a bare number would be
@@ -346,6 +406,16 @@ ambiguous, name the unit like `idlib_gauntlet`'s `_FAC_SPEED_KPH` does. The
 pydcs-side gotcha, including the `strike_flight` / `sead_flight` helpers that
 pick `max_speed * 0.8` (Mach 1.4 for a Viper) for themselves, is in
 PYDCS_REFERENCE.md §4.2.
+
+A one-off audit across all six missions is a short script — build each mission,
+walk every flying group, and print each distinct waypoint speed over
+`unit_type.max_speed`. That is what found Pontiac after the unit fix had already
+gone in, and it is worth re-running after touching any route. **Include the
+sub-300 km/h waypoints in that audit.** The first pass filtered them out as
+noise and so walked straight past the `200(0.10)` sitting on all thirty flights
+— pydcs's hard-coded departure speed, and a worse bug than the cruise numbers
+it was looking for (see `waypoints.set_departure_speeds`). A speed under ~0.2 of
+`max_speed` is the signal, not the noise.
 
 ## Datalink-identity helper (project-owned)
 
@@ -694,7 +764,7 @@ driving it, while keeping this project's own model of what a crew knows about an
 anti-radiation launch:
 
 ```python
-from dcs_mission_creator.core.iads import Site, arm_iads
+from dcs_mission_creator.core.iads import Listener, Site, arm_iads
 
 arm_iads(
     m,
@@ -703,12 +773,29 @@ arm_iads(
      Site(sa2, "SA-2", go_live_percent=130, probability=0.7),
      Site(ewr, "EWR", role="ewr"),          # a unit, not a group — see below
      Site(sa10, "SA-10", act_as_ew=True, point_defence=sa15)],
+    listeners=[Listener(magic, "Magic")],   # who can hear a radar change state
     voice=self._voice,                      # calls are spoken as well as printed
     down_call="Magic: {label} has ceased emissions, site is dark.",
     up_call="Magic: {label} is radiating again, expect it hot.",
-    debug=False,                            # Skynet's own live/dark log output
+    debug=False,                            # Skynet's own live/dark output
+    trace=False,                            # our own decisions; follows `debug`
 )
 ```
+
+**Two switches, one per half of the split below.** `debug` is Skynet's — which
+sites it took, what it is tracking, every radar going live and dark — and it
+prints **on the player's screen** as well as to `dcs.log`. `trace` is this
+project's half: which sites were in a position to see a launch, what each
+reaction rolled against, how long each stayed off the air, where a
+shoot-and-scoot battery drove, and the reason a site was left out of a reaction
+entirely (cold, out of reach, no radar left). It goes to `dcs.log` only, one
+line per decision under an `IADS/<net name>` prefix — read a sortie back with
+`grep 'IADS/' dcs.log` — and it is drawn from the same rolls whether or not
+anyone is reading it, so a traced sortie decides what a quiet one would have.
+`trace` follows `debug` unless set, so `debug=True` gives both and
+`trace=True, debug=False` gives the quiet, log-only one. `idlib_gauntlet`
+currently ships with `debug=True` while its net is being tuned; turn it off
+before flying it, or Skynet talks over the mission on screen.
 
 It adds **three** mission-start triggers the first time it is called, in order:
 `core/lua/mist_shim.lua`, `core/lua/vendor/skynet-iads.lua` (both as
@@ -750,6 +837,21 @@ that could observe it: line of sight to the launch point earns the site's own
 *other* radiating site in reach did see it. Mask the launch from the whole net
 and nobody reacts — a lofted shot from behind a ridge is a real tactic.
 
+**A cold battery is in nobody's reaction, so the shot at a dark site needed its
+own answer.** The reaction above is decided at the instant of the launch, and a
+HARM in **POS** or **EOM** mode is aimed at a *place* rather than at an emitter —
+shoot first, let the round arrive on whatever comes up. That made the pre-emptive
+shot a guaranteed kill: the battery came on the air into a missile already
+tracking and could never react, whatever its dials said. An observed launch now
+leaves the whole net on notice for `alert_window_s` (120 s by default, the order
+of a HARM's time of flight), and a site coming up inside that window is *told*
+about the shot — its `net_relay` share of `probability`, recognition timed from
+the moment it came up, one roll per site per shot. It still comes up, which is
+the point: being warned is not being told to hide, and whether the transmitter
+dies is again a race between the crew's recognition and the missile's remaining
+flight. Only an observed launch arms it, so masking a shot from the whole net
+still reaches nobody, and `0.0` switches it off.
+
 Per-site dials are the SEAD difficulty statement: `probability` (does this crew
 act on a launch it saw), `delay_s` (recognition lag — **tens of seconds**, the
 same order as a HARM's time of flight, because nobody in the site gets a launch
@@ -758,10 +860,119 @@ seconds darken the radar in the first third of the missile's flight and no HARM
 ever connects; at these bands the shooter's range at launch decides the duel),
 `shutdown_s` (how long it stays dark — minutes, not Skynet's 180 s cap past
 impact, so a HARM buys a real working window; repeat fire extends it),
-`react_range_m` (how far down the net the launch travels). Both time bands are
+`react_range_m` (how far down the net the launch travels), `scoot_after_s`
+(time on the air that compromises the position), `emission_limit_s` /
+`emission_pause_s` (how long a look is, and the quiet between them — see below). Both time bands are
 drawn triangularly, so the middle of the band is the common case. A suppressed
 site is released to *cold*, not hot — it re-radiates only if there is still
 something to shoot at.
+
+**A radar radiates in looks, and how long a look is says who is running it.**
+"Radars were also forced to operate for only 20 seconds or less to avoid
+destruction by HARMs" — Desert Storm, and again over Yugoslavia in 1999, where
+the standing rule was no more than about forty seconds from one position. It is
+the discipline rather than the reaction that kept batteries alive: a crew already
+off the air when the round arrives never had to out-react anything. So a site
+takes a look of `emission_limit_s` and then goes quiet for `emission_pause_s`,
+and the look comes off **the group's own DCS `Skill`** when the mission does not
+state it (`_EMISSION_BY_SKILL`): 20–35 s at `Excellent`, 30–55 s at `High`,
+45–80 s at `Good`, and 90–150 s at `Average`, which is long enough that a
+conscript battery effectively has no discipline and dies to the HARM a drilled
+crew two ridges away would have been off the air for. Twenty seconds is what the
+*best* crews of a real campaign managed, so it is the bottom of the élite band
+rather than a number everybody gets. `idlib_gauntlet` needed no new arguments for
+any of this — its SA-6, SA-8 and SA-11 are already `Skill.High` and its SA-2 and
+S-125 belts `Skill.Average`, which is exactly the split its briefing describes.
+
+Two things keep that from breaking the mission. **A look never refuses an
+engagement** — Dani's own radar stayed up the extra twenty seconds to finish the
+shot that downed an F-117 — so the clock is held while there are missiles in
+flight or a target inside the launchers' envelope, and released the moment that
+lapses. The test for that is deliberately *not* Skynet's `isTargetInRange`, which
+carries `go_live_percent` in it and at 150 % answers "is this site cued" (true of
+everything it can see, so the clock would never run); it is the launchers' own
+range, firing altitude and remaining rounds. And **an EWR or any `act_as_ew` site
+is exempt** unless a band is given explicitly, because a net whose search
+coverage works in bursts has nothing to hand a track to — the same invariant
+`arm_iads` already warns about.
+
+**Shoot and scoot is two hops, and the useful one happens before the shot.**
+An anti-radiation missile in **POS** or **EOM** mode is aimed at a *coordinate*,
+so it flies there whether anything is radiating or not: going dark saves nothing
+against the shot a competent player actually takes, and only a **stale
+coordinate** does. So a battery that has spent `scoot_after_s` on the air since
+it last moved (90 s by default, accumulated across stretches because a cued site
+flaps on and off at the go-live cycle) relocates the next time it goes quiet — it
+must assume it was fixed while it emitted. That is also the doctrine the vehicle
+exists for: a battery that only displaces once a missile is already inbound is
+not scooting, it is dodging. The bound is the same as the reactive hop's, so the
+briefed ring stays honest while the *aimpoint* inside it goes stale.
+
+The reactive hop is the second one, and it is a **grade on the duel** rather than
+an escape. Its numbers come from measuring two real HARM flight times out of a
+sortie's `dcs.log` (19.75 km → 27.5 s, ~45 km → 56.5 s) against the SA-6's
+recognition band, and doing that is what found two things wrong with the band
+itself.
+
+**`delay_s` is the band at the edge of `react_range_m`, not a flat number.** Held
+flat, a crew was given the same half-minute to notice a launch twelve kilometres
+overhead as one sixty kilometres away, and the arithmetic then said a shot from
+inside the missile engagement zone was unanswerable: at 20 km the crew reacted
+54 % of the time and moved nothing. That is not how the historical crews worked —
+a launch close in is a rocket motor and a smoke trail, and in the Gulf a *bogus*
+"Magnum" call was often enough to make operators power down, so the trigger was
+suspicion rather than observation. The drawn band therefore tightens towards 45 %
+of the stated one as the launch closes, floored at six seconds (somebody has to
+look up, decide and reach the switch), and a launch the site could not see itself
+keeps the slower reading (× 1.3) — being told takes longer than looking. At 20 km
+that is 9–25 s instead of 14–40, and the duel becomes a duel: 100 % react, 87 %
+get clear of the aimpoint, median 67 m. Inside 12 km it is still a knife fight,
+which is right.
+
+**`JOCKEY_SPEED_MS` is 9.0 m/s (~32 km/h)**, because this is a hasty dash off an
+aimpoint rather than a road march and a Kub TELAR is good for 40 km/h
+cross-country. At the old 5.5 m/s a crew that reacted at the MEZ edge moved twelve
+metres, which made the feature invisible exactly where a player looks for it.
+
+**A battery that can drive, drives** — shoot and scoot, `jockey_m`. Ceasing to
+radiate saves the *system*, not the vehicle: a HARM remembers where the emitter
+was and keeps flying to that point, which is why Skynet's own dark path also
+cuts the group's AI (a DCS multiplayer workaround, not a tactic). So a
+self-propelled site displaces a few hundred metres when it goes quiet, and the
+jockey hands the AI back to make that possible — an AI-off group does not move.
+It does not defeat the missile, it **grades the duel**: the hop starts when the
+crew reacts, i.e. `delay_s` after the launch, so a shot from 40 km arrives on
+ground the battery has left and one from 15 km arrives before it moved at all.
+Leave `jockey_m` as `None` and a table decides (`_MOBILE_TYPES` — SA-6/8/11/15,
+HQ-7 and the support trucks that come with them); anything else stays put,
+because an S-125 fires from built revetments, an S-300PS is march-ordered in
+minutes and a 55G6 needs hours. Two compositions are refused outright, and both
+arrive by accident from a pydcs template: **infantry** (a DCS group moves at its
+slowest member, so a battery walking at 2 m/s has not displaced — `sa11_site`
+ships a rifleman) and an **optically guided launcher** (Strela, Tunguska: with
+the AI back on it would keep fighting from a site the mission believes is
+suppressed). Every hop is drawn from the site's **start** point, never from the
+last one, so repeat fire cannot walk a battery out of the ring `PlanOverlay`
+drew and `core/dtc.py` loaded — the `_JOCKEY_M_MAX` ceiling sits well inside the
+2 km offset `threat` already applies at `trained`.
+
+**A radar going off or back on the air is only reported if somebody could have
+heard it.** That is an ESM observation, so `listeners` names the friendly groups
+that could make it — a Rivet Joint track, an AWACS with ESM, a ground collection
+site — and a call is made only while one of them is alive, inside its own
+`range_m` and in **line of sight of the emitter**. Declare none and the net is
+silent, which is the honest default and not a broken one: without a collector,
+"the SA-6 has ceased emissions" is the mission reading its own trigger state out
+to the player, which is exactly what the briefing rules below forbid. The gate is
+live, so it is a real condition rather than a build-time formality — a battery
+masked behind a ridge from the AWACS track goes quiet without a word, and shooting
+the collector down ends the reporting for the rest of the sortie. `arm_iads` warns
+when calls are configured with no listener, since the wording is set in Python and
+the silence happens in Lua. The default reach is 250 km: a passive receiver against
+a megawatt search radar is horizon-limited rather than power-limited, so terrain
+and survival are what actually decide it. The briefing has to say whose picture it
+is (`idlib_gauntlet`: "both of those calls are `Magic`'s ESM watch, not a
+certainty"), or a call that never comes reads as a bug.
 
 Radio calls are queued and played `announce_spacing_s` apart, so a shot that
 darkens a whole belt gets one call per site instead of only the first. A site
@@ -854,6 +1065,154 @@ Without it the feature is invisible: DCS keeps reading its own grid, the player
 has no reason to go looking in F10 → Other, and the mission looks like it never
 had the readout. Say where the entry is in the briefing too, and say that the
 stock nine-line is a grid — otherwise the two calls look like a bug.
+
+## Kneeboard helper (project-owned)
+
+[`kneeboard`](src/dcs_mission_creator/core/kneeboard/) writes the cards the
+player reads with the jet already moving. All of them **derived from the built
+mission**, so none can contradict the route, the package or the fields it came
+from:
+
+- **flight plan** — per waypoint: true and magnetic track, leg and cumulative
+  distance, altitude, commanded TAS, ETE and ETA; then every steerpoint in
+  degrees and decimal minutes with the terrain elevation under it; the departure
+  and recovery fields with their elevation and this flight's own parking slot;
+  then the weather the timings were flown against.
+- **comms** — your flight, the package, the controllers, each relevant field's
+  ATC bands, and the theater navaids. A frequency that happens to be a channel
+  on the player airframe's own default preset table is annotated with it
+  (`251.000 AM  R1 CH18`), which is the difference between a card that saves
+  time and one that lists numbers.
+- **airfield**, and this one is **conditional**: it is written only for a field
+  the *theatre ships no chart of*. Position, elevation, runways with any measured
+  ILS course, navaids with bearing and range, which flight parks where, and a
+  north-up plan view.
+
+**The airfield card is conditional because ED's coverage is.** DCS puts the
+theatre's own aerodrome and approach charts on the same kneeboard
+(`Mods/terrains/<Theater>/Kneeboard/`), and where there is one, it is a surveyed
+drawing and strictly better than anything derivable here — pydcs has no runway
+extent at all (see below), so a generated diagram is a centreline through a
+reference point with the aprons plotted round it, competing with a real chart two
+pages away. But what ED ships is not "all fields":
+
+| theatre  | shipped charts                                          |
+|----------|---------------------------------------------------------|
+| Caucasus | 21 fields — ground diagram *and* approach chart for each |
+| Syria    | **three**: Akrotiri, Incirlik, Beirut. Nothing else.     |
+| Marianas | one theatre map, no field at all                        |
+
+So `idlib_gauntlet`'s player, who starts at **Hatay**, had no page about their own
+field. [`kneeboard/charts.py`](src/dcs_mission_creator/core/kneeboard/charts.py)
+answers the question by looking — matching the airport name against the chart file
+names, since that is all the name a chart has and pydcs carries no ICAO to join on
+— and the card is written only where the answer is no. Today that is Hatay and
+nothing else across the six missions. **With no install the answer is unknown and
+the card is written**, because the two failure modes are not symmetric: a
+redundant page costs a page, a missing one costs the player their field's
+elevation, its ATC channel and where their jet is parked.
+
+**Missions call none of it.** `MissionBuilder.build_miz` calls
+`kneeboard.publish(m, miz_path, overlay=…, title=…)` after the save, for the
+same reason `dtc.write_cartridges` runs there (the pages are files *inside* the
+package) and after every other finishing step for a second reason: the route
+card reads the take-off and landing altitudes `snap_base_waypoints` has just
+corrected. The PNGs also land in `<output>/kneeboard/`, next to the README,
+because a card that can only be read inside the game cannot be reviewed.
+
+A mission may add free-text lines to the comms card's REMARKS block, for the
+few facts that are real but in no field pydcs writes:
+
+```python
+from dcs_mission_creator.core import kneeboard
+
+kneeboard.remark(m, f"Hammer 1-1 lases the column on code {_LASER_CODE}.")
+kneeboard.remark(m, "Target coordinates in your own cockpit's format: "
+                    "F10 -> Other -> Hammer 1-1.")
+```
+
+Keep that list short. Everything else on the cards is derived and should stay
+that way — a remark is prose, and prose goes stale exactly the way the
+hand-typed FREQUENCIES block in every briefing was one edit from being wrong.
+That block is what these cards make true: the briefings have always said
+"Batumi tower: per kneeboard".
+
+**Four things had to be got right, and each of them is a way the feature would
+otherwise be quietly wrong:**
+
+- **pydcs's own `Mission.add_aircraft_kneeboard` is not used.** It writes the
+  archive entry as `f'{directory}/{page.name}'` where `directory` already ends
+  in `/`, so every page lands at `KNEEBOARD/<type>/IMAGES//<name>.png` — an
+  empty path component DCS may or may not resolve. The entries are appended
+  here with the arcname spelled out, exactly as `core/dtc.py` appends its
+  cartridges. Writing them also fixes the timestamp: pydcs would use
+  `zipf.write`, which records the file's mtime and mode into the archive, which
+  is the problem `core/recon/publish.py` has to pin mtime and mode on disk to
+  work around. An explicit `ZipInfo` needs no pin.
+- **DCS has no per-flight kneeboard.** A page goes in a folder named after an
+  aircraft *type* and every pilot of that type sees it, so a mission with two
+  player flights of different airframes gets both route cards in both folders
+  and each card names its flight in the title.
+- **Timings are zero-wind, and the card says so.** The mission file's wind
+  `dir` is one number with two readings — the direction the wind comes from, or
+  the direction it blows to — and DCS's editor labels it only `DIR`. A
+  wind-corrected heading printed off the wrong reading is out by twice the drift
+  angle and looks authoritative; the wind profile is printed as its own block
+  instead. At 400 kt against the winds these missions set, the ETE error is
+  under six per cent, which is smaller than that mistake.
+- **A magnetic track comes from a per-theater table**
+  (`flightplan.VARIATION_DEG_EAST`), printed on the page next to the number so it
+  can be checked; a theater the table does not cover prints true tracks only,
+  which is why that is a lookup and not a default of zero. DCS models one
+  declination per map and pydcs carries it nowhere. Note that a **runway
+  designator is not a heading you may convert**: `RunwayApproach.heading` is the
+  designator times ten, the number painted on the threshold, which DCS carries
+  over from real-world charts — applying a variation to it introduces an error
+  rather than removing one.
+
+### Navaids come from the installed game
+
+pydcs knows a beacon *exists* and nothing else: `Airport.beacons` is a list of
+`AirportBeacon(id='airfield22_3')` — an id, no type, no frequency, no position —
+and `Airport.tacan` is `None` for every Caucasus field, Batumi included, which
+has one. [`kneeboard/beacons.py`](src/dcs_mission_creator/core/kneeboard/beacons.py)
+reads `Mods/terrains/<Theater>/Beacons.lua` out of the install instead — the same
+file DCS's own F10 airdrome panel reads — for the ILS, PRMG, VOR, RSBN, TACAN and
+homer frequencies, channels, positions and antenna directions. `core/dcs_install.py`
+already locates the install for loadouts, so there is nothing new to configure;
+with it absent the navaid block comes out empty and the build still succeeds
+(`MapOverlay.places` degrades the same way). Nothing from the install is copied
+into a generated mission — only numbers computed from it.
+
+Two details decide whether those numbers are right. **`position` is
+`{x, altitude, z}`** — north, up, east — so a pydcs `Point` is `(position[0],
+position[2])`; reading it as `(x, y)` puts every navaid on the map's equator. And
+the **join to an airport is the beacon id**, which carries the airport's own
+number (`airfield22_*` is Batumi, pydcs id 22), so a field's navaids are exact
+rather than "whatever is within 5 km" — along a shared approach corridor that
+would import the next field's outer homer. Only the beacons with no airfield in
+their id (an en-route VOR, a standalone RSBN) are matched by distance.
+
+An ILS installation is also **grouped by callsign** (`IVI` and `IVZ` are the two
+ends of Vaziani) rather than through `RunwayApproach.beacons`, which is empty at
+several fields — Vaziani and Hatay both come through with none. That pairing is
+the only **surveyed runway geometry** available offline: the glideslope sits a few
+hundred metres in from its threshold and the localizer beyond the far end, so the
+bearing between them is the landing course (printed as `ILS CRS 046T`) and the
+segment between them brackets the strip.
+
+Runway *length* is nobody's — DCS keeps it in the terrain binary and the F10 panel
+reads it through the game's own API — so on the plan view a field with a full ILS
+gets its runway drawn solid between the two antennas, and a field without one gets
+a **dashed centreline** on the designator heading through the reference point, with
+the legend under the sketch saying which of the two the reader is looking at.
+Drawing an invented rectangle would look more authoritative than the data behind
+it, which is the one thing a kneeboard must never do. Everything else on the plan
+view is a surveyed position — parking slots and the reference point from pydcs,
+beacons from the install, the flight's own spawn position from the mission — and a
+label with nowhere to go is **dropped**, never overprinted: it is in the navaid
+table above the sketch either way, and two labels through each other loses both.
+Same rule as `core/recon/landmark.py`.
 
 ## Mission Lua lives in `.lua` files
 
@@ -983,7 +1342,7 @@ of them holds policy: force composition, timings and text stay in the mission.
 ## Reproducibility
 
 Building the same mission twice produces the same `.miz` **contents**, entry for
-entry. That is not free — five separate things had to be pinned, and all five are
+entry. That is not free — six separate things had to be pinned, and all six are
 easy to undo by accident:
 
 - `MapOverlay` carries the sampling `seed` (default 0). `find_placement` takes
@@ -1004,6 +1363,15 @@ easy to undo by accident:
   path gives no hook for. Note the voice cache has the same exposure and no pin:
   it gets away with it only because a warm `cache/voice/` leaves the WAV mtimes
   alone.
+- `core/kneeboard/publish.py` sidesteps that trap rather than working around it:
+  the pages are appended with an explicit `ZipInfo(date_time=…)` (a fixed 1980
+  stamp, as in `core/dtc.py`), so the file on disk can have any mtime it likes.
+  What still has to hold is that the *pixels* are a function of the mission —
+  hence one font from `core/fonts.py` rather than whatever the host has installed,
+  and `Image.save` with no `pnginfo`, since Pillow writes a `tIME` chunk when it
+  is handed one. The pages are written as RGB for the reason
+  `core/recon/publish.py` documents: DCS renders a single-channel PNG in shades
+  of red.
 
 **The archive itself is not byte-identical, and never has been.** `Mission.save`
 writes `mission`, `options`, `warehouses` and the two `l10n/DEFAULT` files with
@@ -1098,6 +1466,12 @@ remain only at the pydcs API layer (`airport.set_blue()`,
   still** (`core/recon`): a wide-area radar frame of the resupply column on the
   briefing screen and in the README, which is the imagery its Intelligence
   section was already citing.
+
+Every one of the six also ships kneeboard cards — route and comms — built by the
+base class from the mission itself (`core/kneeboard`), plus an airfield page
+wherever the theatre ships no chart of the field, which across the six is Hatay
+alone. `idlib_gauntlet` is also the only one that adds `kneeboard.remark` lines,
+for Hammer's laser code and where his readout sits in the radio menu.
 
 All six missions ([coastal_cover](src/dcs_mission_creator/missions/coastal_cover.py),
 [kodori_strike](src/dcs_mission_creator/missions/kodori_strike.py),

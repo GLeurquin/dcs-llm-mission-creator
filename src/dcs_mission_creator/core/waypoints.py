@@ -136,3 +136,56 @@ def _snap_group_base_points(group: FlyingGroup, overlay: MapOverlay) -> int:
                 u.alt_type = "BARO"
         snapped += 1
     return snapped
+
+
+def set_departure_speeds(m: Mission) -> None:
+    """Give every departure waypoint the flight's own climb-out speed.
+
+    pydcs's `add_runway_waypoint` hard-codes `speed = 200 / 3.6` — **108 kt**,
+    at 300 m AGL — and exposes no parameter for it, so the first waypoint after
+    rotation orders every flight in the mission to fly slower than it can. For
+    `idlib_gauntlet`'s Pontiac, an F/A-18C at ~19.6 t (two 330 gal tanks, four
+    GBU-12 on BRU-33 racks, ATFLIR, three AAMs), holding 300 m at 108 kt needs
+    a lift coefficient of **2.8** against a CLmax of about 1.8 — the command
+    sits 19 % below the jet's stall speed in that configuration. What the AI
+    does with an unflyable speed is pitch to max alpha and firewall the
+    throttle, which is the reported symptom: a very high angle of attack off
+    the runway, then full afterburner, all the way to the first en-route point.
+
+    The fix is the flight's *next* en-route speed — the mission already tuned
+    that per airframe (`speed` is km/h TAS everywhere, see CLAUDE.md), so the
+    departure leg becomes an ordinary accelerating climb instead of a speed
+    discontinuity, and no per-airframe table has to be invented here. Speeds
+    are only ever raised, so a mission that set its own departure speed keeps
+    it, and running this twice changes nothing.
+
+    The **approach** runway waypoint carries the same hard-coded 108 kt and is
+    deliberately left alone: by then the jet is light (fuel burned, stores
+    gone) and 108 kt is near its real approach speed rather than 19 % below
+    stall, and DCS runs its own pattern logic off the landing waypoint.
+
+    Missions never call this — `MissionBuilder.build_miz` does, for the same
+    reason as `snap_base_waypoints`: a flight added later cannot miss it.
+    """
+    fixed = 0
+    for coalition in m.coalition.values():
+        for country in coalition.countries.values():
+            for group in (*country.plane_group, *country.helicopter_group):
+                fixed += _set_group_departure_speed(group)
+    log.debug("departure waypoints given climb-out speed", count=fixed)
+
+
+def _set_group_departure_speed(group: FlyingGroup) -> int:
+    """Raise one group's departure waypoint to its first en-route speed."""
+    points = group.points
+    if len(points) < 3 or points[0].type not in _BASE_POINT_TYPES:
+        return 0
+    departure = points[1]
+    # `add_runway_waypoint` is the only point pydcs writes as AGL.
+    if departure.type != "Turning Point" or departure.alt_type != "RADIO":
+        return 0
+    cruise = next((p.speed for p in points[2:] if p.speed > 0), 0.0)
+    if cruise <= departure.speed:
+        return 0
+    departure.speed = cruise
+    return 1

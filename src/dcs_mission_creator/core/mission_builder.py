@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING
 
 from dcs.mission import Mission
 
-from dcs_mission_creator.core import datalink, dcs_install, dtc, waypoints
+from dcs_mission_creator.core import datalink, dcs_install, dtc, kneeboard, waypoints
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.recon import publish as recon
 
@@ -68,25 +68,36 @@ class MissionBuilder(ABC):
     def build_miz(self, miz_path: Path) -> None:
         """Assemble the mission, then finish and save it.
 
-        Concrete on purpose. Both finishing steps have to happen after the last
-        flight exists and before the save, and both are things pydcs leaves
-        undone rather than things a mission decides:
+        Concrete on purpose. The first three finishing steps have to happen
+        after the last flight exists and before the save, and all three are
+        things pydcs leaves undone rather than things a mission decides:
 
         - base-waypoint snapping, because pydcs hard-codes take-off and landing
           altitudes to zero, which buries them under any field above sea level.
           That ordering used to live in CLAUDE.md as prose, with all six
           missions ending in the same three lines; a mission that forgot them
           shipped a broken jet.
+        - departure speeds, because `add_runway_waypoint` hard-codes 108 kt at
+          300 m AGL with no parameter to override it — below the stall speed of
+          a loaded jet, so the AI left the runway at max alpha and full
+          afterburner.
         - datalink identities, because pydcs writes neither track numbers nor
           the per-unit network table, so a coop flight spawned anonymous and
           could not see itself on the scope.
 
-        The third finishing step is the mirror image: any data cartridge a
+        The fourth finishing step is the mirror image: any data cartridge a
         mission armed is a *file inside the package*, and `Mission.save` writes
         a fixed set of zip entries with no hook for another one, so it goes in
         after the save.
 
-        The fourth has a different reason again, and it is worth stating rather
+        The fifth is the kneeboard (`core/kneeboard`) — files inside the
+        package like the cartridge, since pydcs's own
+        `add_aircraft_kneeboard` writes an entry path with an empty component in
+        it. It runs after the save for the archive's sake and after every other
+        step for the content's: the route card prints the take-off and landing
+        altitudes `snap_base_waypoints` has just corrected.
+
+        The sixth has a different reason again, and it is worth stating rather
         than letting the list above absorb it: a recon still (`core/recon`) is
         already inside the `.miz` as a briefing slide by the time we get here,
         because pydcs models briefing pictures. What it is *not* is next to the
@@ -98,10 +109,12 @@ class MissionBuilder(ABC):
         self._permit_crash_recovery(m)
         overlay = self._assemble(m)
         waypoints.snap_base_waypoints(m, overlay)
+        waypoints.set_departure_speeds(m)
         datalink.assign_datalink_identities(m)
         miz_path.parent.mkdir(parents=True, exist_ok=True)
         m.save(str(miz_path))
         dtc.write_cartridges(m, miz_path)
+        kneeboard.publish(m, miz_path, overlay=overlay, title=self.title)
         recon.publish_stills(m, miz_path.parent)
 
     @staticmethod

@@ -183,3 +183,95 @@ def test_build_miz_snaps_after_assembling(tmp_path: Path, monkeypatch):
     builder._assemble = lambda m: order.append("assemble")  # type: ignore[method-assign]
     builder.build_miz(tmp_path / "s.miz")
     assert order == ["assemble", "snap"]
+
+
+def test_departure_speed_replaces_pydcs_108kt():
+    """`add_runway_waypoint` commands 108 kt — below a loaded jet's stall speed.
+
+    pydcs hard-codes `speed = 200 / 3.6` on the departure waypoint and offers
+    no parameter, so the AI is ordered to hold 300 m AGL slower than it can
+    fly: it pitches to max alpha and firewalls the throttle off the runway.
+    The flight's own first en-route speed is what belongs there.
+    """
+    from dcs import planes, task
+    from dcs.mission import Mission, StartType
+    from dcs.terrain import Caucasus
+
+    from dcs_mission_creator.core import waypoints
+
+    m = Mission(Caucasus())
+    batumi = m.terrain.airports["Batumi"]
+    batumi.set_blue()
+    flight = m.flight_group_from_airport(
+        m.country("USA"),
+        "Pontiac",
+        planes.FA_18C_hornet,
+        batumi,
+        maintask=task.CAS,
+        start_type=StartType.Warm,
+    )
+    departure = flight.add_runway_waypoint(batumi)
+    flight.add_waypoint(batumi.position.point_from_heading(90, 60_000), 6400, 700)
+    flight.land_at(batumi)
+
+    assert round(departure.speed * 3.6) == 200, "pydcs default changed"
+    waypoints.set_departure_speeds(m)
+    assert round(departure.speed * 3.6) == 700, "departure keeps the climb-out speed"
+
+
+def test_departure_speed_only_raises_and_is_idempotent():
+    """A mission that set its own departure speed keeps it; re-running is a no-op."""
+    from dcs import planes, task
+    from dcs.mission import Mission, StartType
+    from dcs.terrain import Caucasus
+
+    from dcs_mission_creator.core import waypoints
+
+    m = Mission(Caucasus())
+    batumi = m.terrain.airports["Batumi"]
+    batumi.set_blue()
+    flight = m.flight_group_from_airport(
+        m.country("USA"),
+        "Hawg",
+        planes.A_10C,
+        batumi,
+        maintask=task.CAS,
+        start_type=StartType.Warm,
+    )
+    departure = flight.add_runway_waypoint(batumi)
+    departure.speed = 600 / 3.6  # mission knows better than the next leg
+    flight.add_waypoint(batumi.position.point_from_heading(90, 60_000), 4600, 520)
+    flight.land_at(batumi)
+
+    waypoints.set_departure_speeds(m)
+    assert round(departure.speed * 3.6) == 600, "an explicit departure speed survives"
+    waypoints.set_departure_speeds(m)
+    assert round(departure.speed * 3.6) == 600, "second run changes nothing"
+
+
+def test_approach_runway_waypoint_is_left_alone():
+    """Only the departure point is touched — the approach one is a different regime."""
+    from dcs import planes, task
+    from dcs.mission import Mission, StartType
+    from dcs.terrain import Caucasus
+
+    from dcs_mission_creator.core import waypoints
+
+    m = Mission(Caucasus())
+    batumi = m.terrain.airports["Batumi"]
+    batumi.set_blue()
+    flight = m.flight_group_from_airport(
+        m.country("USA"),
+        "Dodge",
+        planes.F_16C_50,
+        batumi,
+        maintask=task.CAP,
+        start_type=StartType.Warm,
+    )
+    flight.add_runway_waypoint(batumi)
+    flight.add_waypoint(batumi.position.point_from_heading(90, 60_000), 7000, 800)
+    approach = flight.add_runway_waypoint(batumi)
+    flight.land_at(batumi)
+
+    waypoints.set_departure_speeds(m)
+    assert round(approach.speed * 3.6) == 200, "approach speed is not this helper's job"

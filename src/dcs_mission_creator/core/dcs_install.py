@@ -74,6 +74,30 @@ def _saved_games_dir(install: Path) -> Path | None:
     return None
 
 
+def install_dir() -> Path | None:
+    """The DCS folder from `$DCS_INSTALL_DIR`, or `None` with one warning.
+
+    `configure` teaches *pydcs* where the game is; this answers the same question
+    for the parts of this project that read the install directly — the kneeboard's
+    navaid table (`Mods/terrains/<T>/Beacons.lua`) and its check for which
+    airfields the theatre already ships a chart of. Kept here so the env var, the
+    Windows-path translation and the "is this really an install" test have one
+    implementation.
+    """
+    raw = os.environ.get(INSTALL_ENV)
+    if not raw:
+        log.warning(
+            "DCS install dir unknown",
+            hint=f"export {INSTALL_ENV}=<DCS World folder>",
+        )
+        return None
+    path = _local_path(str(raw))
+    if not (path / "Mods").is_dir():
+        log.warning("not a DCS installation", path=str(path))
+        return None
+    return path
+
+
 def configure(install_dir: str | Path | None = None) -> None:
     """Teach pydcs where DCS lives. Idempotent; first call wins."""
     global _configured

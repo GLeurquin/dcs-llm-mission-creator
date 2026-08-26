@@ -30,11 +30,14 @@ def test_source_reads_a_real_script() -> None:
 # ------------------------------------------------------------------- lua.render
 _IADS_SUBS = {
     "SITES": "{}",
+    "LISTENERS": "",
     "SIDE": "coalition.side.BLUE",
     "SPACING": "7.0",
     "UPDATE": "5.0",
     "IADSNAME": '"Test"',
     "DEBUG": "nil",
+    "TRACE": "false",
+    "ALERT": "120.0",
 }
 
 

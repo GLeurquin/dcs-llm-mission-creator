@@ -48,16 +48,37 @@ So a launch only reaches sites that could observe it:
   a real tactic rather than a cosmetic one.
 - **Not every crew reacts.** `probability` — a green crew keeps radiating and
   eats the missile.
-- **Reaction takes time.** `delay_s` seconds pass between launch and emissions
-  drop — tens of seconds, the same order as a HARM's time of flight, because the
-  shot has to be spotted, called down the net, believed and acted on. So the
-  shooter's range at launch is what decides the duel, and a HARM fired from
-  close in still kills. The draw is triangular within the band rather than flat,
-  so the middle of it is the common case.
+- **Reaction takes time, and how much depends on the range.** `delay_s` seconds
+  pass between launch and emissions drop — tens of seconds, the same order as a
+  HARM's time of flight, because the shot has to be spotted, called down the net,
+  believed and acted on. The band is the one at the *edge* of `react_range_m` and
+  tightens as the launch gets closer, because a launch a few kilometres off is a
+  motor and a smoke trail in plain sight, while one at sixty is a report; a
+  launch the site could not see itself stays on the slower reading. So the
+  shooter's range at launch still decides the duel — a HARM fired from well
+  inside the missile engagement zone kills — but the crew is no longer given the
+  same half-minute to notice a shot overhead as one on the horizon. The draw is
+  triangular within the band rather than flat, so the middle of it is the common
+  case.
+- **A battery that can drive, drives — and the hop that matters happens before
+  the shot.** Going dark saves the system, not the vehicle: a HARM remembers
+  where the emitter was and keeps flying there, and one launched in POS or EOM
+  mode was aimed at a place to begin with, so shutting down does nothing about
+  it at all. What defeats a pre-planned shot is the coordinates being stale, so a
+  self-propelled site that has spent `scoot_after_s` on the air relocates once it
+  goes quiet — it must assume it was fixed while it emitted, which is the
+  doctrine the vehicle exists for. It also displaces reactively when a launch
+  puts it dark (`jockey_m`), and both hops are bounded from where it started so
+  it can never leave the envelope the briefing drew. The reactive one does not
+  defeat the missile, it grades the duel: a shot from 40 km arrives on empty
+  ground, one from 15 km arrives before the battery has moved at all. A prepared
+  site in revetments has no such answer and stays put.
 - **The site comes back.** `shutdown_s` later it is released — minutes, not
   Skynet's cap of 180 s past impact, so a HARM buys the package a real working
   gap. Released to *cold*, not hot: it re-radiates only if there is still
-  something worth shooting at.
+  something worth shooting at. If it displaced, it comes back up from the new
+  position — an equipment crew goes to an alternate site, it does not drive
+  home.
 - **Repeat fire makes crews shy.** A second launch while a site is dark extends
   the window instead of restarting it.
 - **Range gates the reaction.** Only sites within `react_range_m` of the shooter
@@ -70,6 +91,18 @@ So a launch only reaches sites that could observe it:
   group alive while a launcher or the command post stands, and gating on that had
   a site the player had just killed announce that it was going dark and then
   that it was radiating again.
+
+**Nobody reports intel nobody collected.** A radar starting or stopping is an
+ESM observation, and the radio calls are gated on somebody having been in a
+position to make it. `listeners` is the friendly groups that could — a Rivet
+Joint on a track, an AWACS with ESM, a ground collection site — and a site's
+emissions change is announced only while one of them is alive, within its own
+reach, and in line of sight of the emitter. Declare none and the net says
+nothing at all, which is the honest default rather than a broken one: without a
+collector, "the SA-6 has ceased emissions" is the mission reading its own
+trigger state out to the player, and that is what the briefing rules forbid
+everywhere else. It is also a live condition, not a build-time one — shoot the
+collector down, or drive it off station, and the calls stop.
 
 Only radar-guided sites belong in the list. Optically/IR-guided SHORAD (SA-13,
 MANPADS) has nothing to shut down, and putting a mixed convoy in here would make
@@ -91,14 +124,39 @@ from dcs import action, triggers
 from dcs_mission_creator.core import lua
 
 if TYPE_CHECKING:
+    from typing import Any
+
     from dcs.mission import Mission
-    from dcs.unitgroup import VehicleGroup
+    from dcs.unitgroup import Group, VehicleGroup
 
     from dcs_mission_creator.core.tts import VoiceSynth
+
+    # A collector can be a flight, a ship or a ground site, so this is the
+    # generic pydcs group rather than any one of its subclasses.
+    AnyGroup = Group[Any, Any]
 
 log = structlog.get_logger(__name__)
 
 _SIDE = {"blue": "coalition.side.BLUE", "red": "coalition.side.RED"}
+
+# How long a crew is willing to sit on the air in one look, by how well trained
+# it is. "Radars were also forced to operate for only 20 seconds or less to avoid
+# destruction by HARMs" (Desert Storm, and again over Yugoslavia in 1999, where
+# the standing rule was no more than about forty seconds from one position) — so
+# twenty seconds is what the *best* crews managed, and it is the bottom of the
+# élite band here rather than a number everybody gets. A conscript battery sits
+# there: its band is long enough that the discipline effectively never fires, and
+# it dies to the HARM that a drilled crew two ridges away would have been off the
+# air for. `Skill.Random` is read as `Good` because the mission cannot know what
+# it rolled, and `Player`/`Client` never appear on a radar group.
+_EMISSION_BY_SKILL: dict[str, tuple[float, float]] = {
+    "Excellent": (20.0, 35.0),
+    "High": (30.0, 55.0),
+    "Good": (45.0, 80.0),
+    "Random": (45.0, 80.0),
+    "Average": (90.0, 150.0),
+}
+_EMISSION_DEFAULT = _EMISSION_BY_SKILL["Good"]
 _ROLES = ("sam", "ewr")
 _ZONES = ("kill", "search")
 _AUTONOMY = ("ai", "dark")
@@ -111,6 +169,66 @@ _SCRIPT = "iads.lua"
 
 # Marker on the Mission so two calls do not load the framework twice.
 _LOADED = "_dcsmc_iads_prelude"
+
+# -- shoot and scoot ---------------------------------------------------------
+#
+# Going dark saves the battery, not the vehicle. A HARM remembers where the
+# emitter was and keeps flying there, so a site that only stops radiating still
+# loses its radar to a round already in the air. What answers that is moving:
+# a self-propelled battery leaves the point the missile was aimed at.
+#
+# How far. 250 m is about 45 s of cross-country driving, which is the same
+# order as the tail of a HARM's flight — enough that a long shot arrives on
+# empty ground and a close one still kills, so the shooter's range keeps
+# deciding the duel. The ceiling is the honesty bound: `PlanOverlay.threat`
+# offsets an estimated ring by 2 km at `trained` and `core/dtc.py` builds the
+# cockpit ring from that same return, so a displacement well inside it leaves
+# the map, the cartridge and the ground truth saying one thing.
+_JOCKEY_M_DEFAULT = 250.0
+_JOCKEY_M_MAX = 500.0
+
+# Systems that can shoot, stop, drive a few hundred metres and shoot again
+# inside a minute — plus the support vehicles that come with them, which pace
+# the group but do not decide anything. pydcs carries no mobility data
+# (`AirDefence.*` has `threat_range` and nothing else), so this is a table, the
+# same as `air_defense.py`'s site catalogue. Absent from it means no jockey:
+# an S-75 or S-125 fires from built revetments, an S-300PS is march-ordered in
+# minutes rather than seconds, and a 55G6 needs hours.
+_MOBILE_TYPES = frozenset(
+    {
+        "Kub 1S91 str",  # SA-6 Straight Flush
+        "Kub 2P25 ln",
+        "Osa 9A33 ln",  # SA-8, radar and rails on one hull
+        "SA-11 Buk SR 9S18M1",  # SA-11 Snow Drift / Fire Dome
+        "SA-11 Buk LN 9A310M1",
+        "SA-11 Buk CC 9S470M1",
+        "Tor 9A331",  # SA-15
+        "HQ-7_STR_SP",  # HQ-7B, self-propelled variant
+        "HQ-7_LN_SP",
+        "Ural-375",  # rearm truck, shipped with pydcs's SA-6 template
+        "Ural-375 PBU",
+    }
+)
+
+# Present in a site, these forbid a jockey even when a mission asks for one.
+# Infantry walks, and a DCS group moves at its slowest member — a battery that
+# displaces at 2 m/s has not displaced. An optically guided launcher is worse:
+# the jockey hands the group's AI back (see `iads.lua`), and a Strela or a
+# Tunguska would go on fighting from a site the mission believes is suppressed.
+_NO_JOCKEY_TYPES = frozenset(
+    {
+        "Infantry AK",
+        "Infantry AK ver2",
+        "Infantry AK ver3",
+        "Infantry AK Ins",
+        "Paratrooper AKS-74",
+        "Soldier M4",
+        "Soldier M4 GRG",
+        "Strela-10M3",
+        "Strela-1 9P31",
+        "2S6 Tunguska",
+    }
+)
 
 
 @dataclass
@@ -150,6 +268,40 @@ class Site:
     launch warning, so the shot has to be seen, called down the net and acted
     on. Anything shorter darkens the radar while the missile is still in the
     first third of its flight and no HARM ever connects.
+
+    `scoot_after_s` is the other half of shoot-and-scoot, and the half that
+    answers a *pre-planned* shot. An anti-radiation missile in POS or EOM mode is
+    aimed at a place, so it flies to the coordinates whether anything is
+    radiating there or not: going dark saves nothing, and only the coordinates
+    being stale does. So a battery that has spent this long on the air since it
+    last moved relocates the next time it goes quiet — it has to assume it was
+    fixed while it emitted. Time is accumulated across separate stretches,
+    because a cued site flaps on and off at the framework's go-live cycle. `0.0`
+    switches it off and leaves the site reacting to launches only. The default is
+    the doctrine of the only battery ever to shoot down a stealth aircraft: in
+    1999 Dani's standing rule was never to radiate from one position for more
+    than forty seconds.
+
+    `emission_limit_s` is how long the crew is willing to sit on the air in one
+    look, and `emission_pause_s` how long it stays quiet between looks. Left
+    `None` the limit comes off the group's own DCS `Skill` (`_EMISSION_BY_SKILL`),
+    which is the point: twenty seconds is what the *best* crews of a real SEAD
+    campaign managed, so an élite battery works in short looks and a conscript one
+    sits there and eats the missile. The limit never refuses an engagement — the
+    clock is held while missiles are in flight or a target is inside the launch
+    envelope — so a disciplined site still shoots, it just does not idle on the
+    air waiting to be shot at. An early-warning radar and any `act_as_ew` site are
+    exempt unless a band is given explicitly: their job is to search, and a net
+    where everything works in bursts has nothing to hand a track to. A band of
+    `(0.0, 0.0)` switches it off.
+
+    `jockey_m` is how far the battery drives when it goes dark — shoot and
+    scoot, bounded from where it started rather than from wherever the last hop
+    ended, so four HARMs in a sortie cannot walk it out of the envelope the
+    briefing drew. Leave it `None` and the system decides: every unit in
+    `_MOBILE_TYPES` earns the default, anything else stays put, which is the
+    difference between a Kub and an S-125 in prepared revetments. `0.0` refuses
+    it outright, and a number overrides the table for a system it does not list.
     """
 
     group: "VehicleGroup"
@@ -167,6 +319,54 @@ class Site:
     shutdown_s: tuple[float, float] = (240.0, 360.0)
     react_range_m: float = 60_000.0
     net_relay: float = 0.5
+    jockey_m: Optional[float] = None
+    scoot_after_s: float = 45.0
+    emission_limit_s: Optional[tuple[float, float]] = None
+    emission_pause_s: tuple[float, float] = (40.0, 80.0)
+
+
+# -- who may know a radar changed state -------------------------------------
+#
+# A passive receiver against a ground search radar is horizon-limited rather
+# than power-limited: the emitter is putting out megawatts and the collector
+# only has to hear it, so the reach of an ESM platform at altitude is a
+# geometry problem measured in hundreds of kilometres. 250 km sits inside the
+# radio horizon of a jet at 9 km (~350 km) deliberately, since the receiver
+# still has to resolve the emitter out of the noise floor rather than merely
+# have a straight line to it, and DCS models no curvature to be limited by.
+# What actually bites at this reach is the other two conditions — terrain, and
+# whether the collector is still alive and still on station.
+_LISTENER_RANGE_M_DEFAULT = 250_000.0
+
+
+@dataclass
+class Listener:
+    """A friendly collector: the reason the net's emissions calls can be made.
+
+    `group` is any pydcs group with a receiver on it — the ELINT track, the
+    AWACS, a ground site. It is read live, so a collector that is shot down, has
+    not spawned yet (a client slot nobody is in) or has left the area stops
+    carrying the reporting, and the calls go quiet without the mission having to
+    arrange it.
+
+    `range_m` is that receiver's reach; `label` is what the trace names it, and
+    defaults to the group name. Line of sight to the emitter is always required
+    — an ESM platform hears an antenna it can see, and a site behind a ridge is
+    the case where the reach hardly matters.
+
+    A mission *may* list the player's own flight, and it is not wrong: the strobe
+    dropping off the RWR is exactly this observation. It is mostly redundant with
+    what the player can already see, so the useful listener is the support asset
+    the briefing named.
+    """
+
+    group: "AnyGroup"
+    label: Optional[str] = None
+    range_m: float = _LISTENER_RANGE_M_DEFAULT
+
+    @property
+    def named(self) -> str:
+        return self.label or self.group.name
 
 
 def _ewr_unit_name(site: Site) -> str:
@@ -184,6 +384,46 @@ def _ewr_unit_name(site: Site) -> str:
             f"radar's own group"
         )
     return units[0].name
+
+
+def jockey_m(site: Site) -> float:
+    """How far this site displaces on suppression, table or explicit.
+
+    Public because it is the honest answer to "will this one move?", and a
+    mission tuning a SEAD problem should be able to ask without reading the
+    table.
+    """
+    if site.jockey_m is not None:
+        return site.jockey_m
+    if site.role == "ewr":
+        # A search radar is an antenna on a mast, not a firing position. It has
+        # nothing to scoot from and hours of work to move.
+        return 0.0
+    types = {u.type for u in site.group.units}
+    return _JOCKEY_M_DEFAULT if types <= _MOBILE_TYPES else 0.0
+
+
+def emission_limit_s(site: Site) -> tuple[float, float]:
+    """How long this crew will sit on the air in one look, table or explicit.
+
+    Public for the same reason as `jockey_m`: a mission tuning a SEAD problem
+    should be able to ask what discipline a battery has without reading the
+    table. The skill taken is the *best* in the group — the discipline is set by
+    whoever is running the site, not by its worst-trained driver — and an
+    early-warning or `act_as_ew` radar is exempt, since a net whose search
+    coverage works in bursts has nothing to hand a track to.
+    """
+    if site.emission_limit_s is not None:
+        return site.emission_limit_s
+    if site.role == "ewr" or site.act_as_ew:
+        return (0.0, 0.0)
+    order = list(_EMISSION_BY_SKILL)
+    best = min(
+        (u.skill.value for u in site.group.units if u.skill is not None),
+        key=lambda name: order.index(name) if name in order else len(order),
+        default=None,
+    )
+    return _EMISSION_BY_SKILL.get(best or "", _EMISSION_DEFAULT)
 
 
 def _validate(sites: Sequence[Site]) -> None:
@@ -204,6 +444,29 @@ def _validate(sites: Sequence[Site]) -> None:
                 f"{s.label}: point defence {s.point_defence.name!r} is not itself "
                 f"in the site list, so the net has no element to wire it to"
             )
+        if s.jockey_m is not None and not 0.0 <= s.jockey_m <= _JOCKEY_M_MAX:
+            raise ValueError(
+                f"{s.label}: jockey_m must be within 0..{_JOCKEY_M_MAX:.0f} m — "
+                f"further than that and the site leaves the ring the briefing "
+                f"drew around it"
+            )
+        if jockey_m(s) > 0.0:
+            types = {u.type for u in s.group.units}
+            blocked = sorted(types & _NO_JOCKEY_TYPES)
+            if blocked:
+                raise ValueError(
+                    f"{s.label}: {', '.join(blocked)} cannot be in a site that "
+                    f"displaces — infantry paces the group to a walk, and an "
+                    f"optically guided launcher keeps fighting once the jockey "
+                    f"hands the group's AI back"
+                )
+            unlisted = sorted(types - _MOBILE_TYPES)
+            if unlisted:
+                log.warning(
+                    "site asked to displace holds units of unknown mobility",
+                    site=s.label,
+                    types=unlisted,
+                )
         if s.role == "ewr":
             _ewr_unit_name(s)
     if not any(s.role == "ewr" or s.act_as_ew for s in sites):
@@ -213,6 +476,16 @@ def _validate(sites: Sequence[Site]) -> None:
             "no always-on radar in the IADS — nothing will cue the batteries",
             sites=[s.label for s in sites],
         )
+
+
+def _validate_listeners(listeners: Sequence[Listener]) -> None:
+    for who in listeners:
+        if who.range_m <= 0.0:
+            raise ValueError(f"{who.named}: range_m must be positive")
+        if not who.group.units:
+            raise ValueError(
+                f"{who.named}: a collector with no units can never hear anything"
+            )
 
 
 def _load_prelude(m: "Mission") -> list[triggers.TriggerStart]:
@@ -247,7 +520,10 @@ def _row(
     return (
         "    {{name={name}, ewUnit={ew}, prob={prob:.3f}, delayMin={dmin:.1f}, "
         "delayMax={dmax:.1f}, downMin={smin:.1f}, downMax={smax:.1f}, "
-        "range={rng:.1f}, relay={relay:.3f}, golive={golive}, zone={zone}, "
+        "range={rng:.1f}, relay={relay:.3f}, jockey={jockey:.1f}, "
+        "scootAfter={scoot:.1f}, emitMin={emin:.1f}, emitMax={emax:.1f}, "
+        "pauseMin={pmin:.1f}, pauseMax={pmax:.1f}, "
+        "golive={golive}, zone={zone}, "
         "actAsEW={ew_flag}, autonomous={auto}, pd={pd}, "
         "downText={dtext}, upText={utext}, hotText={htext}, "
         "downSound={dsound}, upSound={usound}, hotSound={hsound}}},".format(
@@ -260,6 +536,12 @@ def _row(
             smax=site.shutdown_s[1],
             rng=site.react_range_m,
             relay=site.net_relay,
+            jockey=jockey_m(site),
+            scoot=site.scoot_after_s,
+            emin=emission_limit_s(site)[0],
+            emax=emission_limit_s(site)[1],
+            pmin=site.emission_pause_s[0],
+            pmax=site.emission_pause_s[1],
             golive="nil" if site.go_live_percent is None else str(site.go_live_percent),
             zone=lua.quote(site.engagement_zone),
             ew_flag="true" if site.act_as_ew else "false",
@@ -275,10 +557,19 @@ def _row(
     )
 
 
+def _listener_row(who: Listener) -> str:
+    return "    {{name={name}, label={label}, range={rng:.1f}}},".format(
+        name=lua.quote(who.group.name),
+        label=lua.quote(who.named),
+        rng=who.range_m,
+    )
+
+
 def arm_iads(
     m: "Mission",
     sites: Sequence[Union["VehicleGroup", Site]],
     *,
+    listeners: Sequence[Union["AnyGroup", Listener]] = (),
     voice: Optional["VoiceSynth"] = None,
     coalition: str = "blue",
     name: str = "IADS",
@@ -286,8 +577,10 @@ def arm_iads(
     up_call: Optional[str] = "Magic: {label} radar is radiating again.",
     hot_call: Optional[str] = None,
     announce_spacing_s: float = 7.0,
+    alert_window_s: float = 120.0,
     update_interval_s: float = 5.0,
     debug: bool = False,
+    trace: Optional[bool] = None,
     comment: str = "IADS — cueing, and reaction to observed anti-radiation fire",
 ) -> triggers.TriggerStart:
     """Build an integrated air-defence net out of `sites`.
@@ -297,9 +590,18 @@ def arm_iads(
     time it is called — the MIST shim, the vendored framework, and the generated
     setup — and returns the setup trigger.
 
+    `listeners` is who could have heard any of that: the friendly groups
+    carrying a receiver — the ELINT track, the AWACS, a ground collection site —
+    each alive, within its own reach and in line of sight of the emitter at the
+    moment it changes state. A radar starting or stopping is an ESM observation,
+    so with no collector in a position to make it there is no radio call, and a
+    net declared without any listener at all is silent by design. Pass plain
+    groups for the default reach or `Listener` entries to state it.
+
     `down_call`, `up_call` and `hot_call` are `{label}` templates announced to
-    `coalition`; with a `VoiceSynth` the same words are also rendered and played
-    from the script. `hot_call` fires the *first* time a site comes up and
+    `coalition` *when a listener heard the change*; with a `VoiceSynth` the same
+    words are also rendered and played from the script. `hot_call` fires the
+    *first* time a site comes up and
     defaults to nothing: the player's RWR is that call, and announcing it would
     give away a battery the briefing deliberately left off the map. A site coming
     back after being shot off the air uses `up_call`, since that one is news; a
@@ -308,9 +610,29 @@ def arm_iads(
     own call — a shot that darkens a whole belt queues them `announce_spacing_s`
     apart rather than dropping the later ones.
 
-    `update_interval_s` is the framework's go-live cycle. `debug` turns on its
-    own in-game and log output, which names every site as it comes up and goes
-    down — indispensable while tuning a net, far too chatty to ship.
+    `alert_window_s` is how long a launch somebody saw keeps the net on notice.
+    A reaction is otherwise decided at the instant of the shot, so a battery that
+    was cold then is in nobody's reaction — and a HARM in POS or EOM mode is
+    aimed at a place rather than at an emitter, which makes shooting a dark site
+    and waiting for it to come up the standard tactic and, without this, a free
+    kill. A site that comes on the air inside the window is told about the shot
+    second-hand (its `net_relay` share of `probability`, recognition timed from
+    when it came up), once per shot: a site that already rolled at launch does
+    not roll again on its way up. `0.0` switches it off, and only an observed
+    launch arms it, so masking a shot from the whole net still reaches nobody.
+
+    `update_interval_s` is the framework's go-live cycle.
+
+    Two switches say what the net is doing, one per half of the split above.
+    `debug` turns on Skynet's own output — which sites it took, what it is
+    tracking, every radar going live and dark — printed **on the player's
+    screen** as well as to `dcs.log`. `trace` is this project's own half: which
+    sites were in a position to see a launch, what their reaction rolled
+    against, how long each stayed off the air and where it drove, written to
+    `dcs.log` only under an `IADS/<name>` prefix. It follows `debug` unless set,
+    so `debug=True` gives both and `trace=True, debug=False` gives the quiet,
+    log-only one. Both are for tuning a net and neither ships in a mission a
+    player is meant to fly.
     """
     if coalition not in _SIDE:
         raise ValueError(f"coalition must be blue/red, got {coalition!r}")
@@ -318,6 +640,19 @@ def arm_iads(
     if not entries:
         raise ValueError("arm_iads needs at least one site")
     _validate(entries)
+    ears = [w if isinstance(w, Listener) else Listener(w) for w in listeners]
+    _validate_listeners(ears)
+    if not ears and any((down_call, up_call, hot_call)):
+        # Not an error: a net with no collector behind it is a legitimate,
+        # quieter mission. It is worth saying out loud, because the wording is
+        # configured here and the silence happens in Lua at run time, so a
+        # mission that meant to announce these would otherwise only find out in
+        # the air.
+        log.warning(
+            "IADS radio calls are configured but no listener can hear them — "
+            "no emissions change will be reported; pass listeners=[...]",
+            name=name,
+        )
 
     prelude = _load_prelude(m)
 
@@ -346,7 +681,10 @@ def arm_iads(
 
     script = lua.render(
         _SCRIPT,
+        TRACE="true" if (debug if trace is None else trace) else "false",
+        ALERT=f"{alert_window_s:.1f}",
         SITES="\n".join(rows),
+        LISTENERS="\n".join(_listener_row(w) for w in ears),
         SIDE=_SIDE[coalition],
         SPACING=f"{announce_spacing_s:.1f}",
         UPDATE=f"{update_interval_s:.1f}",
@@ -362,5 +700,6 @@ def arm_iads(
         loaded_framework=bool(prelude),
         sams=[s.group.name for s in entries if s.role == "sam"],
         ewrs=[s.group.name for s in entries if s.role == "ewr"],
+        listeners=[w.named for w in ears],
     )
     return rule

@@ -16,6 +16,7 @@
 --   TESTADVANCE(to, step)   run the clock forward, firing scheduled tasks
 --   TESTFIRE(event)         deliver a world event to every handler
 --   TESTMASK = f(a, b)      override terrain line of sight (nil = everything visible)
+--   TESTSURFACE = f(vec2)   override land.getSurfaceType (nil = drivable land)
 --   TESTLOG                 list of noted lines; assign a fresh table to clear
 do
   -- Appends to the *current* _G.TESTLOG, so a test can clear it between phases
@@ -37,6 +38,38 @@ do
   -- ------------------------------------------------------------------- clock
   local now = 0
   local tasks = {}
+
+  -- Ground groups under a move order, registered by Controller:setTask below
+  -- and advanced by TESTADVANCE. The translation is rigid — every unit keeps
+  -- its offset from the leader — which is the stub taking a position on the one
+  -- thing about the shoot-and-scoot path it cannot answer: whether DCS re-forms
+  -- a dispersed ground group when it drives. That question is settled in the
+  -- air, not here; what the tests below pin is that the site leaves the point
+  -- the missile was aimed at, and by how much.
+  local movers = {}
+
+  local function stepMovers(dt)
+    for g, order in pairs(movers) do
+      -- A group whose AI is off does not drive. Skynet cuts it on the HARM
+      -- path, and the jockey is what hands it back — so this is load-bearing.
+      if g.onoff ~= false then
+        local lead = g.units[1]
+        local dx, dz = order.x - lead.x, order.z - lead.z
+        local dist = math.sqrt(dx * dx + dz * dz)
+        if dist <= 0.5 then
+          movers[g] = nil
+        else
+          local travel = math.min(order.speed * dt, dist)
+          local ux, uz = dx / dist * travel, dz / dist * travel
+          for _, u in ipairs(g.units) do
+            u.x = u.x + ux
+            u.z = u.z + uz
+          end
+        end
+      end
+    end
+  end
+  _G.TESTMOVERS = movers
   timer = {
     getTime = function() return now end,
     getAbsTime = function() return 28800 + now end,
@@ -50,6 +83,7 @@ do
     step = step or 1
     while now < to do
       now = now + step
+      stepMovers(step)
       local due, keep = {}, {}
       for _, task in ipairs(tasks) do
         if task.t <= now then due[#due + 1] = task else keep[#keep + 1] = task end
@@ -205,6 +239,29 @@ do
         if id == AI.Option.Ground.id.ROE then owner.roe = val end
       end,
       setOnOff = function(_, on) owner.onoff = on end,
+      -- Only the shape the jockey builds: a Mission task carrying a ground
+      -- route. `y` on a route point is the world z, which is exactly the
+      -- confusion this stub exists to catch. A route has to start where the
+      -- group is standing and end where it is going — DCS takes a
+      -- destination-only route and then ignores it — so the last point is what
+      -- the group drives to and the first is checked, not followed.
+      setTask = function(_, task)
+        local route = task and task.params and task.params.route
+        local points = route and route.points or {}
+        if #points < 2 then
+          note("ERROR setTask route needs a start and a destination")
+          return
+        end
+        local lead = owner.units[1]
+        local start = points[1]
+        if math.abs(start.x - lead.x) > 1.0 or math.abs(start.y - lead.z) > 1.0 then
+          note("ERROR setTask route does not start where the group is standing")
+          return
+        end
+        local pt = points[#points]
+        owner.task = task
+        movers[owner] = {x = pt.x, z = pt.y, speed = pt.speed or 5.0}
+      end,
       -- What this group's radars hold. Modelled the way DCS behaves, because
       -- Skynet leans on it hard: a *live* site keeps itself live by still
       -- detecting its target (see goDark), and a site with emissions off
@@ -284,5 +341,13 @@ do
       return true
     end,
     getHeight = function() return 0 end,
+    -- Drivable ground everywhere unless a test says otherwise, the same way
+    -- TESTMASK overrides line of sight. `TESTSURFACE(vec2)` takes a Vec2, whose
+    -- `y` is the world z.
+    getSurfaceType = function(vec2)
+      if TESTSURFACE then return TESTSURFACE(vec2) end
+      return land.SurfaceType.LAND
+    end,
+    SurfaceType = {LAND = 1, SHALLOW_WATER = 2, WATER = 3, ROAD = 4, RUNWAY = 5},
   }
 end

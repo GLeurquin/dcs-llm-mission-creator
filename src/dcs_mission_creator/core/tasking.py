@@ -114,6 +114,7 @@ def apply_threat_reaction(
     ),
     ecm: task.OptECMUsing.Values = task.OptECMUsing.Values.UseIfDetectedLockByRadar,
     rtb_on_bingo: bool = True,
+    restrict_afterburner: bool = False,
 ) -> None:
     """Make a package flight behave like a crew that was briefed on the SAMs.
 
@@ -130,13 +131,31 @@ def apply_threat_reaction(
     the site the planner did not know about. Escalate `reaction` to
     `AllowAbortMission` for a flight that should turn around rather than press
     a target through a live belt.
+
+    `restrict_afterburner` is the throttle, and it is off by default because
+    for most of the package it is either pointless or harmful: an E-3A, a
+    KC-135 and an A-10C have no afterburner to restrict, and a CAP or an
+    interceptor needs one in a merge. It is worth setting on a **heavy strike
+    flight**, where the DCS AI's own take-off and climb routine — high deck
+    angle, both burners lit until it is established — is nothing the route can
+    reach, and where burning the fuel to do it buys nothing. The trade is real:
+    a flight that cannot select burner also cannot accelerate out of a SAM
+    engagement, so pair it with a route that keeps the flight out of the
+    envelopes (`core/routing.py`) rather than relying on `reaction` alone.
     """
     tasks = group.points[0].tasks
     tasks.append(task.OptReactOnThreat(reaction))
     tasks.append(task.OptChaffFlareUsing(chaff_flare))
     tasks.append(task.OptECMUsing(ecm))
     tasks.append(task.OptRTBOnBingoFuel(rtb_on_bingo))
-    log.debug("applied threat reaction", group=group.name, reaction=reaction.name)
+    if restrict_afterburner:
+        tasks.append(task.OptRestrictAfterburner(True))
+    log.debug(
+        "applied threat reaction",
+        group=group.name,
+        reaction=reaction.name,
+        restrict_afterburner=restrict_afterburner,
+    )
 
 
 # -- JTAC / FAC --------------------------------------------------------------

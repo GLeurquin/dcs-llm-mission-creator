@@ -107,6 +107,13 @@ that precision.
   out of Incirlik", "yesterday's E-3 picture".
 - Human / allied sources: "a partner-force report", "the ground unit in
   contact", "a source in the town", "a defecting crewman".
+- **In-flight calls need a collector too, live.** "SA-6 radar emissions detected
+  south of the AO" is a claim somebody had to be in a position to make — an ESM
+  platform on station with line of sight, not the mission narrating its own
+  triggers. Put that asset in the package, say in the briefing whose picture it
+  is, and accept that the call goes missing when it is masked or shot down.
+  `iads.arm_iads(listeners=…)` enforces exactly this for radar on/off calls; a
+  hand-rolled trigger has to be judged by eye.
 - Age and confidence carry the vagueness: "eighteen hours old",
   "unconfirmed", "last observed", "assessed", "we have no fix on it".
 - Match source → precision → map. An emitter fix gives a ring labelled
@@ -160,8 +167,9 @@ A "realistic" mission is more than spawning aircraft. Hit these before done:
   the terrain under them. See *Waypoints that mark the ground*.
 - **Waypoint speeds are km/h and the airframe can hold them.** Every pydcs
   speed argument is km/h TAS; a knots-shaped number commands about half the
-  intended speed and puts the AI package in permanent afterburner. See
-  *Waypoint speeds are a flight profile*.
+  intended speed and puts the AI package in permanent afterburner. Check the
+  departure waypoint too — pydcs commands 108 kt there, below a loaded jet's
+  stall speed. See *Waypoint speeds are a flight profile*.
 - **JTAC for CAS.** A CAS or CAP-over-ground mission gets a ground or
   airborne FAC that lases targets and talks the player on
   (`tasking.fac_attack_group`). Brief its frequency + designation. Arm
@@ -177,6 +185,15 @@ A "realistic" mission is more than spawning aircraft. Hit these before done:
   briefing and the drawn plan. See *What the player can see*.
 - **Frequencies + nav aids** in the briefing — AWACS/tanker freqs + TACAN;
   for carrier ops, the boat's TACAN + ICLS and a recovery tanker overhead.
+- **Kneeboard cards are automatic.** `MissionBuilder.build_miz` publishes a route
+  card and a comms card (`core/kneeboard`), both derived from the mission — so
+  "per kneeboard" in a briefing is now true, and nothing needs listing twice. Add
+  `kneeboard.remark(m, …)` only for a fact that is in no field pydcs writes: a
+  laser code, or where a radio request sits in the F10 menu. An airfield page is
+  added automatically for a field the theatre ships no chart of (Caucasus charts
+  all 21 of its fields, Syria charts three), so don't write one by hand either
+  way. Cards say nothing about the enemy: that stays with the F10 plan and the
+  cartridge, which carry the difficulty policy.
 - **AI skill varied.** Don't set everything Excellent. Mix High / Average
   for ground; Excellent only for boss threats.
 - **Tell a story.** Mission context, scene-setting intro, dynamic reactions
@@ -579,6 +596,14 @@ Design-side, the number is a profile statement and each leg wants its own:
 - **A-10C and other slow movers** — 500–540 km/h. Its never-exceed is
   720 km/h, so it does not scale with the fast jets.
 
+The **departure** waypoint is a third case and the easiest to miss, because
+pydcs writes it for you: `add_runway_waypoint` commands 108 kt at 300 m AGL and
+has no speed argument. That is below the stall speed of anything with a combat
+load, so the flight leaves the runway at max alpha in full afterburner. The
+project overwrites it with the flight's own climb-out speed for every mission
+(`waypoints.set_departure_speeds`, called from `build_miz`) — but if you are
+reading a route and it looks wrong off the deck, that is why.
+
 Two failure modes to check for, both silent:
 
 - **Too slow.** A fighter ordered 150 KIAS at FL260 is far below best-climb
@@ -588,8 +613,29 @@ Two failure modes to check for, both silent:
 - **Too fast.** Above roughly 0.85 of `max_speed` the flight is in burner by
   definition and will not make its planned time on station.
 
-Sanity-check with `FlyingType.max_speed` (km/h): a cruise or orbit speed is
-about 0.3–0.4 of it.
+**Speed is not the only reason an AI flight burns.** The DCS AI takes off and
+climbs at a high deck angle in afterburner as a matter of routine, and no
+waypoint reaches that. What a mission does control is **weight**: check gross
+against the sortie radius the way you check speed against the airframe. A jet at
+80 %+ of max gross rotates steeply and climbs in burner because the weight
+demands it. `idlib_gauntlet`'s Pontiac flew a 91 km radius carrying full
+internal fuel *and* two 330 gal wing tanks, with a tanker on station — a package
+tanker is the reason you do not launch heavy, not permission to. Where burner
+genuinely buys nothing — a bombed-up strike pair — set
+`tasking.apply_threat_reaction(..., restrict_afterburner=True)`, but never on a
+CAP or interceptor, which needs it in a merge, and only on a flight whose route
+already avoids the live rings.
+
+Sanity-check every leg against `FlyingType.max_speed` (km/h). On a supersonic
+fighter a cruise or orbit speed is **0.30–0.40** of it; above ~0.40 the jet is
+holding the profile in afterburner. Subsonic types are exempt — an E-3A cruises
+at 0.86 of its `max_speed` and has no afterburner to reach for.
+
+**Check the ratio per airframe, not the number.** The fast jets are not
+interchangeable: 800 km/h is 0.38 on an F-16C (2120) and 0.41 on an F/A-18C
+(1950), so a package that gives the whole flight "800" puts only the Hornet in
+burner. Weigh the loadout too — a jet with two bags and four LGBs belongs at the
+bottom of the band, a clean CAP at the top.
 
 ## What the player can see (F10 map, planner, datalink)
 

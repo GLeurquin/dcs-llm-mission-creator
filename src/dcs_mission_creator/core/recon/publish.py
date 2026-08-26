@@ -52,8 +52,9 @@ if TYPE_CHECKING:
 
 log = structlog.get_logger(__name__)
 
-#: Bump when a change to the sensor chain should invalidate every cached render.
-RENDER_VERSION = "recon-1"
+#: Bump when a change to the sensor chain, or to how the PNG is encoded, should
+#: invalidate every cached render.
+RENDER_VERSION = "recon-2"
 
 _DEFAULT_CACHE = Path("cache") / "recon"
 
@@ -184,7 +185,14 @@ def _render_to(
     log.info("recon render", path=str(path), size=img.size, marks=len(marks))
     # No `pnginfo`: Pillow writes a tIME chunk only when one is handed to it, and a
     # timestamp in the file would defeat the whole point of the mtime pin.
-    img.save(path, format="PNG", compress_level=6, optimize=False)
+    #
+    # Written as RGB even though every pixel is neutral: the whole chain works in
+    # mode `L`, and a single-channel PNG comes out of the DCS briefing screen in
+    # shades of red — the game's texture loader takes the lone channel for red and
+    # leaves green and blue at zero. Any image viewer renders the same file as the
+    # grey it is, which is what made the bug look like a viewer problem. Three
+    # identical channels cost ~1.5x the file and are unambiguous everywhere.
+    img.convert("RGB").save(path, format="PNG", compress_level=6, optimize=False)
     if not path.exists() or path.stat().st_size == 0:
         raise RuntimeError(
             f"rendering {path.name} produced no image (frame={scene.frame}, "
