@@ -34,6 +34,7 @@ landing points are ground events already.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 import structlog
@@ -189,3 +190,121 @@ def _set_group_departure_speed(group: FlyingGroup) -> int:
         return 0
     departure.speed = cruise
     return 1
+
+
+def clear_terrain(
+    route: Sequence[Point],
+    altitudes: Sequence[float],
+    *,
+    overlay: MapOverlay,
+    clearance_m: float = 150.0,
+    sample_m: float = 50.0,
+) -> list[float]:
+    """Raise `altitudes` until nothing on the route is inside the terrain.
+
+    Two separate ways a hand-written altitude buries a route, and a mountain
+    theater hits both:
+
+    - **the waypoint itself.** An altitude is metres AMSL, so "800 m through
+      the gorge" is 800 m *above the sea*, not above the valley floor. On the
+      Caucasus that number is underground for most of the map;
+    - **the leg between two waypoints.** DCS ramps linearly from one waypoint's
+      altitude to the next, so a chord drawn between two points that are each
+      safely over their own valley floor still goes through the spur the river
+      bends around. This is the half that survives a per-waypoint fix, and it
+      is the reason this takes the whole route rather than one point.
+
+    Both are checked against the elevation raster and answered the same way:
+    the *lower* end of an offending leg is lifted, so a descending profile
+    stays a descending profile and only the ramp that would have hit rock
+    moves. Altitudes are never lowered — a mission's own numbers are a floor,
+    and this only says where they are not survivable.
+
+    `clearance_m` is how far above the ground the whole route has to stay.
+    Legs are sampled every `sample_m`, whose default is the elevation raster's
+    own cell size — sampling coarser than the data steps straight over a
+    one-cell spur, and the whole point here is the ground *between* the points
+    somebody wrote down. Returns a new list; the input is not modified.
+    """
+    if len(route) != len(altitudes):
+        raise ValueError(
+            f"route has {len(route)} points but {len(altitudes)} altitudes"
+        )
+    alts = [
+        max(float(a), ground_elevation_m(overlay, p) + clearance_m)
+        for p, a in zip(route, altitudes)
+    ]
+    # Each pass can only raise an altitude, and a raised end can only relax the
+    # legs either side of it, so this converges; the bound is a guard, not a
+    # schedule.
+    for _ in range(len(alts)):
+        if not _raise_offending_legs(
+            route, alts, overlay, clearance_m=clearance_m, sample_m=sample_m
+        ):
+            break
+    return alts
+
+
+def _raise_offending_legs(
+    route: Sequence[Point],
+    alts: list[float],
+    overlay: MapOverlay,
+    *,
+    clearance_m: float,
+    sample_m: float,
+) -> bool:
+    """Lift one end of every leg that cuts terrain. True if anything moved."""
+    moved = False
+    for i in range(len(route) - 1):
+        need_a, need_b = _leg_requirement(
+            route[i],
+            route[i + 1],
+            alts[i],
+            alts[i + 1],
+            overlay,
+            clearance_m=clearance_m,
+            sample_m=sample_m,
+        )
+        if need_a <= alts[i] and need_b <= alts[i + 1]:
+            continue
+        # Raising either end clears the leg; take the one that costs less
+        # altitude, which on a descent is the end that was already higher.
+        if need_a - alts[i] <= need_b - alts[i + 1]:
+            alts[i] = need_a
+        else:
+            alts[i + 1] = need_b
+        moved = True
+    return moved
+
+
+def _leg_requirement(
+    a: Point,
+    b: Point,
+    alt_a: float,
+    alt_b: float,
+    overlay: MapOverlay,
+    *,
+    clearance_m: float,
+    sample_m: float,
+) -> tuple[float, float]:
+    """What each end would have to be, alone, for this leg to clear the ground.
+
+    The leg is a straight ramp from `alt_a` to `alt_b`, so a sample at fraction
+    `f` sits at `alt_a (1-f) + alt_b f`. Solving that for one end with the
+    other held fixed gives what it would take to lift the ramp over the highest
+    ground on the leg. Both answers are returned; the caller picks.
+    """
+    distance = a.distance_to_point(b)
+    steps = max(1, int(distance / sample_m))
+    need_a, need_b = alt_a, alt_b
+    for step in range(steps + 1):
+        f = step / steps
+        here = a.new_in_same_map(a.x + (b.x - a.x) * f, a.y + (b.y - a.y) * f)
+        floor = ground_elevation_m(overlay, here) + clearance_m
+        if alt_a * (1.0 - f) + alt_b * f >= floor:
+            continue
+        if f < 1.0:
+            need_a = max(need_a, (floor - alt_b * f) / (1.0 - f))
+        if f > 0.0:
+            need_b = max(need_b, (floor - alt_a * (1.0 - f)) / f)
+    return need_a, need_b

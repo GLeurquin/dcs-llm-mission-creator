@@ -311,7 +311,7 @@ texture beats a fingerprint.
 |--------------------|----------------------------------------------------------------|
 | Enemy AI skill     | Average / Good / High / Excellent (mix freely)                 |
 | AI ROE / reaction  | weapon-hold + no-reaction → weapons-free + evade + ECM (recruit→ace) |
-| Numeric balance    | bandits outnumbered → 3× player flight                         |
+| Numeric balance    | bandits outnumbered → 3× player flight — **capped by the player's magazine**, see below |
 | Enemy missile gen  | gen-3 (R-27 / AIM-7) vs gen-4 (R-77 / AIM-120)                 |
 | SAM threats        | none → MANPADS → SHORAD (SA-8/13/15/19, HQ-7) → SA-2/3/6 → SA-10/11 / Patriot |
 | EWR / GCI          | none → EWR → EWR + GCI vectoring                               |
@@ -332,6 +332,21 @@ texture beats a fingerprint.
 - **Sanity-check worst case.** 2-player flight vs 8 Excellent Flankers +
   SA-10 + IMC + no support is unplayable, not ace. Back off the least
   thematic dial.
+- **Count the magazine before you set the bandit count, and scale both off
+  `--players`.** Numeric balance is the one dial with an arithmetic ceiling:
+  count the air-to-air stations the player's loadout actually leaves free
+  (an F-16C with two wing tanks has six, and stations 4/6 take no missile at
+  all), allow **two shots per kill** against `Skill.Excellent` crews, and that
+  is the whole kill budget — ~3 per jet. Over it the mission is not ace, it is
+  arithmetically unwinnable, which `abkhaz_sweep` was: six Excellent bandits
+  and a kill-them-all frag against one jet's six missiles, at every slot count.
+  Three legitimate fixes — derive the enemy count from the player count, add
+  friendly AI (but note that "no escort, no tanker" may *be* the composition),
+  or **task less than the airspace**: make the objective the element that gates
+  the campaign effect and let the rest be a threat to survive rather than a
+  required kill. The worked example, with the arithmetic and the trigger
+  consequences, is the "Force balance: the magazine is the budget" section of
+  CLAUDE.md.
 - **Make the label bite.** Ace means night/IMC + no support *actually
   applied*. Recruit means real support + clear weather, not just lowered
   skill.
@@ -699,8 +714,30 @@ and it is a difficulty dial in its own right (SA on the enemy picture).
 |----------|--------------------------------------------------------------------------------------|
 | recruit  | Exact icons at true positions. `StandardIcon.AirDefense` / `SearchRadar` on each SAM/EWR, threat rings at true envelope radius, convoy/target marked precisely. Label them plainly ("SA-6"). |
 | trained  | Real threat rings and icons, but coarser — cluster nearby units into one ring, place the icon at the cluster centroid not the exact TEL. Label with type ("SA-6 site"). |
-| veteran  | A vague **threat area** only — one large low-alpha polygon / oblong ("SAM threat — vicinity Senaki"), no per-unit icons, no true radius. Position offset a few km from truth. Air threat as a bearing arrow from the enemy field, not a fix. |
-| ace      | Little or nothing. AO + friendly plan only. Enemy shown as an unlabelled search box at best ("threats expected"), or omitted entirely — the player builds the picture from RWR, AWACS calls, and the tally. |
+| veteran  | Rings still, but they are assessments: drawn dashed and unfilled, ~4 km off truth, radius inflated, labelled "(approx.)". Airborne threats as a **threat area**, not a fix. |
+| ace      | The same, further out — ~6 km off, wider again. The player is told the airspace is denied and not where the launchers are: the ring cannot be threaded, so the battery still has to be found on the RWR, the HTS and the tally. |
+
+**What scales is precision, not presence.** The higher labels used to draw
+nothing at all, and that turned out to leak *more*, not less. A mission still
+has to put steerpoints somewhere, and with no estimate to draw from it takes the
+site's true position: `daryal_run` concealed every icon, drew a vague area 4 km
+off, and wrote a `TARGET` steerpoint 170 m from the S-300, which the player
+reads off the DED on the ramp. So draw the ring, make it visibly an assessment,
+and build every other channel from that same estimate. The rule to hold onto:
+
+> **Every planned point that refers to an enemy site derives from the estimate,
+> never from the site.** Map ring, cartridge point, target steerpoint, IP,
+> kneeboard row. Then nothing the player can read carries a better position than
+> the briefing admits to, and a steerpoint that lands near the truth is luck
+> rather than a leak.
+
+`PlanOverlay.estimate(center, radius=…)` returns that claim without drawing, and
+memoises it on the true position, so a mission that needs it while laying its
+route builds the overlay **first** and passes it to `_draw_plan` at the end.
+`core/routing.py` is the deliberate exception: its rings keep the flight alive
+rather than telling the player anything, so they use the true position — bending
+a package around a ring known to be kilometres off would route it away from
+empty sky.
 
 Rules:
 
@@ -709,9 +746,11 @@ Rules:
   pinpoint icon — the two channels must agree. Each enemy mark should trace
   back to a sourced line in the briefing (*Attribute the intel*): the emitter
   fix draws a ring, the imagery draws an icon, the rumour draws an area.
-- **Mark estimates as estimates.** On trained+ append "(est.)" to labels
-  and offset the mark from the true unit so a precise ring can't be
-  reverse-engineered.
+- **Mark estimates as estimates.** `PlanOverlay` does this for you — "(est.)"
+  on trained, "(approx.)" and a dashed unfilled ring above it — and offsets the
+  mark from the true unit so a precise ring can't be reverse-engineered. Say the
+  same thing in the prose: a briefing that claims a fix while the map draws a
+  dashed guess reads as the map being broken.
 - **Only emplaced systems get a ring.** A threat ring says the envelope *is
   there*. Air defence that moves — a convoy's organic SHORAD, a launcher on a
   road march, a mobile reserve — has driven out of any ring by the time the
@@ -757,19 +796,27 @@ entirely in the setup:
   belts the sortie is built around stay briefed; what goes unmarked is the extra
   battery, the relocated launcher, the reserve. One or two per mission.
 
-### Put the same rings in the cockpit
+### Put the same plan in the cockpit
 
 A ring the player can only see on the F10 map is a ring they lose the moment
 they are heads-down in the jet. An F-16C reads pre-planned threats off its data
 cartridge and draws them on the HSD and the HAD, so a briefed belt belongs
-there too — `core/dtc.py`, wired from the `_draw_plan` step (see CLAUDE.md).
+there too — `core/dtc.py`, wired from the `_load_cartridge` step (see
+CLAUDE.md). The rest of what the map shows goes with it: the cartridge also
+carries the flight's route and the plan's marks as **steerpoints**, and the
+plan's lines as the HSD's **GEO lines**, read straight off the `PlanOverlay` so
+neither channel can drift from the other.
 
 The rules are the ones above, unchanged, because it is the *same* claim in a
 second channel:
 
-- Load what the map drew — the coarsened, offset estimate on trained — not the
-  site's true position. `PlanOverlay.threat` hands its estimate back for
-  exactly this; withholding on veteran/ace then loads nothing, which is right.
+- Load what the map drew — the coarsened, offset estimate — not the site's true
+  position. `PlanOverlay.threat` hands its estimate back for exactly this. It
+  matters more here than on the map: a pre-planned threat **is** a steerpoint,
+  so a point on the truth is coordinates the player reads out of the DED, and it
+  would undo the reveal the F10 map had just applied. Every difficulty produces
+  an estimate, so a hard mission gets a cartridge like any other — its rings are
+  simply wider and further from the launchers.
 - Only systems the briefing names, and only ones with an envelope: an EWR, a
   convoy or an armor reserve is not a ring. The jet holds fifteen points, and
   they are better spent on belts than on every MANPADS in the AO.
@@ -779,6 +826,19 @@ second channel:
   is most wrong exactly where the column has driven to. Sites only; a moving
   SHORAD threat belongs in the prose and in the AWACS calls, and on the map as
   a mark with no envelope.
+
+For the other two tabs, one design rule matters and the rest is budget:
+
+- **A front line is what the GEO lines are for.** The jet draws four polylines
+  from twenty-five shared vertices, and a front line is the one piece of enemy
+  geometry with a shape that nothing else in the cockpit carries — the same
+  argument that makes it the one red drawing painted precisely at every
+  difficulty. It goes first and can never be the line that loses; an orbit takes
+  a line only after it, and only because most missions have one to spare. Every
+  race-track becomes a steerpoint at its midpoint regardless, since a range and
+  a bearing to the station is what a pilot actually asks for.
+- **Do not draw the flight's own corridor twice.** The steerpoints already
+  trace it. A route line earns a GEO line only when somebody else flies it.
 
 ### Recon stills — imagery the briefing already claims
 
@@ -838,6 +898,10 @@ each unit's `skill = Skill.Client` (PYDCS_REFERENCE.md covers the API).
 Rules:
 
 - `group_size` on the player flight = requested player count (1–4).
+- **The opposition scales with it, and so does what is tasked.** A fixed
+  enemy count means the mission is balanced for at most one value of
+  `--players`; derive both from `self.players` and check the result against
+  the flight's magazine (see *Difficulty → Guidelines*).
 - **All** units in the flight get `Skill.Client`. Empty Client slots appear
   as unoccupied seats in MP UI; DCS leaves them parked if nobody joins.
 - Default `start_type=StartType.Warm` (hot ramp). Cold only when the user

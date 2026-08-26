@@ -2,10 +2,12 @@
 
 Two cards, one job each:
 
-- **flight plan** — the route as numbers: track, distance, altitude, commanded
-  speed, ETE and ETA per leg, plus every steerpoint in degrees and decimal
-  minutes, the departure and recovery fields with this flight's parking slot, and
-  the weather the timings were flown against;
+- **flight plan** — the route as numbers, one line per steerpoint: its position
+  in degrees and decimal minutes, the terrain under it, track, leg distance,
+  altitude, commanded speed, ETE and ETA; then the air defence the mission
+  briefed, with the same coordinates the F-16C's cartridge carries; then the
+  departure and recovery fields with this flight's parking slot, and the weather
+  the timings were flown against;
 - **comms** — the package's frequencies, the controllers, each relevant field's
   ATC bands and the theater navaids, with a note where a frequency happens to be
   one of the airframe's default presets.

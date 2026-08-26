@@ -3,10 +3,14 @@
 Player flies a USAF F-16C-50 out of Vaziani as `Dodge`. The target is a
 Russian S-300PS (SA-10) battery emplaced south of Beslan, covering the
 North Caucasus from a ridge that denies any high-altitude approach. The
-only viable ingress is a low-level run north up the Daryal Gorge between
-Mt Kazbek (5033 m) and the eastern ridge — terrain-masked from the Big
-Bird radar until the player pops up for the HARM shot. AWACS `Magic` holds
-a southern race-track. No tanker, no escort, no SEAD support.
+only viable ingress is the Georgian Military Road: north over the Jvari
+Pass, then down the Terek through the Daryal Gorge between Mt Kazbek
+(5033 m) and the eastern ridge — terrain-masked from the Big Bird radar
+until the gorge ends about 16 km short of the battery and the player pops
+for the HARM shot. Egress is west across the plain and south up the Ardon
+over the Roki Pass; the whole route is checked against the elevation
+raster (`_CORRIDOR`, `_route_altitudes`). AWACS `Magic` holds a southern
+race-track. No tanker, no escort, no SEAD support.
 
 Composition (difficulty: ace):
   - SA-10 site: 64H6E (Big Bird) SR + 30H6 Flap Lid TR + 54K6 CP +
@@ -29,7 +33,8 @@ from datetime import datetime, timezone
 
 from dcs import action, condition, planes, task, templates, triggers, vehicles
 from dcs.country import Country
-from dcs.mapping import Point
+from dcs.drawing.icon import StandardIcon
+from dcs.mapping import LatLng, Point
 from dcs.mission import Mission, StartType
 from dcs.terrain.caucasus.caucasus import Caucasus
 from dcs.terrain.terrain import Airport
@@ -37,6 +42,7 @@ from dcs.unit import Skill
 
 from dcs_mission_creator.core import (
     air_defense as ad,
+    dtc,
     triggers as mission_triggers,
     waypoints,
 )
@@ -59,6 +65,95 @@ from dcs_mission_creator.core.weather import Weather, Wind
 from dcs_mission_creator.map_overlay.query import MapOverlay
 from dcs_mission_creator.map_overlay.scene import TacticalScene
 
+#: What the briefing claims each emplaced system reaches, before the difficulty
+#: coarsens it. The S-300's 75 km is why this sortie is flown up a gorge at a
+#: couple of hundred metres over the river: the ring covers everything above the
+#: ridges, and drawing it is what shows the player *why* the plan looks the way
+#: it does.
+_SA10_RING_M = 75_000.0
+_TOR_RING_M = 12_000.0
+
+#: Commanded true airspeeds, **km/h** — the unit every pydcs speed argument
+#: takes and none of them names. On an F-16C-50 (`max_speed` 2120 km/h) a
+#: cruise sits at 0.30–0.40 of that; a bombed-up jet at the bottom of the band,
+#: which is where the gorge number is, and it is slow for a second reason —
+#: 700 km/h is what a 200 m run between 3 km walls at dusk is worth.
+_TRANSIT_SPEED_KPH = 800.0
+_GORGE_SPEED_KPH = 700.0
+_EGRESS_SPEED_KPH = 800.0
+
+#: How far above the ground the whole flown route has to stay, both at a
+#: waypoint and along the straight leg between two of them. `core/waypoints.py`
+#: enforces it; see `_route_altitudes` for why a mission on this map cannot
+#: write altitudes by hand.
+_LEG_CLEARANCE_M = 150.0
+
+#: The ingress corridor: the Georgian Military Road north over the Jvari Pass,
+#: then the Terek down the Daryal Gorge to its mouth at Balta. `(name, lat,
+#: lng, height above the ground)` — degrees rather than DCS metres because
+#: every one of these is a real place on that road, and a coordinate you can
+#: put on a map is a coordinate somebody can check. That is not a style
+#: preference here: the route this replaced was written in raw map metres and
+#: shipped with two of its three valley waypoints inside a mountainside, one of
+#: them by 2.7 km, which nobody could see by reading it.
+#:
+#: The AGL column is the descent, and it is what the mission is: transit above
+#: the ridges while the massif itself masks the battery, cross at the only pass
+#: the road takes, then go down the gorge and stay under the Big Bird's horizon
+#: until the pop. Measured against the elevation raster, the corridor is masked
+#: from the site at every one of these points and stops being masked about
+#: 16 km out — which is where the gorge ends and the run-in starts.
+_CORRIDOR = (
+    ("PUSH", 41.8592, 44.9748, 2_000.0),  # climb-out N of Vaziani
+    ("ARAGVI", 42.3530, 44.6870, 2_000.0),  # Pasanauri, joins the road
+    ("JVARI", 42.5050, 44.4520, 1_200.0),  # Jvari Pass, 2400 m
+    ("KOBI", 42.5450, 44.5020, 700.0),  # head of the Terek
+    ("TEREK", 42.5900, 44.5700, 500.0),  # into the upper gorge
+    ("KAZBEGI", 42.6676, 44.6434, 400.0),  # Stepantsminda
+    ("DARYAL", 42.7434, 44.6230, 300.0),  # the narrows
+    ("LARS", 42.8199, 44.6442, 250.0),
+    ("CHMI", 42.8827, 44.6323, 250.0),
+    ("BALTA", 42.9135, 44.6388, 200.0),
+    ("IP", 42.9416, 44.6632, 200.0),  # gorge mouth — pop point
+)
+
+#: Egress: west across the plain, then south up the Ardon and over the Roki
+#: Pass. Same table, same rules. The first leg is the exposed one and is meant
+#: to be — it leaves the target area on the shortest vector out of the ring —
+#: and the Ardon takes the flight back under cover from Buron southward.
+#:
+#: `MTSKHETA` is the let-down, and it earns its place on the timing rather than
+#: the geography: pydcs writes the *approach* runway waypoint at a hard-coded
+#: 108 kt (`waypoints.set_departure_speeds` fixes the departure one and leaves
+#: this one alone on purpose), so whatever leg ends there is flown on the
+#: kneeboard at approach speed. Running it straight from Roki made that a
+#: 76 NM leg and put 42 minutes of the sortie's stated hour inside it. Coming
+#: down at the foot of the Georgian Military Road, where the route joined it on
+#: the way out, leaves a 19 NM final instead.
+#:
+#: Between them the two tables put 21 points on the route, and `core/dtc.py`
+#: writes the route into the Viper's own steerpoint tab, which holds
+#: `dtc.MAX_NAV_POINTS` = 25. The cartridge currently packs 24. Adding a
+#: corridor point means the plan's marks start being dropped off the end of the
+#: tab — `arm_plan` warns rather than truncating silently, but the warning is
+#: the only thing that will tell you.
+_EGRESS = (
+    ("EGRESS_W", 42.9840, 44.2903, 350.0),  # the plain west of Vladikavkaz
+    ("ARDON", 42.9500, 44.2000, 300.0),  # mouth of the Ardon
+    ("BURON", 42.8000, 44.0000, 1_450.0),  # up the Transkam
+    ("ROKI", 42.5000, 43.9200, 1_600.0),  # over the pass into Georgia
+    ("MTSKHETA", 41.8450, 44.7200, 1_500.0),  # let-down at the foot of the road
+)
+
+
+@dataclass(frozen=True)
+class _Leg:
+    """One en-route point and how far above the ground it is to be flown."""
+
+    name: str
+    position: Point
+    agl_m: float
+
 
 @dataclass
 class _Scene:
@@ -70,13 +165,16 @@ class _Scene:
     sa10_site: Point
     shorad: Point
     ewr_pos: Point
-    valley_entry: Point
-    valley_mid: Point
-    valley_exit: Point
-    ip: Point
+    ingress: tuple[_Leg, ...]
+    egress: tuple[_Leg, ...]
     awacs_anchor: Point
     intrusion_center: Point
     overlay: TacticalScene
+
+    @property
+    def ip(self) -> Point:
+        """The pop point: the last corridor point, at the mouth of the gorge."""
+        return self.ingress[-1].position
 
 
 class DaryalRun(MissionBuilder):
@@ -105,20 +203,27 @@ SITUATION
   those radars off the air tonight, before the layer
   thickens overnight.
 
-  The only viable ingress is low. You will fly the Georgian
-  Military Road north, drop into the Daryal Gorge between
-  Mt Kazbek and the eastern ridge, and stay masked until
-  the pop-up. The valley narrows to roughly 3 km in
-  places — pick your line.
+  The only viable ingress is the Georgian Military Road.
+  North to Pasanauri, over the Jvari Pass, down the Terek
+  into the Daryal Gorge between Mt Kazbek and the eastern
+  ridge, out at Balta. The massif masks you as far as the
+  pass; below Stepantsminda only the gorge does. It narrows
+  to roughly 3 km in places — pick your line.
 
 MISSION (Dodge — F-16C-50, Vaziani, hot ramp)
-  - Push north, descend before the foothills.
-  - Ingress the Daryal Gorge below 1000 m AGL.
-  - Pop up at the IP south of Beslan, HARM the Big Bird,
-    re-attack the Flap Lid and the 54K6 CP. Launchers
-    are bonus; the radars are the kill.
-  - Egress WEST, then south around the western ridges.
-    Do NOT re-cross Daryal — the MiG-29S will be in by then.
+  - Push north above the ridges. The massif is between you
+    and the Big Bird the whole way to the pass; no reason
+    to be low yet, every reason to be fast.
+  - Cross at Jvari, 2400 m, then follow the Terek down. Be
+    on the deck by Stepantsminda and stay there.
+  - Run the gorge. Pop at the mouth north of Balta, HARM
+    the Big Bird, re-attack the Flap Lid and the 54K6 CP.
+    Launchers are bonus; the radars are the kill.
+  - Egress WEST across the plain, then south up the Ardon
+    and over the Roki Pass. Do NOT re-cross Daryal — the
+    MiG-29S will be in by then. The climb out of the Ardon
+    mouth is the exposed minute of this sortie; take it
+    west of Vladikavkaz, not before.
   - RTB Vaziani. Divert: Soganlug.
 
 PACKAGE
@@ -129,8 +234,11 @@ PACKAGE
 
 INTELLIGENCE
   No overhead of the site — cloud for two days. What we
-  have is the ELINT cut and pattern-of-life, so treat
-  every position below as approximate.
+  have is the ELINT cut and pattern-of-life. Every ring
+  on your map is that cut: drawn wide, dashed, marked
+  approximate, and out by some kilometres. Your TARGET
+  steerpoint is the same cut, not a survey — expect to
+  find the radars, not to fly to them.
   SAM : S-300PS battery. Search radar, tracking radar,
         command post and launchers, reach out to about
         75 km at altitude. Their best crew — assume they
@@ -146,18 +254,27 @@ ROE / FRAGS
   - Weapons free on the SA-10 cluster and any Russian
     aircraft that comes up against you north of
     the border.
-  - Keep below 1000 m AGL inside Daryal Gorge until the
-    pop-up — Big Bird sees you the moment you crest.
-  - Bingo fuel: 2500 lb. RTB Vaziani via the western
-    egress, not back through Daryal.
+  - Keep below 1000 m AGL from Stepantsminda to the gorge
+    mouth — Big Bird sees you the moment you crest.
+  - Bingo fuel: 2500 lb. RTB Vaziani via the Ardon and
+    Roki, not back through Daryal.
 
 NAV
   Bullseye (own side) : {bx:.0f}, {by:.0f} (DCS world m)
-  PUSH                : 25 km NNW of Vaziani.
-  DESCEND             : 60 km N of Vaziani, foothills.
-  VALLEY_IN           : Stepantsminda / Kazbegi area.
-  VALLEY_OUT          : just south of Vladikavkaz.
-  TARGET              : 12 km south of Beslan airfield.
+  PUSH                : climb-out NNW of Vaziani.
+  ARAGVI              : Pasanauri. Joins the road.
+  JVARI               : the Jvari Pass, 2400 m.
+  KOBI / TEREK        : head of the Terek, descending.
+  KAZBEGI             : Stepantsminda. Deck from here.
+  DARYAL / LARS       : the narrows and Verkhniy Lars.
+  CHMI / BALTA        : lower gorge, 200 m AGL.
+  IP                  : gorge mouth north of Balta. Pop.
+  TARGET              : the ELINT cut, ~12 km south of
+                        Beslan. Approximate, not surveyed.
+  EGRESS_W            : the plain west of Vladikavkaz.
+  ARDON / BURON       : up the Ardon on the Transkam.
+  ROKI                : over the pass, into Georgia.
+  MTSKHETA            : let-down for Vaziani.
 
 FREQUENCIES
   Magic AWACS   : 251.000 AM
@@ -165,8 +282,10 @@ FREQUENCIES
 
 NOTES
   Sunset ~18:40 local. The valley will be in shadow before
-  you reach the IP. Broken layer base 2200 m — do not climb
-  through it on the western egress without checking your six.
+  you reach the IP. Broken layer base 2200 m — you descend
+  through it into the Terek on the way in and climb back
+  through it over the Ardon on the way out. Check your six
+  before the second one.
 """
 
     def readme(self) -> str:
@@ -189,18 +308,27 @@ cross to within a few kilometres — good enough for a target area, not for a
 pinpoint. Command wants those radars off the air tonight, before the cloud
 layer thickens overnight.
 
-The only viable ingress is low. `Dodge` flies the Georgian Military Road
-north, drops into the **Daryal Gorge** between Mt Kazbek (5033 m) and the
-eastern ridge, and stays masked until the pop-up. The valley narrows to
+The only viable ingress is the **Georgian Military Road**: north to
+Pasanauri, over the **Jvari Pass** at 2400 m, down the Terek into the
+**Daryal Gorge** between Mt Kazbek (5033 m) and the eastern ridge, and out at
+Balta. As far as the pass the massif itself does the masking and there is no
+reason to be low; below Stepantsminda only the gorge does, and it narrows to
 roughly 3 km in places — pick your line.
 
 ## Mission
 
-Push north out of Vaziani, descend before the foothills, ingress Daryal
-below 1000 m AGL, pop up at the IP south of Beslan, HARM the Big Bird,
-re-attack the Flap Lid and the 54K6 CP. Egress west, then south around the
-western ridges. Do **not** re-cross Daryal on egress — the MiG-29S CAP
+Push north out of Vaziani above the ridges and fast. Cross at Jvari, follow
+the Terek down, and be on the deck by Stepantsminda. Run the gorge to its
+mouth north of Balta, pop there, HARM the Big Bird, re-attack the Flap Lid
+and the 54K6 CP. Egress west across the plain, then south up the Ardon and
+over the Roki Pass. Do **not** re-cross Daryal on egress — the MiG-29S CAP
 will be airborne by then.
+
+The climb out of the Ardon mouth is the one deliberately exposed minute of
+the sortie: the plain west of Vladikavkaz is still inside the battery's reach
+and there is no terrain to use until you are into the Ardon. Take it west of
+Vladikavkaz rather than off the target, and take it assuming the radars are
+already down — which is what you were sent to do.
 
 ## Package
 
@@ -215,14 +343,20 @@ ace composition. Carry externals.
 ## Intelligence
 
 No overhead of the site — cloud for two days. What we have is the ELINT cut
-and pattern-of-life, so every position below is approximate and your map
-carries a target area rather than icons. Find the radars with the HTS.
+and pattern-of-life, so every position below is approximate — and the map is
+drawn to say so. The rings are dashed, wider than the systems reach and
+labelled `(approx.)`; so is the pre-planned pair on your HSD. Your `TARGET`
+steerpoint is the same cut rather than a survey, so it puts you over the area,
+not over the launchers. Find the radars with the HTS.
 
 - **SAM (boss):** the S-300PS battery — search radar, tracking radar, command
   post and launchers — reaching out to roughly 75 km against a fast jet at
-  altitude. Their best crew; assume they are alert.
-- **Terminal SHORAD:** assume a point-defence system sited with the battery
-  to close the low block, and guns with it.
+  altitude. That ring is on your map, and it is the whole reason for this
+  routing: it covers every approach above the ridges, which leaves the gorge.
+  Their best crew; assume they are alert.
+- **Terminal SHORAD:** a point-defence system is sited with the battery to
+  close the low block — assessed, ringed on your map at the same confidence as
+  everything else — and assume guns with it.
 - **EWR:** early-warning radar on a ridge near Mozdok feeding the fighters.
 - **Air:** a MiG-29S pair at Mozdok, R-77 shooters, experienced crews. They
   will launch once you are detected south of Beslan.
@@ -231,19 +365,34 @@ carries a target area rather than icons. Find the radars with the HTS.
 
 - Weapons free on the SA-10 cluster and any Russian aircraft that comes up
   against you north of the border.
-- Stay below 1000 m AGL inside Daryal Gorge until the pop-up — Big Bird
+- Stay below 1000 m AGL from Stepantsminda to the gorge mouth — Big Bird
   sees you the moment you crest.
-- Bingo fuel: 2500 lb. RTB Vaziani via the western egress, **not** back
+- Bingo fuel: 2500 lb. RTB Vaziani via the Ardon and Roki, **not** back
   through Daryal.
 
 ## Navigation
 
 - Bullseye (own side): `{bx:.0f}, {by:.0f}` (DCS world m)
-- PUSH: 25 km NNW of Vaziani
-- DESCEND: 60 km N of Vaziani, foothills
-- VALLEY_IN: Stepantsminda / Kazbegi area
-- VALLEY_OUT: just south of Vladikavkaz
-- TARGET: 12 km south of Beslan airfield
+- `PUSH` — climb-out NNW of Vaziani
+- `ARAGVI` — Pasanauri, where the route joins the Georgian Military Road
+- `JVARI` — the Jvari Pass, 2400 m: the only crossing the road takes
+- `KOBI`, `TEREK` — head of the Terek, descending into the gorge
+- `KAZBEGI` — Stepantsminda. On the deck from here
+- `DARYAL`, `LARS`, `CHMI`, `BALTA` — the gorge, 200–570 m above the floor
+- `IP` — the gorge mouth north of Balta. Pop here
+- `TARGET` — the ELINT cut, roughly 12 km south of Beslan airfield —
+  approximate, not a surveyed fix
+- `EGRESS_W` — the plain west of Vladikavkaz
+- `ARDON`, `BURON` — up the Ardon on the Transkam
+- `ROKI` — over the Roki Pass, into Georgia
+- `MTSKHETA` — let-down at the foot of the Georgian Military Road, where the
+  route joined it on the way out
+
+The heights above are over the *valley floor*. Your kneeboard prints altitudes,
+which is a different and always larger number, and the profile on it clears the
+ground on every leg — including the spurs between waypoints, which the Terek
+bends round four times between Kobi and Balta. Fly the card, not the difference
+between the two.
 
 ## Frequencies
 
@@ -261,8 +410,8 @@ shadow by the time you reach the IP.
 
 **Ace.** Excellent SA-10 + SA-15 + EWR, Excellent MiG-29S CAP, bandits
 2x player flight, R-77 class missiles, AWACS-only support (no tanker, no
-escort, no Weasel wingman), dusk with broken layer, valley-only viable
-ingress, west-only viable egress. One mistake ends the sortie.
+escort, no Weasel wingman), dusk with broken layer, a 180 km gorge-only
+viable ingress, west-only viable egress. One mistake ends the sortie.
 
 ## Win / loss conditions
 
@@ -283,17 +432,24 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         """Assemble the mission by calling each step in package order."""
         self._set_time(m)
         self._set_weather(m)
+        # The overlay comes first because the *flight plan* is built off it:
+        # every steerpoint that refers to the battery refers to the estimate
+        # this will draw, never to the battery. Nothing the player can read —
+        # map, DED, HSD, kneeboard — then carries a position better than the
+        # ELINT cut the briefing admits to.
+        plan = PlanOverlay(m, self.difficulty)
         scene = self._setup_airports(m)
         usa, russia = m.country("USA"), m.country("Russia")
 
         sa10, _tor, _shilkas, _ewr = self._spawn_red_ground(m, russia, scene)
         self._spawn_awacs(m, usa, scene)
         self._spawn_red_intercept(m, russia, scene)
-        player, route = self._spawn_player(m, usa, scene)
+        player, route = self._spawn_player(m, usa, scene, plan=plan)
 
         self._add_end_triggers(m, sa10=sa10, player=player)
         self._conceal_red(russia)
-        self._draw_plan(m, scene, route=route)
+        briefed_threats = self._draw_plan(m, scene, plan=plan, route=route)
+        self._load_cartridge(m, scene, briefed_threats, plan=plan)
         self._add_briefing(m)
         return scene.overlay.overlay
 
@@ -337,13 +493,20 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         shorad = offset(sa10_site, east_m=-1_200, north_m=-600)
         ewr_pos = offset(mozdok.position, east_m=-8_000, north_m=-6_000)
 
-        # Valley waypoints: Stepantsminda → mid-gorge → Vladikavkaz south.
-        # Caucasus convention: Point(x = north, y = east), Vaziani sits at
-        # (-319065, 903148), Beslan at (-148590, 843668).
-        valley_entry = Point(-225000, 873000, t)
-        valley_mid = Point(-200000, 863000, t)
-        valley_exit = Point(-170000, 851000, t)
-        ip = Point(-158000, 846000, t)
+        # The corridor is terrain, not intelligence: a road, a pass and a river,
+        # all of them on both sides' maps. So it is written down here rather
+        # than derived from the estimate the way `TARGET` is — a point that
+        # refers to the gorge leaks nothing about where the battery is, and the
+        # IP lands at the gorge mouth because that is where the masking stops,
+        # not because it is a chosen distance from the site.
+        ingress = tuple(
+            _Leg(name, Point.from_latlng(LatLng(lat, lng), t), agl)
+            for name, lat, lng, agl in _CORRIDOR
+        )
+        egress = tuple(
+            _Leg(name, Point.from_latlng(LatLng(lat, lng), t), agl)
+            for name, lat, lng, agl in _EGRESS
+        )
 
         awacs_anchor = offset(vaziani.position, east_m=-25_000, north_m=15_000)
         intrusion_center = offset(beslan.position, east_m=0, north_m=-8_000)
@@ -355,10 +518,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             sa10_site=sa10_site,
             shorad=shorad,
             ewr_pos=ewr_pos,
-            valley_entry=valley_entry,
-            valley_mid=valley_mid,
-            valley_exit=valley_exit,
-            ip=ip,
+            ingress=ingress,
+            egress=egress,
             awacs_anchor=awacs_anchor,
             intrusion_center=intrusion_center,
             overlay=load_scene("caucasus"),
@@ -504,8 +665,10 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             frequency=251,
         )
 
-    def _spawn_player(self, m: Mission, usa: Country, scene: _Scene):
-        """Dodge F-16C-50 from Vaziani, hot ramp; valley ingress + western egress."""
+    def _spawn_player(
+        self, m: Mission, usa: Country, scene: _Scene, *, plan: PlanOverlay
+    ):
+        """Dodge F-16C-50 from Vaziani, hot ramp; gorge ingress, Ardon egress."""
         player = m.flight_group_from_airport(
             country=usa,
             name="Dodge",
@@ -532,53 +695,80 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             ],
         )
 
-        t = self._terrain
-        v = scene.vaziani.position
-
-        push = offset(v, east_m=-8_000, north_m=25_000)
-        descend = offset(v, east_m=-13_000, north_m=60_000)
-        egress_w = Point(-165000, 815000, t)
-        egress_s = Point(-240000, 830000, t)
+        overlay = scene.overlay.overlay
+        ingress = self._route_altitudes(scene.ingress, overlay)
+        egress = self._route_altitudes(scene.egress, overlay)
 
         player.add_runway_waypoint(scene.vaziani)
-        player.add_waypoint(push, altitude=3000, speed=700, name="PUSH")
-        player.add_waypoint(descend, altitude=1500, speed=670, name="DESCEND")
-        player.add_waypoint(
-            scene.valley_entry, altitude=800, speed=630, name="VALLEY_IN"
-        )
-        player.add_waypoint(
-            scene.valley_mid, altitude=700, speed=630, name="VALLEY_MID"
-        )
-        player.add_waypoint(
-            scene.valley_exit, altitude=800, speed=630, name="VALLEY_OUT"
-        )
-        player.add_waypoint(scene.ip, altitude=600, speed=670, name="IP")
-        # The target steerpoint marks the SA-10 site on the ground; the pop
-        # altitude is flown off the IP leg above, not written into the target.
+        for leg, altitude in ingress:
+            player.add_waypoint(
+                leg.position,
+                altitude=altitude,
+                speed=_TRANSIT_SPEED_KPH if altitude > 2_500 else _GORGE_SPEED_KPH,
+                name=leg.name,
+            )
+        # The target steerpoint marks where the battery is *assessed* to be —
+        # `plan.estimate`, the same point the map rings and the HSD carries —
+        # not where it is. This mission hid every Russian icon, drew its S-300
+        # as a vague area and then wrote this steerpoint on the launchers to
+        # within 170 m, which the player reads out of the DED before taxiing:
+        # the whole reveal policy was undone by the one channel it never
+        # looked at. Finding the radars inside the ELINT cut is the sortie, and
+        # that is what the HTS and the HARM are aboard for.
+        # The pop altitude is flown off the IP leg above, not written here.
+        target, _ = plan.estimate(scene.sa10_site, radius=_SA10_RING_M)
         waypoints.add_ground_waypoint(
             player,
-            scene.sa10_site,
+            target,
             overlay=scene.overlay.overlay,
             speed=700,
             name="TARGET",
         )
-        # Egress: west, then south around the western ridges. Do NOT re-cross Daryal.
-        player.add_waypoint(egress_w, altitude=1500, speed=740, name="EGRESS_W")
-        player.add_waypoint(egress_s, altitude=4500, speed=780, name="EGRESS_S")
+        # Egress: west off the target, then south up the Ardon and over the
+        # Roki Pass. Do NOT re-cross Daryal — the MiG pair is in by then.
+        for leg, altitude in egress:
+            player.add_waypoint(
+                leg.position, altitude=altitude, speed=_EGRESS_SPEED_KPH, name=leg.name
+            )
         player.add_runway_waypoint(scene.vaziani)
         player.land_at(scene.vaziani)
         route = [
-            push,
-            descend,
-            scene.valley_entry,
-            scene.valley_mid,
-            scene.valley_exit,
-            scene.ip,
-            scene.sa10_site,
-            egress_w,
-            egress_s,
+            *(leg.position for leg, _ in ingress),
+            target,
+            *(leg.position for leg, _ in egress),
         ]
         return player, route
+
+    def _route_altitudes(
+        self, legs: tuple[_Leg, ...], overlay: MapOverlay
+    ) -> list[tuple[_Leg, float]]:
+        """Turn each leg's height-above-ground into an altitude that clears rock.
+
+        pydcs waypoint altitudes are metres **AMSL**, and on this map that is
+        the whole difficulty: the gorge floor is 800–2400 m and the walls run to
+        3700, so a plausible-looking "700 m through the valley" is two and a
+        half kilometres of mountain. This mission shipped exactly that. Stating
+        the height above the ground and reading the elevation under each point
+        is the half of the fix that is obvious.
+
+        The other half is that DCS ramps linearly between two waypoints, so two
+        points that each clear their own valley floor still draw a chord through
+        the spur the river bends around — which is what the Terek does four
+        times between Kobi and Balta. `waypoints.clear_terrain` checks the legs
+        as well as the points and lifts the cheaper end of any that would hit,
+        so the descent stays a descent and only the ramps that needed it move.
+        """
+        positions = [leg.position for leg in legs]
+        altitudes = waypoints.clear_terrain(
+            positions,
+            [
+                waypoints.ground_elevation_m(overlay, leg.position) + leg.agl_m
+                for leg in legs
+            ],
+            overlay=overlay,
+            clearance_m=_LEG_CLEARANCE_M,
+        )
+        return list(zip(legs, altitudes))
 
     # -- F10 map briefing ---------------------------------------------------
 
@@ -590,18 +780,82 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         """
         conceal_country(russia)
 
-    def _draw_plan(self, m: Mission, scene: _Scene, *, route: list[Point]) -> None:
-        """Paint the plan on the F10 map (ace: friendly plan + a vague threat zone).
+    def _draw_plan(
+        self, m: Mission, scene: _Scene, *, plan: PlanOverlay, route: list[Point]
+    ) -> list[dtc.ThreatPoint]:
+        """Paint the plan on the F10 map (ace: the ELINT cut, drawn as a cut).
 
-        Ace reveals no enemy positions. The low Daryal ingress is the whole
-        point of the plan, so the route is drawn precisely; the SA-10 shows
-        only as a vague target area and the MiG CAP as a coarse zone.
+        Ace withholds the *fix*, not the site: every ring here is drawn several
+        kilometres off truth, wider than the system reaches, dashed and
+        labelled "(approx.)" — which is exactly what the Intelligence section
+        claims to have, two days of cloud and an ELINT cut. The target area and
+        the S-300 ring come from one estimate, so the map cannot put the
+        battery in two places.
+
+        Drawing the S-300's envelope is what makes the plan legible: it covers
+        every approach above the ridgelines, and the low run up Daryal stops
+        looking like an eccentric routing choice and starts looking like the
+        only way in. The MiG CAP stays a `threat_area` — a fighter pair is not
+        an emplaced envelope.
+
+        Returns the two emplaced systems as HSD threat points. The EWR is not
+        among them: a search radar has no envelope to fly around.
         """
-        plan = PlanOverlay(m, self.difficulty)
         plan.objective(scene.sa10_site, "TARGET — SA-10", radius=8_000.0)
         plan.route(route, "Dodge ingress (Daryal)")
         plan.waypoint_label(scene.awacs_anchor, "Magic AWACS")
+        briefed = [
+            *dtc.briefed(
+                plan.threat(
+                    scene.sa10_site,
+                    radius=_SA10_RING_M,
+                    label="SA-10",
+                    icon=StandardIcon.AirDefense,
+                ),
+                dtc.SA_10,
+                label="SA-10",
+            ),
+            *dtc.briefed(
+                plan.threat(
+                    scene.shorad,
+                    radius=_TOR_RING_M,
+                    label="SA-15 (point defence)",
+                    icon=StandardIcon.AirDefense,
+                ),
+                dtc.SA_15,
+                label="SA-15",
+            ),
+        ]
+        plan.threat(
+            scene.ewr_pos, radius=4_000.0, label="EWR", icon=StandardIcon.SearchRadar
+        )
         plan.threat_area(scene.intrusion_center, 30_000.0, "MiG-29S CAP — vicinity")
+        return briefed
+
+    def _load_cartridge(
+        self,
+        m: Mission,
+        scene: _Scene,
+        points: list[dtc.ThreatPoint],
+        *,
+        plan: PlanOverlay,
+    ) -> None:
+        """Put the assessed envelopes on `Dodge`'s HSD, where the map drew them.
+
+        Ace used to load nothing, which sounded right for a picture this thin
+        and was not: the player got the battery's position anyway, out of a
+        target steerpoint no reveal policy had touched. Two deliberately
+        imprecise rings in the cockpit are both more honest and more use — they
+        are the same wrong-by-kilometres claim the F10 map makes, carried where
+        the player can see it with their head in the pit.
+
+        The same cartridge carries the rest of the plan the F10 map shows: the
+        flight's own route and the plan's marks as steerpoints, its lines as the
+        HSD's GEO lines. The map and the cockpit are one briefing, drawn from
+        one set of positions.
+        """
+        dtc.arm_hsd_threats(m, points, overlay=scene.overlay.overlay)
+        dtc.arm_plan(m, plan, overlay=scene.overlay.overlay)
 
     # -- triggers and briefing ----------------------------------------------
 

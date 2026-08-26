@@ -11,11 +11,19 @@ bandits' R-27ER / R-77 have the reach.
 No tanker, no escort, no Weasel — `Dodge` is alone tonight. F-16C internal
 fuel with two wing tanks just covers the sortie; manage bingo aggressively.
 
-Composition (difficulty: ace):
-  - 4x Russian Su-27, Skill Excellent, R-27ER class, Sochi-Adler,
-    intercept on an Abkhaz coastal intrusion zone.
-  - 2x Russian MiG-29S, Skill Excellent, R-77 / R-27 class, Gudauta,
-    reinforcement on a closer (north-of-Sukhumi) intrusion zone.
+The bandit count scales with the number of player slots, and it is scaled off
+the **magazine** rather than off taste — see `_plan_bandits`. What is tasked
+scales with it too: the frag is the Sochi element, and the Gudauta
+reinforcement is a threat to beat rather than a target list, so the mission
+never asks for more kills than the flight is carrying missiles for.
+
+Composition (difficulty: ace, sized per player slot):
+  - 2x Russian Su-27 per player jet (one four-ship, plus elements as slots
+    are added), Skill Excellent, R-27ER class, Sochi-Adler, intercept on an
+    Abkhaz coastal intrusion zone. **This element is the tasked kill.**
+  - Russian MiG-29S reinforcement out of Gudauta — a section, one airframe
+    per player jet and never fewer than two — Skill Excellent, R-77 / R-27
+    class, on a closer (north-of-Sukhumi) intrusion zone. Not a tasked kill.
   - SA-6: 1x Kub 1S91 (Snow Drum) SR/TR + 2x Kub 2P25 launchers on a
     coastal ridge north of Sukhumi (Skill Excellent). Terminal SHORAD
     denies any push below ~4 km AGL over the AO.
@@ -35,28 +43,131 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from dcs import action, condition, planes, task, templates, triggers, vehicles
+from dcs import condition, planes, task, templates, vehicles
 from dcs.country import Country
+from dcs.drawing.icon import StandardIcon
 from dcs.mapping import Point
 from dcs.mission import Mission, StartType
 from dcs.terrain.caucasus.caucasus import Caucasus
 from dcs.terrain.terrain import Airport
+from dcs.triggers import TriggerZoneCircular
 from dcs.unit import Skill
-from dcs.unitgroup import VehicleGroup
+from dcs.unitgroup import FlyingGroup, VehicleGroup
 
-from dcs_mission_creator.core import air_defense as ad, triggers as mission_triggers
+from dcs_mission_creator.core import (
+    air_defense as ad,
+    dtc,
+    triggers as mission_triggers,
+)
 from dcs_mission_creator.core.cli import run_cli
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.map_draw import PlanOverlay
 from dcs_mission_creator.core.mission_builder import MissionBuilder
 from dcs_mission_creator.core.mission_kit import arm, mark_clients, offset, set_skill
 from dcs_mission_creator.core.placement import load_scene
+from dcs_mission_creator.core.routing import ThreatRing, avoid_threats
 from dcs_mission_creator.core.tasking import apply_ai_difficulty
 from dcs_mission_creator.core.tts import VoiceSynth
 from dcs_mission_creator.core.visibility import conceal_country
 from dcs_mission_creator.core.weather import Weather, Wind
 from dcs_mission_creator.map_overlay.query import MapOverlay
 from dcs_mission_creator.map_overlay.scene import TacticalScene
+
+# -- force balance ------------------------------------------------------------
+#
+# The bandit count is derived from the player flight's magazine, not chosen by
+# taste. An F-16C-50 with two wing tanks has exactly six air-to-air stations:
+# 1/2/8/9 and 3/7. Stations 4 and 6 are the fuel and accept no missile at all
+# (checked against the `PylonN` tables and against the game's own
+# `CoreMods/aircraft/F-16C/UnitPayloads/F-16C_50.lua`), so six is a ceiling and
+# not a choice — there is no loadout that buys more shots without giving up the
+# range this sortie needs.
+#
+# Against Skill.Excellent Su-27 / MiG-29S the planning factor is two shots per
+# kill, so one player jet is worth three kills. Only two of them are ever
+# *tasked*: the Sochi CAP element. The third pays for the Gudauta
+# reinforcement, which the frag treats as a threat to survive rather than as a
+# target list — which is why `_add_end_triggers` wins on the CAP element alone.
+_MISSILES_PER_JET = 6
+_SHOTS_PER_KILL = 2
+_KILLS_PER_JET = _MISSILES_PER_JET // _SHOTS_PER_KILL
+_TASKED_KILLS_PER_JET = 2
+_MAX_PLANES_PER_GROUP = 4  # DCS caps a plane group at four airframes.
+
+_SPOKEN = {
+    1: "one",
+    2: "two",
+    3: "three",
+    4: "four",
+    5: "five",
+    6: "six",
+    7: "seven",
+    8: "eight",
+}
+
+
+def _split_flights(total: int) -> tuple[int, ...]:
+    """Split `total` airframes into DCS-legal flights (four at most), biggest first.
+
+    A four-ship trailed by a single ship is neither realistic nor useful — the
+    lone jet dies first and its `GroupDead` gates a win condition on one
+    airframe — so a would-be remainder of one is taken out of the flight ahead
+    of it instead.
+    """
+    sizes: list[int] = []
+    left = total
+    while left > 0:
+        take = min(left, _MAX_PLANES_PER_GROUP)
+        if left - take == 1:
+            take -= 1
+        sizes.append(take)
+        left -= take
+    return tuple(sizes)
+
+
+@dataclass(frozen=True)
+class _BanditPlan:
+    """How many bandits go up, and in what flights, for a given player count."""
+
+    su27: tuple[int, ...]
+    mig29: tuple[int, ...]
+
+    @property
+    def su27_total(self) -> int:
+        return sum(self.su27)
+
+    @property
+    def mig29_total(self) -> int:
+        return sum(self.mig29)
+
+    @property
+    def total(self) -> int:
+        return self.su27_total + self.mig29_total
+
+
+def _plan_bandits(players: int) -> _BanditPlan:
+    """Size both bandit elements off the player flight's missile count.
+
+    Tasked kills are `_TASKED_KILLS_PER_JET` per jet (four missiles of the six);
+    whatever the magazine still buys goes to the reinforcement, floored at a
+    pair because Gudauta putting up a single ship is not a section. For one
+    slot that is two Su-27 tasked and a MiG-29S pair behind them; for four it
+    is eight tasked and four behind.
+    """
+    tasked = players * _TASKED_KILLS_PER_JET
+    spare_kills = players * _KILLS_PER_JET - tasked
+    return _BanditPlan(
+        su27=_split_flights(tasked),
+        mig29=_split_flights(max(2, spare_kills)),
+    )
+
+
+#: The Kub's briefed reach, before the difficulty coarsens it. One number, and
+#: every channel downstream of `PlanOverlay.estimate` shares the single claim it
+#: turns into: the ring `_draw_plan` paints, the pre-planned threat on the HSD,
+#: the envelope the sweep stations are sited outside of and the route bends
+#: around.
+_SA6_RING_M = 25_000.0
 
 
 @dataclass
@@ -78,6 +189,7 @@ class _Scene:
     awacs_anchor: Point
     su27_intrusion: Point
     mig29_intrusion: Point
+    threats: tuple[ThreatRing, ...]
     overlay: TacticalScene
 
 
@@ -90,11 +202,15 @@ class AbkhazSweep(MissionBuilder):
         super().__init__(players=players)
         self._terrain = Caucasus()
         self._voice = VoiceSynth()
+        self._bandits = _plan_bandits(self.players)
 
     # -- in-game and README briefings ---------------------------------------
 
     def _in_game_briefing(self) -> str:
         bx, by = self._terrain.bullseye_blue["x"], self._terrain.bullseye_blue["y"]
+        su = _SPOKEN[self._bandits.su27_total]
+        mig = _SPOKEN[self._bandits.mig29_total]
+        shots = _MISSILES_PER_JET * self.players
         return f"""ABKHAZ SWEEP — Caucasus, 18 Jul 2026, 05:30 local (dawn)
 ========================================================
 SITUATION
@@ -110,16 +226,27 @@ SITUATION
 MISSION (Dodge — F-16C-50, Batumi, hot ramp)
   - Push north up the Black Sea coast, take a sweep
     station offshore between Sukhumi and Gudauta.
-  - Sanitize the airspace — kill the Su-27 four-ship out
-    of Sochi-Adler, then the MiG-29S reinforcement out
-    of Gudauta.
+  - Break the Sochi-Adler element. That element is the
+    frag: {su} Su-27. The MiG-29S section Gudauta sends
+    once you are committed is a threat to beat, not a
+    target list — nobody expects one load of missiles to
+    clear the whole corridor.
   - Stay ABOVE 4500 m over the AO — SA-6 on the coastal
     ridge north of Sukhumi denies the low block.
   - RTB Batumi. Divert: Senaki-Kolkhi.
 
+WEAPONS
+  Four AIM-120C, two AIM-9X, ALQ-184 on the centreline —
+  {shots} shots for the flight, and nothing to rearm from.
+  Against crews this good plan two per bandit: that pays
+  for the Sochi element and leaves you something for the
+  section out of Gudauta. Come home on a dry magazine,
+  there is nobody to hand the fight to.
+
 PACKAGE
   Dodge 1 (you) : F-16C-50, Batumi, hot ramp, CAP frag.
-                  Two wing tanks, AIM-120C / AIM-9X.
+                  Two wing tanks, AIM-120C / AIM-9X,
+                  ALQ-184.
   Magic         : E-3A AWACS, 251.000 AM, Black Sea
                   race-track. No tanker, no escort, no
                   Weasel wingman. You are alone tonight.
@@ -129,29 +256,37 @@ INTELLIGENCE
   morning and nothing airborne up there tonight — what
   follows is assessment, not fact. Build your own
   picture off Magic and the RWR.
-  Air : Sochi-Adler flies the aggressor syllabus and has
-        been putting up four-ships. Expect that, with the
-        long-burn R-27 variant. Gudauta keeps a lighter
-        pair that has reinforced every previous
+  Air : Sochi-Adler flies the aggressor syllabus. Magic's
+        read for tonight is {su} airframes up on the
+        first push, carrying the long-burn R-27 variant.
+        Gudauta keeps a lighter section, assessed at {mig}
+        airframes, that has reinforced every previous
         engagement once we were committed — R-77 shooters.
         Both fields are crewed by their best.
   SAM : A Kub battery is assessed on the coastal ridge
         north of Sukhumi. We have no current fix and it
-        moves, so assume the low block is denied
-        anywhere over the AO, and assume guns with it.
+        moves. The ring on your map is that assessment,
+        not a fix — it is drawn wide and it is in the
+        wrong place by some kilometres. Assume the low
+        block is denied anywhere over the AO, and assume
+        guns with it.
   EWR : Early-warning radar covers the whole corridor
-        from inland. You will be seen from the coast in,
-        and both fields will be vectored onto you.
+        from inland. Both sites are marked approximately.
+        You will be seen from the coast in, and both
+        fields will be vectored onto you.
 
 ROE / FRAGS
   - Weapons free on any Russian fighter inside the
     coastal corridor.
+  - The Sochi element is the frag. With it down the
+    corridor is ours and Magic moves — you are cleared
+    home with the Gudauta section still flying.
   - Do NOT descend below 4500 m AGL over the AO — Snow
     Drum will see you the moment you drop into its
     envelope.
   - Bingo fuel: 3500 lb. RTB Batumi direct (divert:
     Senaki-Kolkhi). Do not chase north of Gudauta on
-    bingo.
+    bingo or on an empty magazine.
 
 NAV
   Bullseye (own side) : {bx:.0f}, {by:.0f} (DCS world m)
@@ -166,8 +301,8 @@ FREQUENCIES
 
 NOTES
   Sunrise ~05:25 local. Sun comes up over the mountains
-  to the east — the Su-27 four-ship will be pushing south
-  out of Sochi with the sun behind them. Manage your
+  to the east — the Sochi element will be pushing south
+  with the sun behind them. Manage your
   aspect before commit. Scattered cumulus base 2400 m,
   600 m thick — bandits can use the layer to mask their
   intercept geometry.
@@ -175,6 +310,10 @@ NOTES
 
     def readme(self) -> str:
         bx, by = self._terrain.bullseye_blue["x"], self._terrain.bullseye_blue["y"]
+        su_total = self._bandits.su27_total
+        mig_total = self._bandits.mig29_total
+        shots = _MISSILES_PER_JET * self.players
+        slot_s = "" if self.players == 1 else "s"
         return f"""# Abkhaz Sweep
 
 **Theater:** Caucasus
@@ -195,11 +334,13 @@ for first light can ingress unmolested.
 ## Mission
 
 Push north out of Batumi up the Black Sea coast as `Dodge`, take a sweep
-station offshore between Sukhumi and Gudauta, and sanitize the airspace.
-Expect a Su-27 four-ship out of Sochi-Adler on the merge, then a MiG-29S pair
-reinforcing out of Gudauta once you are committed. Stay above 4500 m over the
-AO — the Kub battery assessed on the coastal ridge north of Sukhumi denies the
-low block.
+station offshore between Sukhumi and Gudauta, and break the Sochi-Adler
+element — {su_total} Su-27, and that element is the frag. A MiG-29S section
+out of Gudauta reinforces once you are committed; it is a threat to beat
+rather than a target list, and the corridor counts as opened without it.
+Stay above
+4500 m over the AO — the Kub battery assessed on the coastal ridge north of
+Sukhumi denies the low block.
 
 ## Package
 
@@ -208,35 +349,46 @@ low block.
 | Dodge    | F-16C-50 | Batumi  | Player air-superiority sweep      |
 | Magic    | E-3A     | Batumi  | AWACS, 251.000 AM, Black Sea track|
 
-No tanker, no escort, no Weasel wingman — denied support is part of the
-ace composition. Carry two wing tanks.
+No tanker, no escort, no Weasel wingman — denied support is part of the ace
+composition. Two wing tanks, four AIM-120C, two AIM-9X and an ALQ-184 —
+{shots} shots for the flight, and no way to rearm. That magazine is what the
+frag is sized against; see *Difficulty composition* below.
 
 ## Intelligence
 
 The picture is thin — no overhead since yesterday morning, nothing airborne
-up there tonight. Everything below is assessment. There are no enemy
-positions on your map: build the picture off `Magic`, the RWR and the tally.
+up there tonight. Everything below is assessment, and the marks on your map
+are drawn to match: every enemy ring is wide, dashed and labelled
+`(approx.)`, because that is the confidence behind it. None of them is a fix.
+Treat them as areas to stay out of, not as coordinates — build the real
+picture off `Magic`, the RWR and the tally.
 
-- **Air (primary):** Sochi-Adler flies the aggressor syllabus and has been
-  putting up four-ships of Su-27, carrying the long-burn R-27 variant. Their
-  best crews.
-- **Air (reinforcement):** Gudauta keeps a lighter MiG-29S pair that has
-  reinforced every previous engagement once we were committed — R-77
-  shooters.
+- **Air (primary):** Sochi-Adler flies the aggressor syllabus. `Magic`'s
+  read for tonight is {su_total} Su-27 up on the first push, carrying the
+  long-burn R-27 variant. Their best crews. This element is the tasked kill.
+- **Air (reinforcement):** Gudauta keeps a lighter section, assessed at
+  {mig_total} MiG-29S, that has reinforced every previous engagement once we
+  were committed — R-77 shooters. Beating them is survival, not the frag.
 - **SAM (terminal denial):** a Kub battery is assessed on the coastal ridge
-  north of Sukhumi. No current fix, and it relocates, so assume the low block
-  is denied anywhere over the AO and assume guns are sited with it. That is
-  what forces the fight above 4500 m AGL, where the bandits want it.
-- **EWR:** early-warning radar covers the corridor from inland. You are seen
-  from the coast in, and both fields get vectored onto you.
+  north of Sukhumi. No current fix, and it relocates. The ring on your map and
+  the pre-planned threat on your HSD are both that assessment — same claim,
+  two displays, and neither is where the launchers are standing. Assume the
+  low block is denied anywhere over the AO and assume guns are sited with it.
+  That is what forces the fight above 4500 m AGL, where the bandits want it.
+- **EWR:** early-warning radar covers the corridor from inland, one site
+  behind each field. Both are marked approximately; a search radar has no
+  envelope, so neither carries a ring you could fly around. You are seen from
+  the coast in, and both fields get vectored onto you.
 
 ## ROE
 
 - Weapons free on any Russian fighter inside the coastal corridor.
+- The Sochi element is the frag. With it down the corridor is ours and `Magic`
+  moves — you are cleared home with the Gudauta section still flying.
 - Do **not** descend below 4500 m AGL over the AO — Snow Drum sees you the
   moment you drop into its envelope.
 - Bingo fuel: 3500 lb. RTB Batumi direct (divert: Senaki-Kolkhi). Do not
-  chase north of Gudauta on bingo.
+  chase north of Gudauta on bingo or on an empty magazine.
 
 ## Navigation
 
@@ -260,16 +412,24 @@ behind them over the eastern mountains.
 
 ## Difficulty composition
 
-**Ace.** Excellent Su-27 + MiG-29S, bandits 6 vs player flight (3x for a
-2-ship Dodge, 6x for a single-seat), R-77 / R-27ER class, SA-6 terminal
-denial over the AO forcing the fight high, EWR-fed GCI on both bandit
-flights, AWACS-only support (no tanker, no escort, no Weasel), low sun on
-commit. One mistake ends the sortie.
+**Ace.** Skill Excellent Su-27 and MiG-29S, R-77 / R-27ER class, EWR-fed GCI
+on both bandit elements, SA-6 terminal denial over the AO forcing the fight
+high, AWACS-only support (no tanker, no escort, no Weasel), low sun on commit.
+One mistake ends the sortie.
+
+The opposition is sized off the magazine rather than off taste. An F-16C-50
+with two wing tanks has six air-to-air stations — 4 and 6 are the fuel and
+take no missile — and against Excellent crews the planning factor is two
+shots per kill: three kills per jet, of which two are tasked. At
+{self.players} slot{slot_s} that is **{su_total} Su-27** out of Sochi-Adler as
+the tasked kill, plus **{mig_total} MiG-29S** out of Gudauta as a
+reinforcement you are never required to shoot down.
 
 ## Win / loss conditions
 
-- **Success:** the corridor is swept clean — no Russian fighter left flying
-  between Sukhumi and Gudauta.
+- **Success:** the Sochi-Adler element is destroyed — the corridor is open and
+  `Magic` pushes its track north. Taking the Gudauta section down as well is a
+  clean sweep and is called out, but it is not required.
 - **Failure:** `Dodge` goes down with the corridor still contested.
 
 ## Re-generate
@@ -285,18 +445,20 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         """Assemble the mission by calling each step in package order."""
         self._set_time(m)
         self._set_weather(m)
+        plan = PlanOverlay(m, self.difficulty)
         scene = self._setup_airports(m)
         usa, russia = m.country("USA"), m.country("Russia")
 
         _sa6, _shilkas, _ewr_su, _ewr_mig = self._spawn_red_ground(m, russia, scene)
         self._spawn_awacs(m, usa, scene)
-        su27 = self._spawn_red_su27(m, russia, scene)
-        mig29 = self._spawn_red_mig29(m, russia, scene)
-        player = self._spawn_player(m, usa, scene)
+        su27s = self._spawn_red_su27(m, russia, scene)
+        mig29s = self._spawn_red_mig29(m, russia, scene)
+        player, route = self._spawn_player(m, usa, scene, threats=scene.threats)
 
-        self._add_end_triggers(m, su27=su27, mig29=mig29, player=player)
+        self._add_end_triggers(m, su27s=su27s, mig29s=mig29s, player=player)
         self._conceal_red(russia)
-        self._draw_plan(m, scene)
+        briefed_threats = self._draw_plan(m, scene, plan=plan, route=route)
+        self._load_cartridge(m, scene, briefed_threats, plan=plan)
         self._add_briefing(m)
         return scene.overlay.overlay
 
@@ -342,8 +504,13 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         # EWR sites inland of each bandit base.
         ewr_su27 = offset(sochi.position, east_m=12_000, north_m=4_000)
         ewr_mig29 = offset(gudauta.position, east_m=8_000, north_m=8_000)
-        # Sweep stations sit offshore (west of the coast) just outside the
-        # SA-6 envelope at altitude (player stays above 4500 m).
+        threats = self._threat_rings(sa6_pos=sa6_site)
+        # Sweep stations sit offshore, west of the coast. They are inside the
+        # ring `_draw_plan` paints — at ace that estimate is 34 km wide and 6 km
+        # off truth, and there is no water between Sukhumi and Gudauta outside
+        # it — and that is the mission working as briefed rather than a
+        # contradiction: the Kub's whole footprint covers the AO, which is why
+        # the ROE answers it with 4500 m of altitude instead of with distance.
         push = offset(batumi.position, east_m=-15_000, north_m=40_000)
         station_south = offset(sukhumi.position, east_m=-35_000, north_m=-15_000)
         station_north = offset(sukhumi.position, east_m=-30_000, north_m=25_000)
@@ -367,6 +534,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             awacs_anchor=awacs_anchor,
             su27_intrusion=su27_intrusion,
             mig29_intrusion=mig29_intrusion,
+            threats=threats,
             overlay=load_scene("caucasus"),
         )
 
@@ -434,81 +602,133 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         set_skill(ewr, Skill.Excellent)
         return ewr
 
-    def _spawn_red_su27(self, m: Mission, russia: Country, scene: _Scene):
-        """4x Su-27 out of Sochi-Adler, intercept on Abkhaz coastal zone."""
+    def _spawn_red_su27(
+        self, m: Mission, russia: Country, scene: _Scene
+    ) -> list[FlyingGroup]:
+        """The Sochi-Adler CAP — two Su-27 per player jet, and the tasked kill.
+
+        Sized by `_plan_bandits`, split into DCS-legal flights, all cued off one
+        coastal intrusion zone so the whole element commits together whatever
+        the slot count.
+        """
         zone = m.triggers.add_triggerzone(
             position=scene.su27_intrusion,
             radius=45_000,
             hidden=True,
             name="Su-27 intrusion",
         )
-        ivan = m.intercept_flight(
-            russia,
-            "Ivan",
-            planes.Su_27,
-            airport=scene.sochi,
-            zone=zone,
-            late_activation=True,
-            start_type=StartType.Warm,
-            speed=920,
-            altitude=8000,
-            max_engage_distance=120_000,
-            group_size=4,
-        )
-        set_skill(ivan, Skill.Excellent)
-        apply_ai_difficulty(ivan, self.difficulty)
-        announce = triggers.TriggerOnce(comment="Su-27 launch announcement")
-        announce.add_condition(condition.PartOfCoalitionInZone("blue", zone.id))
-        su27_call = (
-            "Magic, Dodge. Four Sukhoi 27 airborne from Sochi-Adler, "
-            "bearing 180, vectoring on the coast."
-        )
-        announce.add_action(
-            action.MessageToCoalition(
-                action.Coalition.Blue, m.string(su27_call), seconds=15
+        flights = [
+            self._spawn_bandit_flight(
+                m,
+                russia,
+                name="Ivan" if i == 0 else f"Ivan {i + 1}",
+                plane_type=planes.Su_27,
+                airport=scene.sochi,
+                zone=zone,
+                size=size,
+                speed=920,
+                altitude=8000,
+                max_engage_distance=120_000,
             )
+            for i, size in enumerate(self._bandits.su27)
+        ]
+        self._announce_bandits(
+            m,
+            zone,
+            comment="Su-27 launch announcement",
+            text=(
+                f"Magic, Dodge. {_SPOKEN[self._bandits.su27_total].capitalize()} "
+                "Sukhoi 27 airborne from Sochi-Adler, bearing 180, vectoring "
+                "on the coast."
+            ),
         )
-        self._voice.attach_to_coalition(m, announce, su27_call, coalition="blue")
-        m.triggerrules.triggers.append(announce)
-        return ivan
+        return flights
 
-    def _spawn_red_mig29(self, m: Mission, russia: Country, scene: _Scene):
-        """2x MiG-29S out of Gudauta, reinforcement on north-of-Sukhumi zone."""
+    def _spawn_red_mig29(
+        self, m: Mission, russia: Country, scene: _Scene
+    ) -> list[FlyingGroup]:
+        """The Gudauta reinforcement — a section, and never a required kill.
+
+        One airframe per player jet, floored at a pair. It is what the third
+        kill in each jet's magazine pays for, so it exists to be survived; the
+        win condition in `_add_end_triggers` does not name it.
+        """
         zone = m.triggers.add_triggerzone(
             position=scene.mig29_intrusion,
             radius=30_000,
             hidden=True,
             name="MiG-29 intrusion",
         )
-        boris = m.intercept_flight(
+        flights = [
+            self._spawn_bandit_flight(
+                m,
+                russia,
+                name="Boris" if i == 0 else f"Boris {i + 1}",
+                plane_type=planes.MiG_29S,
+                airport=scene.gudauta,
+                zone=zone,
+                size=size,
+                speed=900,
+                altitude=8500,
+                max_engage_distance=100_000,
+            )
+            for i, size in enumerate(self._bandits.mig29)
+        ]
+        self._announce_bandits(
+            m,
+            zone,
+            comment="MiG-29 launch announcement",
+            text=(
+                f"Magic, Dodge. {_SPOKEN[self._bandits.mig29_total].capitalize()} "
+                "MiG-29 airborne from Gudauta, bearing 200, R-77 class, "
+                "committing south."
+            ),
+        )
+        return flights
+
+    def _spawn_bandit_flight(
+        self,
+        m: Mission,
+        russia: Country,
+        *,
+        name: str,
+        plane_type: type[planes.PlaneType],
+        airport: Airport,
+        zone: TriggerZoneCircular,
+        size: int,
+        speed: int,
+        altitude: int,
+        max_engage_distance: int,
+    ) -> FlyingGroup:
+        """One GCI-cued bandit flight at ace skill and ace behaviour."""
+        flight = m.intercept_flight(
             russia,
-            "Boris",
-            planes.MiG_29S,
-            airport=scene.gudauta,
+            name,
+            plane_type,
+            airport=airport,
             zone=zone,
             late_activation=True,
             start_type=StartType.Warm,
-            speed=900,
-            altitude=8500,
-            max_engage_distance=100_000,
-            group_size=2,
+            speed=speed,
+            altitude=altitude,
+            max_engage_distance=max_engage_distance,
+            group_size=size,
         )
-        set_skill(boris, Skill.Excellent)
-        apply_ai_difficulty(boris, self.difficulty)
-        announce = triggers.TriggerOnce(comment="MiG-29 launch announcement")
-        announce.add_condition(condition.PartOfCoalitionInZone("blue", zone.id))
-        mig_call = (
-            "Magic, Dodge. Two MiG-29 airborne from Gudauta, "
-            "bearing 200, R-77 class, committing south."
+        set_skill(flight, Skill.Excellent)
+        apply_ai_difficulty(flight, self.difficulty)
+        return flight
+
+    def _announce_bandits(self, m: Mission, zone, *, comment: str, text: str) -> None:
+        """Magic calls the scramble once, when the element is cued on the player."""
+        mission_triggers.message_to_coalition(
+            m,
+            comment=comment,
+            conditions=(condition.PartOfCoalitionInZone("blue", zone.id),),
+            voice=self._voice,
+            text=text,
+            coalition="blue",
+            seconds=15,
         )
-        announce.add_action(
-            action.MessageToCoalition(
-                action.Coalition.Blue, m.string(mig_call), seconds=15
-            )
-        )
-        self._voice.attach_to_coalition(m, announce, mig_call, coalition="blue")
-        m.triggerrules.triggers.append(announce)
-        return boris
 
     # -- blue side ----------------------------------------------------------
 
@@ -528,7 +748,14 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             frequency=251,
         )
 
-    def _spawn_player(self, m: Mission, usa: Country, scene: _Scene):
+    def _spawn_player(
+        self,
+        m: Mission,
+        usa: Country,
+        scene: _Scene,
+        *,
+        threats: tuple[ThreatRing, ...],
+    ):
         """Dodge F-16C-50 from Batumi, hot ramp; sweep stations offshore."""
         player = m.flight_group_from_airport(
             country=usa,
@@ -540,33 +767,74 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             group_size=self.players,
         )
         mark_clients(player)
+        # ED's own "AIM-120C*4, AIM-9X*2, FUEL*2, ECM" load, station for station:
+        # in a pure air-to-air fit the AMRAAM go outboard-in on 1/2/8/9 and the
+        # Sidewinders sit on 3/7 — the reverse of the SEAD fit, where 3/7 are the
+        # HARM rails and the AIM-9X move out to 2/8. Six shots is the ceiling
+        # here (4 and 6 are fuel and take no missile), which is what
+        # `_plan_bandits` sizes the opposition against. The centreline was empty;
+        # every ED two-tank A/A payload has an ALQ-184 there, and a jet going
+        # into R-27ER and Snow Drum country wants it.
         arm(
             player,
             planes.F_16C_50,
             [
                 (1, "AIM_120C_AMRAAM___Active_Radar_AAM"),
-                (2, "AIM_9X_Sidewinder_IR_AAM"),
-                (3, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+                (2, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+                (3, "AIM_9X_Sidewinder_IR_AAM"),
                 (4, "Fuel_tank_370_gal"),
+                (5, "ALQ_184_Long"),
                 (6, "Fuel_tank_370_gal"),
-                (7, "AIM_120C_AMRAAM___Active_Radar_AAM"),
-                (8, "AIM_9X_Sidewinder_IR_AAM"),
+                (7, "AIM_9X_Sidewinder_IR_AAM"),
+                (8, "AIM_120C_AMRAAM___Active_Radar_AAM"),
                 (9, "AIM_120C_AMRAAM___Active_Radar_AAM"),
             ],
         )
 
         player.add_runway_waypoint(scene.batumi)
-        player.add_waypoint(scene.push, altitude=6000, speed=800, name="PUSH")
-        player.add_waypoint(
-            scene.station_south, altitude=7500, speed=780, name="STATION_SOUTH"
-        )
-        player.add_waypoint(
-            scene.station_north, altitude=7500, speed=780, name="STATION_NORTH"
-        )
-        player.add_waypoint(scene.egress, altitude=5000, speed=820, name="EGRESS")
+        route = self._route_sweep(player, scene, threats=threats)
         player.add_runway_waypoint(scene.batumi)
         player.land_at(scene.batumi)
-        return player
+        return player, route
+
+    def _route_sweep(
+        self,
+        player,
+        scene: _Scene,
+        *,
+        threats: tuple[ThreatRing, ...],
+    ) -> list[Point]:
+        """PUSH → both sweep stations → EGRESS, bent clear of the assessed Kub.
+
+        The stations were already sited outside the envelope, but the run home
+        was not: straight from the northern station to the coast-out point the
+        leg passed 18.6 km abeam the ridge, well inside a Kub's reach, so the
+        one line on the plan flown with the fight over and the fuel state low
+        was the one line inside the ring the briefing warns about. Routing it
+        puts the bend on the map, the kneeboard and the flight plan at once.
+
+        Returns the flown points so `_draw_plan` paints the route that exists
+        rather than the four anchors it was planned from.
+        """
+        legs = (
+            (scene.push, "PUSH", 6000, 800),
+            (scene.station_south, "STATION_SOUTH", 7500, 780),
+            (scene.station_north, "STATION_NORTH", 7500, 780),
+            (scene.egress, "EGRESS", 5000, 820),
+        )
+        first, name, altitude, speed = legs[0]
+        player.add_waypoint(first, altitude=altitude, speed=speed, name=name)
+        route = [first]
+        for (start, *_), (end, name, altitude, speed) in zip(legs, legs[1:]):
+            bends = avoid_threats(start, end, threats, clearance_m=6_000.0)[1:-1]
+            for i, pt in enumerate(bends, start=1):
+                player.add_waypoint(
+                    pt, altitude=altitude, speed=speed, name=f"{name}-{i}"
+                )
+                route.append(pt)
+            player.add_waypoint(end, altitude=altitude, speed=speed, name=name)
+            route.append(end)
+        return route
 
     # -- F10 map briefing ---------------------------------------------------
 
@@ -578,41 +846,138 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         """
         conceal_country(russia)
 
-    def _draw_plan(self, m: Mission, scene: _Scene) -> None:
-        """Paint the plan on the F10 map (ace: friendly plan + a vague threat zone).
+    def _threat_rings(self, *, sa6_pos: Point) -> tuple[ThreatRing, ...]:
+        """The Kub's real envelope at its real position, for the flight plan.
 
-        Ace reveals no enemy positions — the player builds the picture off RWR,
-        Magic, and the tally. Only the sweep geometry and one coarse threat
-        area (the SA-6 ridge / bandit CAP off Sukhumi) are drawn.
+        Deliberately truth rather than `plan.estimate`: this is what decides
+        whether the route gets shot at, and the drawn ring is offset by design,
+        so planning around the drawing would bend the sweep away from empty sea
+        and leave it exposed where the launchers are. The estimate's job is to
+        tell the player something; this one's is to keep the plan flyable.
+
+        Only the assessed Kub is here. The EWRs cannot shoot, so nothing needs
+        to route around them; the Shilkas ride inside this ring and add nothing
+        to it; and the bandit CAP is airborne — a squadron's race-track is not
+        an envelope you can plan a detour around.
+
+        It is what makes the briefing's own claims true. The egress leg used to
+        pass 18.6 km abeam the ridge, well inside a Kub, on the one line flown
+        with the fight over and the fuel low.
         """
-        plan = PlanOverlay(m, self.difficulty)
+        return (ThreatRing(sa6_pos, _SA6_RING_M, "SA-6"),)
+
+    def _draw_plan(
+        self, m: Mission, scene: _Scene, *, plan: PlanOverlay, route: list[Point]
+    ) -> list[dtc.ThreatPoint]:
+        """Paint the plan on the F10 map (ace: the ground picture, badly located).
+
+        Ace does not withhold the sites any more, it withholds the *fix*: every
+        ring here is drawn several kilometres off truth and wider than the
+        system really reaches, dashed rather than solid, and labelled
+        "(approx.)". That is what the Intelligence section already claims to
+        have — a battery assessed on a ridge with no current fix — and it is a
+        picture the player still cannot fly a tight route through.
+
+        The bandit CAP stays a `threat_area`: it is airborne, and a race-track
+        two fighter squadrons fly is not an envelope anybody emplaced.
+
+        Returns the rings as HSD threat points, so the cockpit carries the same
+        imprecise claim as the map.
+
+        Takes the overlay rather than building one so that any other step
+        needing this mission's claim about a site — a steerpoint, a cartridge
+        point — gets the same memoised estimate rather than a second guess.
+        """
         ao = scene.station_south.midpoint(scene.station_north)
         plan.objective(ao, "Sweep AO", radius=8_000.0)
-        plan.route(
-            [scene.push, scene.station_south, scene.station_north, scene.egress],
-            "Dodge sweep",
-        )
+        plan.route(route, "Dodge sweep")
         plan.waypoint_label(scene.awacs_anchor, "Magic AWACS")
-        plan.threat_area(
-            scene.sukhumi.position, 28_000.0, "SA-6 + bandit CAP — vicinity"
+        briefed = dtc.briefed(
+            plan.threat(
+                scene.sa6_site,
+                radius=_SA6_RING_M,
+                label="SA-6",
+                icon=StandardIcon.AirDefense,
+            ),
+            dtc.SA_6,
+            label="SA-6",
         )
+        # The EWRs are on the map for the same reason the briefing names them —
+        # the player is seen from the coast in and should know from where — but
+        # a search radar has no envelope, so neither one reaches the cartridge.
+        for pos, name in (
+            (scene.ewr_su27, "EWR (Sochi)"),
+            (scene.ewr_mig29, "EWR (Gudauta)"),
+        ):
+            plan.threat(pos, radius=4_000.0, label=name, icon=StandardIcon.SearchRadar)
+        plan.threat_area(scene.sukhumi.position, 28_000.0, "Bandit CAP — vicinity")
+        return briefed
+
+    def _load_cartridge(
+        self,
+        m: Mission,
+        scene: _Scene,
+        points: list[dtc.ThreatPoint],
+        *,
+        plan: PlanOverlay,
+    ) -> None:
+        """Put the assessed Kub ring on `Dodge`'s HSD, at the position the map drew.
+
+        Ace used to load nothing, which sounded like the right answer for a
+        thin picture and was not: the player still got the position, just via a
+        steerpoint nobody had applied the reveal policy to. An approximate ring
+        in the cockpit is both more honest and more useful — it is the same
+        wrong-by-kilometres claim the F10 map makes, carried where the player
+        can see it heads-down.
+
+        The same cartridge carries the rest of the plan the F10 map shows: the
+        flight's own route and the plan's marks as steerpoints, its lines as the
+        HSD's GEO lines. The map and the cockpit are one briefing, drawn from
+        one set of positions.
+        """
+        dtc.arm_hsd_threats(m, points, overlay=scene.overlay.overlay)
+        dtc.arm_plan(m, plan, overlay=scene.overlay.overlay)
 
     # -- triggers and briefing ----------------------------------------------
 
-    def _add_end_triggers(self, m: Mission, *, su27, mig29, player) -> None:
-        """Success when both bandit flights dead; failure when Dodge dies first."""
+    def _add_end_triggers(
+        self,
+        m: Mission,
+        *,
+        su27s: list[FlyingGroup],
+        mig29s: list[FlyingGroup],
+        player,
+    ) -> None:
+        """Success on the Sochi element; failure when Dodge dies first.
+
+        The frag is deliberately not "every bandit dead". A single-slot Dodge
+        carries six missiles and no rearm, and asking it to clear the whole
+        corridor is asking for kills the jet is not carrying — so success is
+        the element that actually blocks the AWACS track, and the Gudauta
+        section is scored as a bonus in a second call rather than as a
+        requirement.
+        """
         mission_triggers.message_to_all(
             m,
-            comment="Bandits all dead",
-            conditions=(
-                condition.GroupDead(su27.id),
-                condition.GroupDead(mig29.id),
-            ),
+            comment="Sochi element broken",
+            conditions=tuple(condition.GroupDead(g.id) for g in su27s),
             voice=self._voice,
             text=(
-                "Magic: picture is clean, nothing flying between Sukhumi and "
-                "Gudauta. Dodge, return to base, Batumi. Magic is pushing the "
-                "track north."
+                "Magic: Sochi's element is off the board. That is the corridor "
+                "open — Magic is pushing the track north. Dodge, disengage "
+                "south when you are ready, Batumi."
+            ),
+            seconds=25,
+        )
+
+        mission_triggers.message_to_all(
+            m,
+            comment="Corridor swept clean",
+            conditions=tuple(condition.GroupDead(g.id) for g in su27s + mig29s),
+            voice=self._voice,
+            text=(
+                "Magic: Gudauta's section is down as well. Nothing is flying "
+                "between Sukhumi and Gudauta. That is a clean sweep, Dodge."
             ),
             seconds=25,
         )
@@ -634,8 +999,9 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         m.set_description_text(self._in_game_briefing())
         m.set_description_bluetask_text(
             "Sweep the airspace off the Abkhaz coast between Sukhumi and "
-            "Gudauta. Kill the Russian Su-27 four-ship out of Sochi-Adler "
-            "and the MiG-29S reinforcement out of Gudauta. Stay above "
+            "Gudauta. Break the Russian Su-27 element out of Sochi-Adler — "
+            "that element is the frag. The MiG-29S reinforcement out of "
+            "Gudauta is a threat to beat, not a required kill. Stay above "
             "4500 m AGL over the AO — the SA-6 on the coastal ridge north "
             "of Sukhumi denies the low block. RTB Batumi. No tanker, no "
             "escort."

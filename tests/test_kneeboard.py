@@ -412,6 +412,96 @@ def test_a_table_row_keeps_its_columns() -> None:
     assert row == "x         1"
 
 
+def test_a_split_table_repeats_its_headers_and_numbers_the_parts() -> None:
+    """A route continued overleaf has to say so, and say what its columns are."""
+    page = Page(title="Test")
+    page.section("route")
+    page.table(
+        (Column("#", 4), Column("NAME", 20)), [(str(i), "x") for i in range(200)]
+    )
+    pages = page.parts()
+    assert len(pages) > 1
+    headings = [
+        block.text for part in pages for block in part if getattr(block, "bold", False)
+    ]
+    assert headings[0] == f"ROUTE (1 OF {len(pages)})"
+    assert headings.count("#    NAME") == len(pages)
+    assert f"ROUTE ({len(pages)} OF {len(pages)})" in headings
+
+
+def test_an_unsplit_table_keeps_its_bare_heading() -> None:
+    page = Page(title="Test")
+    page.section("route")
+    page.table((Column("#", 4),), [("1",)])
+    (part,) = page.parts()
+    assert [b.text for b in part if getattr(b, "bold", False)] == ["ROUTE", "#"]
+
+
+# -- the route card ----------------------------------------------------------
+
+
+def _card_text(m: Mission, flight, **kwargs) -> list[str]:
+    from dcs_mission_creator.core.kneeboard import pages as page_content
+
+    page = page_content.flight_plan_page(m, flight, title="Test", **kwargs)
+    return [getattr(block, "text", "") for block in page.blocks]
+
+
+def test_the_route_carries_the_coordinates_itself(mission: Mission) -> None:
+    """One table per waypoint: the steerpoint list used to repeat the route."""
+    lines = _card_text(mission, _viper(mission))
+    assert "STEERPOINTS" not in lines
+    station = next(line for line in lines if "STATION" in line)
+    assert flightplan.ddm(_viper_station(mission)) in station
+
+
+def _viper_station(m: Mission):
+    return m.terrain.airports["Batumi"].position.point_from_heading(0, 100_000)
+
+
+def test_the_briefed_threats_reach_the_card(mission: Mission) -> None:
+    """Same points, same coordinates and same steerpoint numbers as the HSD."""
+    from dcs.mapping import Point
+
+    from dcs_mission_creator.core import dtc
+
+    flight = _viper(mission)
+    site = Point(1_000.0, 2_000.0, mission.terrain)
+    dtc.record_briefed(
+        mission, [dtc.ThreatPoint(site, dtc.SA_6, radius_m=25_000.0, label="SA-6 belt")]
+    )
+    lines = _card_text(mission, flight)
+    assert "THREATS" in lines
+    row = next(line for line in lines if "SA-6 BELT" in line)
+    assert row.split()[0] == str(dtc.FIRST_STEERPOINT)
+    assert flightplan.ddm(site) in row
+
+
+def test_no_briefed_threat_writes_no_threat_block(mission: Mission) -> None:
+    """`veteran`/`ace` withhold the sites, so there is nothing to print."""
+    assert "THREATS" not in _card_text(mission, _viper(mission))
+
+
+def test_sites_briefed_under_one_name_are_numbered_apart(mission: Mission) -> None:
+    from dcs.mapping import Point
+
+    from dcs_mission_creator.core import dtc
+
+    flight = _viper(mission)
+    dtc.record_briefed(
+        mission,
+        [
+            dtc.ThreatPoint(Point(0.0, 0.0, mission.terrain), dtc.SA_13, label="SA-13"),
+            dtc.ThreatPoint(
+                Point(5_000.0, 0.0, mission.terrain), dtc.SA_13, label="SA-13"
+            ),
+        ],
+    )
+    lines = _card_text(mission, flight)
+    assert any("SA-13 1" in line for line in lines)
+    assert any("SA-13 2" in line for line in lines)
+
+
 # -- publishing --------------------------------------------------------------
 
 

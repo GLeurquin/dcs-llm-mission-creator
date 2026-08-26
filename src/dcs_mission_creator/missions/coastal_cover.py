@@ -321,7 +321,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             cap_track=cap_track,
             awacs_track=awacs_track,
         )
-        self._load_hsd_threats(m, scene, briefed_threats)
+        self._load_cartridge(m, scene, briefed_threats, plan=plan)
         self._render_recon(m, scene, plan=plan, convoy=convoy)
         self._add_briefing(m)
         return scene.overlay.overlay
@@ -839,16 +839,33 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                 sa13_pos, radius=8_000.0, label="SA-13", icon=StandardIcon.AirDefense
             ),
             dtc.SA_13,
+            label="SA-13",
         )
         for pos in ewr_positions:
             plan.threat(pos, radius=4_000.0, label="EWR", icon=StandardIcon.SearchRadar)
         return hsd
 
-    def _load_hsd_threats(
-        self, m: Mission, scene: _Scene, points: list[dtc.ThreatPoint]
+    def _load_cartridge(
+        self,
+        m: Mission,
+        scene: _Scene,
+        points: list[dtc.ThreatPoint],
+        *,
+        plan: PlanOverlay,
     ) -> None:
-        """Load the briefed SHORAD as a pre-planned threat on the escort's cartridge."""
+        """Load the briefed SHORAD as a pre-planned threat on the escort's cartridge.
+
+        The same point is recorded for the kneeboard's threat block, so the Hog
+        driver — who has no cartridge to load — reads the coordinates the Viper
+        sees as a ring.
+
+        The same cartridge carries the rest of the plan the F10 map shows: the
+        flight's own route and the plan's marks as steerpoints, its lines as the
+        HSD's GEO lines. The map and the cockpit are one briefing, drawn from
+        one set of positions.
+        """
         dtc.arm_hsd_threats(m, points, overlay=scene.overlay.overlay)
+        dtc.arm_plan(m, plan, overlay=scene.overlay.overlay)
 
     # -- the imagery the briefing cites --------------------------------------
 

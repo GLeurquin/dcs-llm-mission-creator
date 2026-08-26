@@ -18,11 +18,28 @@ is per theatre and per field: Caucasus charts all 21 of its airfields, Syria cha
 For a field like that the page below is the only page about it there is.
 
 Two conventions carried from the briefings (see CLAUDE.md): a card names
-factions, never coalitions, and it states no trigger logic. It differs from a
-briefing in one way on purpose — it makes no claims about the enemy at all. Threat
-rings are the F10 plan's and the cartridge's job, both of which apply the
-difficulty policy in `map_draw.py`; a kneeboard that listed SAM positions would be
-a fourth reveal channel with no policy attached to it.
+factions, never coalitions, and it states no trigger logic.
+
+**The threat block is not a reveal channel**, and that is the condition on its
+existing. It prints `dtc.briefed_threats` — the estimates `PlanOverlay.threat`
+returned and the Viper's cartridge was loaded from — so it repeats the F10 plan
+rather than adding to it, and a `veteran`/`ace` mission, where `PlanOverlay`
+withholds the sites and the list comes back empty, gets no block. What it adds is
+the half of that picture no cockpit holds: the F-16C is the only module in DCS
+that draws a pre-planned threat ring, so for every other airframe the briefed
+coordinates exist nowhere but here, and even the Viper's HSD ring is a shape on a
+scope with no numbers to read off it. A kneeboard that invented a position, or
+kept one the map was not given, would be the fourth channel this used to warn
+about — which is why the block's only input is what the other two were built
+from.
+
+**One table per waypoint, not two.** The route card used to carry the legs and
+then repeat the same points as a steerpoint list for their coordinates; a pilot
+reading his position off one table and his timing off another, four inches apart,
+is doing the join the card should have done. The coordinates moved into the route
+table and the second one went away, which cost the cumulative-distance column
+(the sortie block has the route total) and the true-track column (the page prints
+the theatre variation, so it is a subtraction away).
 """
 
 from __future__ import annotations
@@ -34,6 +51,7 @@ from dcs_mission_creator.core.kneeboard import comms as comms_data, sketch
 from dcs_mission_creator.core.kneeboard.airfields import AirfieldCard, approach_line
 from dcs_mission_creator.core.kneeboard.flightplan import (
     FT_PER_M,
+    M_PER_NM,
     bearing_range,
     ddm,
     flight_plan,
@@ -93,8 +111,14 @@ def flight_plan_page(
     page.section("sortie")
     page.line(f"DEPART   {_field_line(cards, departure, group)}")
     page.line(f"RECOVER  {_field_line(cards, recovery, None)}")
+    # The ETA column below is local, because that is the clock in the briefing
+    # and on the tower's frequency. The Viper's own steerpoint times are not:
+    # `core/dtc.py` writes them in zulu, which is what its DED reads, so the
+    # card has to print the one number that lets a pilot line the two up.
+    zulu = takeoff - (m.terrain.utc_offset.utcoffset(None) or timedelta())
     page.line(
-        f"TAKEOFF  {takeoff:%H:%M}L        ROUTE {legs[-1].total_nm:.0f} NM   "
+        f"TAKEOFF  {takeoff:%H:%M}L / {zulu:%H:%M}Z   "
+        f"ROUTE {legs[-1].total_nm:.0f} NM   "
         f"{hms(legs[-1].elapsed_s)} EN ROUTE"
     )
     bulls = _bullseye(m)
@@ -113,26 +137,26 @@ def flight_plan_page(
     page.table(
         (
             Column("#", 2, ">"),
-            Column("WAYPOINT", 15),
-            Column("TRK T", 5, ">"),
-            Column("TRK M", 5, ">"),
-            Column("NM", 6, ">"),
-            Column("TOTAL", 6, ">"),
-            Column("ALT", 8, ">"),
-            Column("TAS", 6, ">"),
-            Column("ETE", 6, ">"),
-            Column("ETA", 6, ">"),
-            Column("REMARK", 14),
+            Column("WAYPOINT", 12),
+            Column("LAT / LONG (DDM)", 25),
+            Column("ALT", 7, ">"),
+            Column("GND", 6, ">"),
+            Column("TRK M" if variation is not None else "TRK T", 5, ">"),
+            Column("NM", 5, ">"),
+            Column("TAS", 4, ">"),
+            Column("ETE", 5, ">"),
+            Column("ETA L", 5, ">"),
+            Column("REMARK", 12),
         ),
         [
             (
                 str(leg.number),
-                leg.name[:15],
-                "--" if leg.track_true is None else f"{leg.track_true:03.0f}",
-                _magnetic_text(leg.track_true, variation),
-                "--" if leg.number == 1 else f"{leg.leg_nm:.1f}",
-                f"{leg.total_nm:.1f}",
+                leg.name[:12],
+                ddm(leg.position),
                 f"{leg.altitude_ft:,.0f}{'A' if leg.agl else ''}",
+                _terrain_ft(overlay, leg.position),
+                _track_text(leg.track_true, variation),
+                "--" if leg.number == 1 else f"{leg.leg_nm:.1f}",
                 "--" if leg.tas_kt <= 0 else f"{leg.tas_kt:.0f}",
                 hms(leg.ete_s),
                 f"{(takeoff + timedelta(seconds=leg.elapsed_s)):%H:%M}",
@@ -142,34 +166,18 @@ def flight_plan_page(
         ],
     )
     page.note(
-        "ALT in feet; a trailing A is above ground level (DCS 'RADIO'), "
-        "everything else is MSL. Distances in nautical miles, TAS in knots."
+        "ALT is the waypoint's own altitude in feet, a trailing A meaning above "
+        "ground level (DCS 'RADIO'); GND is the terrain under it, which is what a "
+        "CCRP release needs. Tracks are "
+        + (
+            "magnetic, at the variation above."
+            if variation is not None
+            else "TRUE — this theatre publishes no variation."
+        )
+        + " Distances in nautical miles, TAS in knots."
     )
 
-    page.section("steerpoints")
-    page.table(
-        (
-            Column("#", 2, ">"),
-            Column("WAYPOINT", 15),
-            Column("LAT / LONG (DDM)", 30),
-            Column("ALT", 8, ">"),
-            Column("TERRAIN", 8, ">"),
-        ),
-        [
-            (
-                str(leg.number),
-                leg.name[:15],
-                ddm(leg.position),
-                f"{leg.altitude_ft:,.0f}{'A' if leg.agl else ''}",
-                _terrain_ft(overlay, leg.position),
-            )
-            for leg in legs
-        ],
-    )
-    page.note(
-        "ALT is the waypoint's own altitude; TERRAIN is the ground under it, "
-        "which is what a CCRP release needs."
-    )
+    _threats_section(page, m)
 
     page.section("weather")
     for line in _weather_lines(m):
@@ -417,9 +425,102 @@ def _weather_lines(m: Mission) -> list[str]:
     return lines
 
 
-def _magnetic_text(track_true: float | None, variation: float | None) -> str:
+def _track_text(track_true: float | None, variation: float | None) -> str:
+    """The track a pilot flies: magnetic where the theatre's variation is known.
+
+    One column rather than two — the merged route table has no room for both,
+    and the variation is printed above it, so the true track is a subtraction
+    away. A theatre absent from `flightplan.VARIATION_DEG_EAST` prints the true
+    track under a `TRK T` heading instead of a magnetic one that is really true.
+    """
+    if track_true is None:
+        return "--"
+    if variation is None:
+        return f"{track_true:03.0f}"
     value = magnetic(track_true, variation)
     return "--" if value is None else f"{value:03.0f}"
+
+
+def _threats_section(page: Page, m: Mission) -> None:
+    """The briefed air defence: the same points, and the same claim, as the HSD.
+
+    This is not a fourth reveal channel. Every entry came from
+    `PlanOverlay.threat` by way of `dtc.briefed`, so it is the estimate the F10
+    plan drew under the mission's difficulty policy — nothing here is known that
+    the map does not already show, and at `veteran`/`ace` `PlanOverlay` withholds
+    the sites, `dtc.briefed_threats` comes back empty and the block is not
+    written at all. What it adds is the half of that picture the cockpit cannot
+    hold: only the F-16C loads a pre-planned threat cartridge, so for every other
+    airframe in the package these coordinates exist nowhere but here, and even in
+    the Viper the HSD ring has no readable position to check a mark against.
+
+    `STPT` is the pre-planned steerpoint the point occupies in the Viper's
+    cartridge (56 upward, in this order), so a ring on the HSD and a line on the
+    card can be tied together by number. Two sites briefed under the same name —
+    a pair of SA-13s on the same road — are numbered apart, since the coordinates
+    are otherwise the only thing that tells them apart in a radio call.
+    """
+    from dcs_mission_creator.core import dtc
+
+    points = dtc.briefed_threats(m)
+    if not points:
+        return
+    bulls = _bullseye(m)
+    titles = _numbered([point.title() for point in points])
+    page.section("threats")
+    page.table(
+        (
+            Column("STPT", 4, ">"),
+            Column("THREAT", 20),
+            Column("HSD", 3),
+            Column("LAT / LONG (DDM)", 25),
+            Column("RNG NM", 6, ">"),
+            Column("CEIL FT", 7, ">"),
+            Column("FROM BULLS", 11, ">"),
+        ),
+        [
+            (
+                str(dtc.FIRST_STEERPOINT + index),
+                title,
+                point.hsd_code(),
+                ddm(point.position),
+                f"{_radius_m(point) / M_PER_NM:.1f}",
+                f"{_ceiling_m(point) * FT_PER_M:,.0f}",
+                "%03.0fT/%.0fNM" % bearing_range(bulls, point.position),
+            )
+            for index, (point, title) in enumerate(zip(points, titles))
+        ],
+    )
+    page.note(
+        "Briefed positions, not fixes — the same estimates the F10 plan was drawn "
+        "from, no better than the source the briefing cites for them. RNG and "
+        "CEIL are the system's published envelope: the edge of a threat, not the "
+        "edge of a safe area. STPT is this point on an F-16C's HSD. Air defence "
+        "that drives with a column is absent on purpose — it is on the map as an "
+        "icon with no ring, having left any position given here by the time the "
+        "package is overhead."
+    )
+
+
+def _numbered(titles: Sequence[str]) -> list[str]:
+    """`SA-13, SA-13` -> `SA-13 1, SA-13 2`; a name used once is left alone."""
+    seen: dict[str, int] = {}
+    out = []
+    for title in titles:
+        if titles.count(title) == 1:
+            out.append(title)
+            continue
+        seen[title] = seen.get(title, 0) + 1
+        out.append(f"{title} {seen[title]}")
+    return out
+
+
+def _radius_m(point) -> float:
+    return point.system.radius_m if point.radius_m is None else point.radius_m
+
+
+def _ceiling_m(point) -> float:
+    return point.system.ceiling_m if point.ceiling_m is None else point.ceiling_m
 
 
 def _airport_name(m: Mission, group: FlyingGroup, *, first: bool) -> str:

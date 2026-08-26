@@ -317,9 +317,11 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         )
 
         self._conceal_red(russia)
+        plan = PlanOverlay(m, self.difficulty)
         briefed_threats = self._draw_plan(
             m,
             scene,
+            plan=plan,
             sa6_pos=scene.sa6_anchor,
             shorad_pos=shorad_pos,
             ewr_positions=ewr_positions,
@@ -329,7 +331,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             awacs_track=awacs_track,
             tanker_track=tanker_track,
         )
-        self._load_hsd_threats(m, scene, briefed_threats)
+        self._load_cartridge(m, scene, briefed_threats, plan=plan)
         self._add_intro_voice(m)
         self._add_support_checkins(m)
         self._add_layered_triggers(
@@ -884,6 +886,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         m: Mission,
         scene: _Scene,
         *,
+        plan: PlanOverlay,
         sa6_pos: Point,
         shorad_pos: Point,
         ewr_positions: list[Point],
@@ -899,7 +902,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         cockpit shows the same claim as the map. The EWRs and the armor reserve
         stay map-only — neither is a missile envelope to stay outside of.
         """
-        plan = PlanOverlay(m, self.difficulty)
         plan.objective(scene.depot_anchor, "Depot — Kuweires", radius=5_000.0)
         plan.route(corridor, "Springfield ingress")
         plan.orbit(*tarcap_track, "Eagle TARCAP")
@@ -910,12 +912,14 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                 sa6_pos, radius=12_000.0, label="SA-6", icon=StandardIcon.AirDefense
             ),
             dtc.SA_6,
+            label="SA-6",
         )
         hsd += dtc.briefed(
             plan.threat(
                 shorad_pos, radius=6_000.0, label="SA-13", icon=StandardIcon.AirDefense
             ),
             dtc.SA_13,
+            label="SA-13",
         )
         for pos in ewr_positions:
             plan.threat(pos, radius=4_000.0, label="EWR", icon=StandardIcon.SearchRadar)
@@ -927,11 +931,26 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         )
         return hsd
 
-    def _load_hsd_threats(
-        self, m: Mission, scene: _Scene, points: list[dtc.ThreatPoint]
+    def _load_cartridge(
+        self,
+        m: Mission,
+        scene: _Scene,
+        points: list[dtc.ThreatPoint],
+        *,
+        plan: PlanOverlay,
     ) -> None:
-        """Load the briefed SAM rings as pre-planned threats on the player's cartridge."""
+        """Load the briefed SAM rings as pre-planned threats on the player's cartridge.
+
+        And onto the kneeboard's threat block, which is where the same estimates
+        turn into coordinates a pilot can read.
+
+        The same cartridge carries the rest of the plan the F10 map shows: the
+        flight's own route and the plan's marks as steerpoints, its lines as the
+        HSD's GEO lines. The map and the cockpit are one briefing, drawn from
+        one set of positions.
+        """
         dtc.arm_hsd_threats(m, points, overlay=scene.overlay.overlay)
+        dtc.arm_plan(m, plan, overlay=scene.overlay.overlay)
 
     # -- triggers and briefing ----------------------------------------------
 

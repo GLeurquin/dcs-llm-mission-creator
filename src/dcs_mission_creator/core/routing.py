@@ -22,9 +22,14 @@ Design rule (as in `core/air_defense.py` / `core/waypoints.py`): absolute world
 `Point`s in, plain `Point`s out — the caller turns them into waypoints, so the
 same geometry serves an AI flight, a drawn corridor, or a hold point.
 
-Rings are the *briefed* threat envelope, not DCS's internal engagement range:
-pass the same radius `PlanOverlay.threat()` paints, so the plan the player
-reads and the plan the AI flies come from one number.
+Rings here are the site's **briefed envelope at its true position** — the reach
+the briefing names, where the launchers actually are. That is deliberately not
+what `PlanOverlay` draws: the drawn ring carries the difficulty's positional
+error, and routing a package around a ring known to be a few kilometres off
+would bend the plan away from empty sky and leave it exposed where the site
+really is. Routing is the margin that keeps a flight alive; the estimate is the
+claim the player is shown. Where the two visibly disagree on the map, the
+briefing has to be the thing that explains it.
 
 Geometry only — this module never touches a group, a task or a waypoint. The
 matching AI *behaviour* dial (react-on-threat, chaff/flare, ECM) lives in

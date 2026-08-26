@@ -682,19 +682,29 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         tarcap_track = self._spawn_tarcap(m, usa, scene, front=front)
         fac_track = self._spawn_fac(m, usa, scene, convoy=convoy)
         pontiac = self._spawn_strike(m, usa, scene, convoy=convoy, threats=belts)
+        # One overlay for every reveal channel: the F10 plan, the cockpit
+        # cartridge, the recon still — and the flight plan, which is why it is
+        # built here rather than after the package. The difficulty policy that
+        # decides how much any of them claim lives in it.
+        plan = PlanOverlay(m, self.difficulty)
+        # Uzi is sent to where the SA-6 is *assessed* to be, not to the site.
+        # The corridor used to end on the launchers exactly, so `SEAD TGT` read
+        # out of the DED gave the player a fix the map had deliberately drawn
+        # 2 km off and the cartridge had loaded 2 km off — one steerpoint
+        # undoing both. The estimate is memoised on the true position, so this
+        # is the same point `_draw_plan` rings below.
+        sead_aim, _ = plan.estimate(
+            sa6_pos, radius=self._belt_named(belts, "SA-6 belt").radius_m
+        )
         player, corridor = self._spawn_player(
             m,
             usa,
             scene,
-            sead_ip=sa6_pos,
+            sead_ip=sead_aim,
             threats=(sa2_pos, sa6_pos, sa8_pos, *ewr_positions),
         )
 
         self._conceal_red(russia, syria)
-        # One overlay for every reveal channel: the F10 plan, the cockpit
-        # cartridge and the recon still all have to make the same claim, and the
-        # difficulty policy that decides how much they claim lives in here.
-        plan = PlanOverlay(m, self.difficulty)
         briefed_threats = self._draw_plan(
             m,
             scene,
@@ -708,7 +718,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             awacs_track=awacs_track,
             tanker_track=tanker_track,
         )
-        self._load_hsd_threats(m, scene, briefed_threats)
+        self._load_cartridge(m, scene, briefed_threats, plan=plan)
         self._render_recon(m, scene, plan=plan, convoy=convoy)
         self._add_iads(
             m,
@@ -1662,6 +1672,11 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         """
         conceal_country(*countries)
 
+    @staticmethod
+    def _belt_named(belts: tuple[ThreatRing, ...], label: str) -> ThreatRing:
+        """One belt by its label, so nothing here depends on tuple order."""
+        return next(belt for belt in belts if belt.label == label)
+
     def _threat_rings(
         self,
         *,
@@ -1757,6 +1772,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                     icon=StandardIcon.AirDefense,
                 ),
                 systems[belt.label],
+                label=belt.label,
             )
         for pos in ewr_positions:
             plan.threat(pos, radius=4_000.0, label="EWR", icon=StandardIcon.SearchRadar)
@@ -1768,11 +1784,26 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         )
         return hsd
 
-    def _load_hsd_threats(
-        self, m: Mission, scene: _Scene, points: list[dtc.ThreatPoint]
+    def _load_cartridge(
+        self,
+        m: Mission,
+        scene: _Scene,
+        points: list[dtc.ThreatPoint],
+        *,
+        plan: PlanOverlay,
     ) -> None:
-        """Load the briefed belts as pre-planned threats on the player's cartridge."""
+        """Load the briefed belts as pre-planned threats on the player's cartridge.
+
+        And onto the kneeboard's threat block, which names each belt the way the
+        map does — the label handed to `dtc.briefed` above is `plan.threat`'s own.
+
+        The same cartridge carries the rest of the plan the F10 map shows: the
+        flight's own route and the plan's marks as steerpoints, its lines as the
+        HSD's GEO lines. The map and the cockpit are one briefing, drawn from
+        one set of positions.
+        """
         dtc.arm_hsd_threats(m, points, overlay=scene.overlay.overlay)
+        dtc.arm_plan(m, plan, overlay=scene.overlay.overlay)
 
     # -- the imagery the briefing cites --------------------------------------
 

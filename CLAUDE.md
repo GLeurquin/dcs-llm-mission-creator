@@ -138,10 +138,22 @@ plan.frontline(front.trace, "FRONT LINE — guns and MANPADS below 10,000")
 Pass **absolute** world `Point`s — `PlanOverlay` does the layer selection,
 colour choice (enemy red / friendly cyan / objective amber), the
 anchor-relative offset math the point-list drawings need, and the difficulty
-policy. `.threat()` is the difficulty dial: full icon + true ring on
-`recruit`, coarse + offset + "(est.)" on `trained`, **no-op** on
-`veteran`/`ace` (use `.threat_area()` for a vague zone there). `.objective()`
-tightens/loosens the same way. Friendly-plan calls (`route`, `orbit`,
+policy. `.threat()` is the difficulty dial, and what it dials is **precision,
+not presence**: full icon + true ring on `recruit`, coarse + offset + "(est.)"
+on `trained`, and on `veteran`/`ace` a wider, dashed, unfilled ring further off
+truth and labelled "(approx.)". `.objective()` tightens/loosens the same way,
+through the same estimate.
+
+The higher labels used to draw **nothing**, and that was worse than drawing an
+approximation, for a reason that is invisible from inside `map_draw.py`: a
+mission still has to put steerpoints somewhere. With no estimate to build from
+they were built from the site's true position. `daryal_run` concealed every
+Russian icon, drew its S-300 as a vague area 4 km off — and wrote a `TARGET`
+steerpoint **170 m** from the launchers, which the player reads out of the DED
+before releasing brakes. Withholding the ring never withheld the position; it
+moved the leak to the one channel the reveal policy did not cover. So every
+difficulty now draws a ring and hands the estimate back, and every channel
+downstream is built from that one imprecise claim. Friendly-plan calls (`route`, `orbit`,
 `waypoint_label`) always draw precisely. `.frontline()` is the one *enemy* call
 that also draws precisely at every difficulty — a front line is ground both
 armies have held for weeks, and the briefing's "cross at the seam" needs
@@ -151,11 +163,40 @@ to draw, reveal per label, and that a site may be left off the map on purpose)
 live in the `dcs-mission` skill; the underlying pydcs drawing API lives in
 PYDCS_REFERENCE.md.
 
-`.threat()` also **returns** the `(center, radius)` it drew — the coarsened
-estimate on `trained`, `None` where the difficulty withholds the site. Feed that
-to `core/dtc.py` (via `dtc.briefed`) rather than re-deriving it: the offset
-bearing is a fresh random draw per call, so a second guess at "the trained
-estimate" lands somewhere else and the cockpit would contradict the map.
+`PlanOverlay` also **remembers what it drew** — `plan.lines()` and
+`plan.marks()` hand back every polyline and every labelled point at the position
+it was painted. `core/dtc.py` turns those into the Viper's own steerpoints and
+GEO lines, so the F10 map and the DTE page are one briefing rather than two
+guesses at it, and the reveal policy stays here even though the cartridge is
+written elsewhere: there is no truth in either list to out-claim the map with.
+
+`.threat()` also **returns** the `(center, radius)` it drew, and
+`.estimate(center, radius=…)` gives the same pair without drawing anything —
+for the callers that need the claim *before* `_draw_plan` runs, which is any
+mission whose flight plan refers to a site. The estimate is **memoised on the
+true position**, so the map ring, the cartridge point, the target steerpoint and
+the kneeboard line are one object rather than four guesses; without that the
+offset bearing is a fresh random draw per call and the cockpit contradicts the
+map. Feed it to `core/dtc.py` via `dtc.briefed` rather than re-deriving it.
+
+A mission that needs the estimate for its geometry builds its `PlanOverlay`
+**first**, before the flights, and passes it to `_draw_plan` at the end rather
+than constructing a second one — `daryal_run` and `idlib_gauntlet` both do.
+The rule that falls out: **every planned point that refers to an enemy site
+derives from the estimate, never from the site.** Then nothing the player can
+read — F10, DED, HSD, kneeboard — carries a better position than the briefing
+admits to, and a steerpoint that happens to land near the truth is luck rather
+than a leak.
+
+What stays on truth is `core/routing.py`. Its rings decide whether the route
+gets shot at, and the drawn ring is offset on purpose, so planning a package
+around the drawing bends it away from empty sky and leaves it exposed where the
+launchers are. Routing is the margin that keeps a flight alive; the estimate is
+the claim the player is shown. Where the two visibly disagree on the map the
+briefing has to be what explains it — `abkhaz_sweep` is the worked example: at
+ace its Kub ring is 34 km wide and 6 km off, there is no water between Sukhumi
+and Gudauta outside it, so the sweep stations sit inside the drawn ring and the
+ROE answers the Kub with 4,500 m of altitude instead of with distance.
 
 **A ring is only for something emplaced.** `.threat()` claims the envelope *is
 there*; air defence that drives — a convoy's organic SHORAD, a road-marching
@@ -285,6 +326,7 @@ waypoints.add_ground_waypoint(player, scene.route_mid, overlay=ov,
                               speed=750, name="CONVOY AO")
 waypoints.snap_base_waypoints(m, ov)           # every flight's take-off + landing
 waypoints.ground_elevation_m(ov, point)        # raw lookup, 0.0 outside the overlay
+waypoints.clear_terrain(route, altitudes, overlay=ov)   # the whole route, legs included
 ```
 
 `snap_base_waypoints` walks every flying group in the mission, so it cannot
@@ -298,6 +340,37 @@ into the terrain. Missions with no other overlay need (`daryal_run`,
 this. Design rules (which waypoints, where the run-in altitude goes) live in
 the `dcs-mission` skill; the pydcs waypoint API and the gotcha in
 PYDCS_REFERENCE.md §4.3.
+
+`clear_terrain(route, altitudes, *, overlay, clearance_m=150.0, sample_m=50.0)`
+is the third case, and on a mountain theater it is the one that bites: an
+**en-route** altitude a mission typed by hand. Every pydcs altitude is metres
+AMSL, so "800 m through the gorge" is 800 m above the *sea*, and `daryal_run`
+shipped a route with two of its three valley waypoints inside a mountainside —
+one of them by **2.7 km** — under a briefing that described flying up the Daryal
+Gorge. Nothing catches that by eye, because the coordinates were raw map metres
+and there is no way to read `Point(-200000, 863000)` and see a mountain. Two
+consequences worth carrying to any low route:
+
+- **Write the corridor in degrees**, not DCS metres, when its points are real
+  places. `daryal_run`'s `_CORRIDOR` is a table of `(name, lat, lng, height
+  above the ground)`, so Pasanauri, the Jvari Pass and Verkhniy Lars can each be
+  checked against a map — which is also how its briefing's "fly the Georgian
+  Military Road" stopped being a claim the route did not honour.
+- **Per-waypoint is only half of it.** DCS ramps linearly between waypoints, so
+  two points that each clear their own valley floor still draw a chord through
+  the spur the river bends around, which is what the Terek does four times
+  between Kobi and Balta. `clear_terrain` samples every leg as well as every
+  point and lifts the **cheaper end** of any leg that would hit — cheaper,
+  because lifting the lower end of every offending leg flattens a descent into a
+  cruise at ridge height, and on this mission the descent *is* the terrain
+  masking. It only ever raises, so a mission's own numbers are a floor.
+
+`sample_m` defaults to the elevation raster's 50 m cell because sampling coarser
+than the data steps over a one-cell spur. What it deliberately does **not**
+cover is the leg into or out of a `add_ground_waypoint` steerpoint: that point
+carries the target's *elevation* rather than a commanded altitude (the run-in
+altitude belongs on the IP), so the ramp to it reads as terrain penetration in
+every mission here and is not one.
 
 `set_departure_speeds(m)` fixes the same class of defect one field over.
 `add_runway_waypoint` hard-codes `speed = 200 / 3.6` — **108 kt at 300 m AGL**
@@ -453,7 +526,7 @@ mission-file unit keys have no pydcs field. Register with
 `emit_unit_key("datalinks", "datalinks")`; **do not** write a second wrapper —
 two wrappers each guarding on their own marker re-wrap the chain on every build.
 
-## HSD threat-ring helper (project-owned)
+## Data-cartridge helper (project-owned)
 
 [`dtc`](src/dcs_mission_creator/core/dtc.py) puts the briefed SAM rings in the
 cockpit. The F-16C draws a surface-to-air envelope on the HSD (and the HAD) from
@@ -465,10 +538,13 @@ carries — and pydcs writes neither (`Mission.save` writes a fixed set of zip
 entries, `Unit.dict` has no `DTC` field).
 
 Feed it what the F10 plan *drew*, not the site's true position:
-`PlanOverlay.threat` now returns the `(center, radius)` it painted — coarsened
-and offset at `trained`, `None` at `veteran`/`ace` — and `dtc.briefed` turns
-that into zero or one threat point, so the cockpit ring and the map ring are the
-same claim and the difficulty policy stays in `map_draw.py`:
+`PlanOverlay.threat` returns the `(center, radius)` it painted — coarsened and
+offset, further out the harder the mission — and `dtc.briefed` turns that into
+zero or one threat point, so the cockpit ring and the map ring are the same
+claim and the difficulty policy stays in `map_draw.py`. **This matters more here
+than on the map**: a pre-planned threat *is* a steerpoint, so a point on the
+site's true position is a set of coordinates the player reads straight out of
+the DED, and it would undo a reveal the F10 map had just applied:
 
 ```python
 hsd = dtc.briefed(
@@ -476,14 +552,29 @@ hsd = dtc.briefed(
     dtc.SA_6,
 )
 ...
-dtc.arm_hsd_threats(m, hsd, overlay=scene.overlay.overlay)   # a `_load_hsd_threats` step
+dtc.arm_hsd_threats(m, hsd, overlay=scene.overlay.overlay)   # a `_load_cartridge` step
+dtc.arm_plan(m, plan, overlay=scene.overlay.overlay)         # in the same step
 ```
 
 - `arm_hsd_threats(m, points, *, name="THREATS", overlay=None)` — builds one
   cartridge, marks it default + `AutoLoad` (the rings are up before the player
   touches the DTE page) and attaches it to every **player-flown F-16C** unit.
-  Empty `points` writes nothing, which is exactly how an ace mission comes out;
-  more than fifteen points, or no Viper slot to load, raises.
+  Empty `points` writes nothing — a mission that briefs no ring at all, or one
+  whose only air defence moves; more than fifteen points, or no Viper slot to
+  load, raises. Every difficulty produces an estimate, so a hard mission gets a
+  cartridge like any other and what changes with difficulty is how far its rings
+  sit from the launchers. It also
+  `record_briefed`s the points on the mission, because **the cartridge is only
+  the Viper's copy of the briefed picture** — `core/kneeboard` prints the
+  identical list, with the identical coordinates, for whoever is not flying one.
+  A package with no Viper calls `dtc.record_briefed(m, points)` directly.
+- `briefed(estimate, system, *, label=None)` — pass the **same `label` the
+  `plan.threat` call above it was given**. It never reaches the jet (three
+  characters, `system.code`); it is what makes the kneeboard call a belt what the
+  map calls it. `ThreatPoint.title()` resolves it, falling back to the jet's own
+  table name with its `SAM `/`SPAAA `/`AAA ` dialog prefix trimmed;
+  `ThreatPoint.hsd_code()` is the three characters (it used to be `label()`,
+  which is why the field could not have that name).
 - `ThreatSystem` constants (`dtc.SA_2`, `dtc.SA_6`, `dtc.SA_19`, `dtc.HAWK`, …)
   are the jet's own `THREAT_PTS_defs` rows — `def_num`, exact name, code, range,
   ceiling. Adding a system is a table entry.
@@ -495,6 +586,71 @@ dtc.arm_hsd_threats(m, hsd, overlay=scene.overlay.overlay)   # a `_load_hsd_thre
   presets.
 - **Missions never write the file** — `MissionBuilder.build_miz` appends it
   after `m.save(...)`, since the cartridge is a file *inside* the package.
+
+### The rest of the F10 plan: steerpoints and GEO lines
+
+The cartridge holds two more tabs, and `arm_plan(m, plan, *, overlay,
+name="THREATS")` fills both **off the `PlanOverlay` itself** — the map and the
+cockpit then say one thing, because they are read from one place. `PlanOverlay`
+records every drawing it makes (`plan.lines()` / `plan.marks()`, `PlanLine` /
+`PlanMark`) at the position it drew it, so an estimated site stays estimated in
+the DED and a site the mission never drew is not in the list to leak. Both
+`arm_*` calls fill their own tab of the *same* cartridge — the jet loads one
+default — and either may be made without the other.
+
+- **`NAV_PTS`, steerpoints 1–25.** The flight's own route first, then the plan's
+  marks: the objective as a `TGT`, the mission's text labels (a seam, an
+  off-load point), the air defence that moves, a vague enemy area — and one
+  steerpoint per **orbit**, at the midpoint of the race-track, because what a
+  pilot wants from a tanker station is a range and a bearing to it. Emplaced
+  threats are deliberately absent: they are already the pre-planned threat
+  points above, and a second copy costs a navigation slot for nothing.
+- **The route's steerpoints carry a `TOS`**, and the plan's marks do not —
+  nothing scheduled a tanker station or a seam, and `-1` with `isTOSEnabled`
+  clear is the editor's own "no time for this point" state. A route point's time
+  is the instant the kneeboard's route card prints in its `ETA L` column, since
+  both are `dtc.takeoff_zulu_s` plus the elapsed time
+  `kneeboard/flightplan.flight_plan` works out — one schedule, and the card's
+  zero-wind caveat covers the DED with it. **The clock is zulu, and the card's
+  is local**: the editor's own DTC manager builds every time it computes from
+  `start_time - SummerTimeDelta * 3600`, because the jet reads zulu, and pydcs
+  carries that offset as `Terrain.utc_offset` (Caucasus +4, Syria +3). Reading
+  the mission's local `start_time` straight through would put every steerpoint
+  time three or four hours out and still look like a plausible time, so the
+  route card prints the take-off in both (`08:40L / 05:40Z`) and labels its own
+  column `ETA L`. `FIX_Time` stays off everywhere: it is the switch that makes
+  the *speed* derived from the times, and the mission tuned those speeds per
+  airframe.
+- **`GEO_LINES`, steerpoints 31–55.** Twenty-five vertices shared between
+  **four** polylines, so this is the scarce tab and the order matters: front
+  lines, then a corridor the flight does not itself fly, then orbit tracks with
+  whatever is left. A **front line** is what it is really for — the one piece of
+  enemy geometry with a shape, drawn precisely at every difficulty for the
+  reasons in the map-drawing section, and carried nowhere else in the cockpit —
+  which is why it can never be the line that loses. An orbit takes a line only
+  because in most missions there is one going spare, and it adds what its
+  steerpoint cannot: which way the pattern runs and how long it is. Line index
+  is a colour (the editor's own: L1 white, L2 black, L3 red, L4 green), so enemy
+  geometry asks for red and the friendly plan for green. A line over its share
+  is **thinned**, both ends kept — losing the end of a front line would move it;
+  losing a bend only coarsens it.
+- **A `route` line the flight itself flies is dropped.** Missions draw the
+  corridor they then fly, and the HSD already joins the steerpoints; what
+  survives is a lane somebody else flies, which is worth a line.
+- **The route wins every budget fight.** Uploading a steerpoint tab *replaces*
+  the flight plan DCS put in the cockpit — `mirror_NAV_PTS` is the "do not
+  upload" checkbox and defaults to on for exactly that reason — so a plan that
+  would push past twenty-five points loses its own marks, never the pilot's
+  navigation. `overlay` is required here rather than optional: every point
+  carries the terrain elevation under it, and a route at sea level would be
+  worse than the mirrored default it replaces.
+- **The route is re-read at write time, not when the mission arms it.**
+  `build_miz` snaps take-off and landing altitudes and rewrites the departure
+  speed *after* `_assemble` returns, so a tab frozen in `_load_cartridge` would
+  print the sea-level take-off and the 108 kt those two steps exist to correct.
+  Same reason the kneeboard is written last.
+- Two player Viper *flights* raise: there is one steerpoint tab and every Viper
+  slot loads it, so two routes will not fit.
 
 Only list **emplaced** systems the briefing names: a ring the player was never
 briefed on is intel the mission did not claim to have, and a pre-planned point
@@ -1073,11 +1229,11 @@ player reads with the jet already moving. All of them **derived from the built
 mission**, so none can contradict the route, the package or the fields it came
 from:
 
-- **flight plan** — per waypoint: true and magnetic track, leg and cumulative
-  distance, altitude, commanded TAS, ETE and ETA; then every steerpoint in
-  degrees and decimal minutes with the terrain elevation under it; the departure
-  and recovery fields with their elevation and this flight's own parking slot;
-  then the weather the timings were flown against.
+- **flight plan** — **one line per waypoint**, and one table: its position in
+  degrees and decimal minutes, the terrain elevation under it, magnetic track,
+  leg distance, altitude, commanded TAS, ETE and ETA. Then the **briefed
+  threats**; then the departure and recovery fields with their elevation and this
+  flight's own parking slot; then the weather the timings were flown against.
 - **comms** — your flight, the package, the controllers, each relevant field's
   ATC bands, and the theater navaids. A frequency that happens to be a channel
   on the player airframe's own default preset table is annotated with it
@@ -1087,6 +1243,56 @@ from:
   the *theatre ships no chart of*. Position, elevation, runways with any measured
   ILS course, navaids with bearing and range, which flight parks where, and a
   north-up plan view.
+
+**One table per waypoint, not two.** The route card used to print the legs and
+then repeat the same points as a `STEERPOINTS` list purely to give their
+coordinates — a pilot reading his position off one table and his timing off
+another, four inches apart, doing by hand the join the card should have done. The
+coordinates moved into the route table and the second one went away. Two columns
+paid for the 25 characters that took, and both are recoverable from what is still
+on the page: cumulative distance (the sortie block prints the route total) and
+true track (the page prints the theatre variation next to the magnetic tracks,
+so it is one subtraction). Note the general shape of that trade — **a kneeboard
+column earns its place by being unrecoverable in the cockpit**, which is also the
+whole argument for the threat block and against, say, a second altitude column.
+
+**The threat block prints the briefed picture, and is not a fourth reveal
+channel.** It comes from `dtc.briefed_threats(m)` — the estimates
+`PlanOverlay.threat` returned, by way of `dtc.briefed`, which is the same list
+the F-16C's cartridge was loaded from. So it repeats the F10 plan rather than
+adding to it, and the difficulty policy stays in `map_draw.py`: a harder
+mission's block prints rings that are wider and in the wrong place, rather than
+no block at all. What it adds is the half of the picture no
+cockpit holds — the F-16C is the only module in DCS that draws a pre-planned
+threat ring, so for every other airframe the briefed coordinates exist nowhere
+but here, and even in the Viper an HSD ring is a shape on a scope with no numbers
+to read off it. Each row carries the pre-planned steerpoint it occupies
+(`dtc.FIRST_STEERPOINT`, 56 upward), the three-character HSD code, the position
+in DDM, the system's published range and ceiling, and bearing/range from
+bullseye. Sites briefed under one name — a pair of SA-13s — are numbered apart,
+because otherwise the coordinates are the only thing telling them apart in a
+radio call.
+
+Two mission-side consequences:
+
+- **`arm_hsd_threats` records the points** (`dtc.record_briefed`), so a Viper
+  mission gets the block for free. A package with **no Viper** — a Hornet
+  mission, whose cartridge keeps threats on the SA page under a different
+  descriptor — calls `dtc.record_briefed(m, points)` itself and gets the card
+  without the cartridge.
+- **Pass `plan.threat`'s own `label` to `dtc.briefed`** (`dtc.briefed(est,
+  dtc.SA_3, label="SA-3 north shoulder")`). It never reaches the jet, which has
+  three characters and prints `system.code` in them; it is so the card names a
+  belt the way the map and the briefing name it, and a pilot cross-referencing
+  one against the other reads one name. Unlabelled, a row falls back to the
+  jet's own table name with its dialog-box prefix trimmed (`SA-6 'GAINFUL'`).
+
+**A table that does not fit repeats its column headers and numbers its parts**
+(`ROUTE (1 OF 2)` / `ROUTE (2 OF 2)`), because a column of figures with nothing
+written over it is a column nobody can read, and a route continued overleaf that
+does not say so reads as the whole route. `Page.parts()` is the layout as text,
+which is what the tests assert on — comparing pixels would not say which page a
+row landed on.
 
 **The airfield card is conditional because ED's coverage is.** DCS puts the
 theatre's own aerodrome and approach charts on the same kneeboard
@@ -1272,7 +1478,7 @@ def _assemble(self, m: Mission) -> MapOverlay:
     self._add_end_triggers(m, convoy=convoy, hog=hog)
     self._conceal_red(russia)
     briefed_threats = self._draw_plan(m, scene, ...)
-    self._load_hsd_threats(m, scene, briefed_threats)
+    self._load_cartridge(m, scene, briefed_threats, plan=plan)
     self._add_briefing(m)
 
     return scene.overlay.overlay   # the base snaps base waypoints, then saves
@@ -1451,6 +1657,15 @@ remain only at the pydcs API layer (`airport.set_blue()`,
   briefing pointed, and of the two ways a coast breaks a placement filter (no
   roads inland of the highway; `min_relative_height_m` reading a beach as high
   ground because the sea drags the local mean below zero).
+- [daryal_run.py](src/dcs_mission_creator/missions/daryal_run.py) — Caucasus
+  ace: F-16C SEAD out of Vaziani against an S-300PS south of Beslan, up the
+  Georgian Military Road and the Daryal Gorge. The reference for a **route
+  planned against the terrain** rather than against the map's coordinate grid —
+  `_CORRIDOR` / `_EGRESS` in degrees, altitudes stated as height above the
+  ground and put through `waypoints.clear_terrain`. Every corridor point is
+  masked from the battery's search radar (measured against the elevation raster
+  with `MapOverlay.line_of_sight`); the masking runs out about 16 km short,
+  which is where the gorge ends and the pop-up is.
 - [idlib_gauntlet.py](src/dcs_mission_creator/missions/idlib_gauntlet.py) —
   Syria: F-16C out of Hatay against a Syrian resupply column with organic
   SHORAD, run through three SAM belts (SA-2 / SA-6 / SA-8 + EWR) that go dark
@@ -1473,6 +1688,11 @@ wherever the theatre ships no chart of the field, which across the six is Hatay
 alone. `idlib_gauntlet` is also the only one that adds `kneeboard.remark` lines,
 for Hammer's laser code and where his readout sits in the radio menu.
 
+The route card's **threat block** prints whatever the mission briefed
+(idlib_gauntlet six, kodori_strike three — its two SA-13s come out `SA-13 1` and
+`SA-13 2`, abkhaz_sweep one, daryal_run two). The ace pair's rows are the
+`(approx.)` estimates, so the card is as imprecise as the map it repeats.
+
 All six missions ([coastal_cover](src/dcs_mission_creator/missions/coastal_cover.py),
 [kodori_strike](src/dcs_mission_creator/missions/kodori_strike.py),
 [eastern_shield](src/dcs_mission_creator/missions/eastern_shield.py),
@@ -1480,15 +1700,19 @@ All six missions ([coastal_cover](src/dcs_mission_creator/missions/coastal_cover
 [abkhaz_sweep](src/dcs_mission_creator/missions/abkhaz_sweep.py),
 [daryal_run](src/dcs_mission_creator/missions/daryal_run.py)) paint an F10
 briefing plan via a `_draw_plan` step using `PlanOverlay` — see the
-map-drawing helper section above. The four trained missions (coastal_cover,
-kodori_strike, eastern_shield, idlib_gauntlet) draw estimated threat rings +
-NATO icons; the two ace missions (abkhaz_sweep, daryal_run) draw only the
-friendly plan plus a single vague threat zone (enemy positions withheld).
+map-drawing helper section above. All six draw estimated threat rings + NATO
+icons; what separates them is how far off the estimate is. The four trained
+missions (coastal_cover, kodori_strike, eastern_shield, idlib_gauntlet) draw a
+`(est.)` ring 2 km off truth; the two ace missions (abkhaz_sweep, daryal_run)
+draw a wider dashed `(approx.)` ring 6 km off, plus a vague `threat_area` for
+the airborne threat, which is not an emplaced envelope anybody can ring.
 
-Those same four then pass the rings their `_draw_plan` drew to a
-`_load_hsd_threats` step (`core/dtc.py`), so the F-16C player's HSD carries the
-briefed envelopes as pre-planned threats. The ace pair needs no exception:
-`PlanOverlay.threat` returns nothing there, so there is nothing to load.
+All six then pass the rings their `_draw_plan` drew to a `_load_cartridge`
+step (`core/dtc.py`), so the F-16C player's HSD carries the briefed envelopes as
+pre-planned threats. The ace pair used to be the exception and no longer is —
+loading nothing there did not withhold the sites, it just left the mission with
+no coarsened position to build its own steerpoints from, so it used the true
+one.
 
 All six also run a `_conceal_red` step (`conceal_country`) immediately before
 `_draw_plan`, so no enemy group shows up as a unit icon on the F10 map, the
@@ -1547,8 +1771,17 @@ UnitPayloads/*.lua` list every ED-shipped loadout as (CLSID, station) pairs, so
 grep the store and see which stations it actually sits on. Two errors this
 caught, both legal in pydcs:
 
-- **F-16C wingtips (1/9) carry the AIM-120, not the AIM-9** — the Sidewinders go
-  on stations 2/8. Every mission had the pair the wrong way round.
+- **F-16C wingtips (1/9) carry the AIM-120, not the AIM-9** — every mission had
+  that pair the wrong way round. Where the Sidewinders go then depends on the
+  *fit*, and the two arrangements are mirror images: in a **SEAD or strike** fit
+  stations 3/7 are the HARM rails or the bomb stations, so the AIM-9X move out
+  to 2/8; in a **pure air-to-air** fit ED fills outboard-in with AMRAAM on
+  1/2/8/9 and puts the AIM-9X on 3/7 (`AIM-120C*4, AIM-9X*2, FUEL*2, ECM`).
+  `abkhaz_sweep` flies the second; the four F-16 missions with a HARM or a bomb
+  on 3/7 fly the first. Note also that **every** ED two-tank F-16C payload
+  carries an ALQ-184 on the centreline (station 5), and this project left that
+  station empty in all six missions — `abkhaz_sweep` is the only one fixed so
+  far.
 - **The F-15C never flies a single wing tank.** Its fuel stations are 2 (left
   wing), 6 (centerline) and 10 (right wing); all eleven ED payloads that carry
   fuel use 6, and the wing pair only ever comes as 2 + 10. A lone `(10, tank)`
@@ -1558,6 +1791,54 @@ Also check the loadout against the *sortie*, not only the airframe: a modern
 CAS or LGB tasking wants a targeting pod on the jet that needs one — except the
 A-10C, whose TGP is integrated (no ED payload lists an AAQ-28, so don't add
 one).
+
+## Force balance: the magazine is the budget
+
+**A mission may not task more kills than the player flight is carrying weapons
+for**, and the number of player slots is an argument, so both sides of that
+have to be computed rather than typed. `abkhaz_sweep` shipped as the worked
+example of getting it wrong: a fixed six bandits — four Su-27 and a MiG-29S
+pair, all `Skill.Excellent` — against a win condition of "both flights dead",
+whatever `--players` said. A single-slot `Dodge` therefore launched with **six
+air-to-air missiles against six of the best crews in the game** and a frag that
+required all six to die, with no tanker, no rearm and no wingman. Four slots
+faced the same six.
+
+The arithmetic that fixes it is short, and the first two terms are facts about
+the airframe rather than judgement calls:
+
+- **Count the stations, don't assume.** An F-16C-50 with two wing tanks has
+  exactly six air-to-air stations — 1/2/8/9 and 3/7 — because stations 4 and 6
+  *accept no missile at all* (read the `PylonN` tables, and see the loadout
+  section above). Six is a ceiling, not a choice: there is no F-16C loadout
+  that buys a seventh shot without giving up the fuel a 55-minute unsupported
+  sortie needs.
+- **Two shots per kill** is the planning factor against `Skill.Excellent`
+  fighters. So one player jet is worth ~3 kills, and that is the whole budget.
+- **Then pick one of three levers** — all three are legitimate, and
+  `abkhaz_sweep` now uses the first and the third:
+  1. **Scale the opposition off the player count** (`_plan_bandits`), so the
+     number of bandits is derived from the magazine rather than chosen.
+  2. **Add friendly AI** — but note this trades away mission character: "no
+     tanker, no escort, no wingman" *is* the ace composition here, so adding a
+     flight was the wrong lever for this mission.
+  3. **Task less than the airspace.** Not every enemy has to be a required
+     kill. Make the objective the element that gates the campaign effect (the
+     Sochi CAP that pins the AWACS track) and let the rest be a threat to
+     survive — a reinforcement the player is explicitly cleared to leave
+     flying. The win trigger then names only the tasked groups.
+
+Two things follow for the code. A DCS plane group holds **at most four
+airframes**, so a scaled element is a *list* of flights and the win condition
+ANDs `GroupDead` over all of them (`_split_flights` also refuses to leave a
+lone trailer behind a four-ship, since that would gate a win on one jet). And
+the briefing has to state which kill is the frag and which is not — "the
+Gudauta section is a threat to beat, not a target list" — or a player who
+disengages correctly cannot tell a designed off-ramp from a broken trigger.
+
+The same audit is worth running on any mission whose objective is "destroy the
+X": count what the package carries, divide by two, and compare. Nothing but
+`abkhaz_sweep` has been checked this way yet.
 
 ## Running
 

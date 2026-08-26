@@ -23,7 +23,7 @@ Three decisions worth stating:
 from __future__ import annotations
 
 import textwrap
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable, Sequence
 
 from PIL import Image, ImageDraw
@@ -72,6 +72,12 @@ class _Text:
     gap_before: int = 0
     keep_with_next: bool = False
     muted: bool = False
+    #: Which table this line belongs to, and which of the table's three roles it
+    #: plays: its heading (`ROUTE`), its column headers, or one of its rows. A
+    #: table broken across pages repeats the first two and numbers the parts.
+    table_id: int | None = None
+    table_header: bool = False
+    table_title: bool = False
 
     @property
     def height(self) -> int:
@@ -101,6 +107,11 @@ class Page:
     label: str = ""
     footer: str = ""
     blocks: list[_Block] = field(default_factory=list)
+    #: Table bookkeeping: the running id, the heading text each table was filed
+    #: under, and the section block that heading came from — see `table`.
+    _tables: int = 0
+    _titles: dict[int, str] = field(default_factory=dict)
+    _section: _Text | None = None
 
     # -- content ------------------------------------------------------------
 
@@ -133,17 +144,45 @@ class Page:
 
     def section(self, heading: str) -> None:
         """A heading, kept on the same page as the line that follows it."""
-        self.blocks.append(
-            _Text(heading.upper(), bold=True, gap_before=18, keep_with_next=True)
-        )
+        block = _Text(heading.upper(), bold=True, gap_before=18, keep_with_next=True)
+        self.blocks.append(block)
+        self._section = block
 
-    def table(self, columns: Sequence[Column], rows: Sequence[Sequence[str]]) -> None:
-        """A heading row plus `rows`, padded to `columns` — one space between."""
-        self.line(
-            _row(columns, [c.header for c in columns]), bold=True, keep_with_next=True
+    def table(
+        self,
+        columns: Sequence[Column],
+        rows: Sequence[Sequence[str]],
+        *,
+        title: str | None = None,
+    ) -> None:
+        """A heading row plus `rows`, padded to `columns` — one space between.
+
+        A table too long for one page repeats its column headers on the next and
+        numbers the parts — `ROUTE (1 OF 2)`, `ROUTE (2 OF 2)` — because a column
+        of figures with nothing written over it is a column nobody can read, and
+        because a route continued overleaf has to say so or it reads as the whole
+        route. The number is only written when there *is* more than one part.
+        `title` names the parts; it defaults to the section heading above.
+        """
+        self._tables += 1
+        table_id = self._tables
+        self._titles[table_id] = (
+            title or (self._section.text if self._section else "") or "TABLE"
+        ).upper()
+        if self._section is not None and self._section.table_id is None:
+            self._section.table_id = table_id
+            self._section.table_title = True
+        self.blocks.append(
+            _Text(
+                _row(columns, [c.header for c in columns]),
+                bold=True,
+                keep_with_next=True,
+                table_id=table_id,
+                table_header=True,
+            )
         )
         for row in rows:
-            self.line(_row(columns, row))
+            self.blocks.append(_Text(_row(columns, row), table_id=table_id))
 
     def art(
         self,
@@ -155,13 +194,50 @@ class Page:
 
     # -- output -------------------------------------------------------------
 
+    def parts(self) -> list[list[_Block]]:
+        """The blocks laid out page by page, with every split table labelled.
+
+        Separate from `images` so the layout can be asserted on as text: what a
+        broken table does at the seam is the part worth testing, and comparing
+        pixels would not say which page a row landed on.
+        """
+        headers = {
+            b.table_id: b
+            for b in self.blocks
+            if isinstance(b, _Text) and b.table_header and b.table_id is not None
+        }
+        pages = _paginate(self.blocks, self._body_height(), headers)
+        self._number_parts(pages)
+        return pages
+
     def images(self) -> list[Image.Image]:
         """Render to one image per page, in order."""
-        pages = _paginate(self.blocks, self._body_height())
+        pages = self.parts()
         return [
             self._render(page, index + 1, len(pages))
             for index, page in enumerate(pages)
         ]
+
+    def _number_parts(self, pages: Sequence[Sequence[_Block]]) -> None:
+        """Label a split table's headings `(n OF N)`, in place on the page copies.
+
+        Pagination hands back copies, so this rewrites what is about to be
+        rendered and never the block list — calling `images()` twice numbers the
+        same table the same way rather than nesting one label inside the last.
+        """
+        for table_id, title in self._titles.items():
+            parts = [
+                index
+                for index, page in enumerate(pages)
+                if any(getattr(b, "table_id", None) == table_id for b in page)
+            ]
+            if len(parts) < 2:
+                continue
+            for number, index in enumerate(parts, start=1):
+                for block in pages[index]:
+                    if isinstance(block, _Text) and block.table_title:
+                        if block.table_id == table_id:
+                            block.text = f"{title} ({number} OF {len(parts)})"
 
     def _body_height(self) -> int:
         top = _MARGIN + _TITLE + 12 + (_LINE_H if self.subtitle else 0) + 20
@@ -254,8 +330,18 @@ def _row(columns: Sequence[Column], cells: Sequence[str]) -> str:
     return " ".join(out).rstrip()
 
 
-def _paginate(blocks: Sequence[_Block], height: int) -> list[list[_Block]]:
-    """Greedy packing, with a heading never left alone at the foot of a page."""
+def _paginate(
+    blocks: Sequence[_Block],
+    height: int,
+    headers: dict[int, _Text] | None = None,
+) -> list[list[_Block]]:
+    """Greedy packing, with a heading never left alone at the foot of a page.
+
+    A break that lands inside a table re-opens it on the new page: its own
+    heading (numbered by `Page._number_parts` once the parts are known) and its
+    column headers go in first, and the rows carry on under them.
+    """
+    headers = headers or {}
     pages: list[list[_Block]] = [[]]
     used = 0
     for index, block in enumerate(blocks):
@@ -270,20 +356,33 @@ def _paginate(blocks: Sequence[_Block], height: int) -> list[list[_Block]]:
             used = 0
             block = _first_on_page(block)
             cost = block.height_total if isinstance(block, _Art) else block.height
+            for extra in _reopen_table(block, headers):
+                pages[-1].append(extra)
+                used += extra.height
         pages[-1].append(block)
         used += cost
     return pages
 
 
+def _reopen_table(block: _Block, headers: dict[int, _Text]) -> list[_Text]:
+    """The heading and column headers a table needs when it resumes on a page."""
+    if not isinstance(block, _Text) or block.table_id is None or block.table_header:
+        return []
+    header = headers.get(block.table_id)
+    if header is None:
+        return []
+    return [
+        _Text(
+            "",  # filled in by `Page._number_parts`, which knows how many parts.
+            bold=True,
+            keep_with_next=True,
+            table_id=block.table_id,
+            table_title=True,
+        ),
+        replace(header, gap_before=0),
+    ]
+
+
 def _first_on_page(block: _Block) -> _Block:
     """Drop the leading gap a block carries when it starts a page."""
-    if isinstance(block, _Art):
-        return _Art(height=block.height, draw=block.draw, gap_before=0)
-    return _Text(
-        block.text,
-        bold=block.bold,
-        small=block.small,
-        gap_before=0,
-        keep_with_next=block.keep_with_next,
-        muted=block.muted,
-    )
+    return replace(block, gap_before=0)

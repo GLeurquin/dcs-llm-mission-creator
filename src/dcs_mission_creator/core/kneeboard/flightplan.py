@@ -104,7 +104,7 @@ def flight_plan(group: FlyingGroup) -> list[Leg]:
     them, and a waypoint with no speed of its own (a `land_at` point, which pydcs
     writes as zero) inherits the last commanded speed rather than dividing by it.
     """
-    names = _names(group)
+    names = waypoint_names(group)
     legs: list[Leg] = []
     total_m = 0.0
     elapsed_s = 0.0
@@ -140,8 +140,13 @@ def flight_plan(group: FlyingGroup) -> list[Leg]:
     return legs
 
 
-def _names(group: FlyingGroup) -> list[str]:
+def waypoint_names(group: FlyingGroup) -> list[str]:
     """Waypoint names, with pydcs's two unnamed gates given the names they earn.
+
+    Public because `core/dtc.py` writes the same names into the Viper's
+    steerpoint tab: a route card and a cartridge that disagree about what a
+    point is called is the sort of thing a pilot only notices at the worst
+    moment.
 
     `add_runway_waypoint` is the departure and approach gate every mission puts
     7 km off the field — pydcs names it nothing and marks it `alt_type="RADIO"`,
@@ -191,10 +196,10 @@ def remark(point: MovingPoint) -> str:
         task.AttackGroup: "ATTACK GROUP",
         task.AttackUnit: "ATTACK UNIT",
         task.Bombing: "BOMBING",
-        task.BombingRunway: "RUNWAY ATTACK",
+        task.BombingRunway: "RUNWAY ATK",
         task.RefuelingTaskAction: "REFUEL",
         task.EngageTargets: "ENGAGE",
-        task.EngageTargetsInZone: "ENGAGE IN ZONE",
+        task.EngageTargetsInZone: "ENGAGE ZONE",
         task.Follow: "FOLLOW",
         task.EscortTaskAction: "ESCORT",
         task.Land: "LAND",
