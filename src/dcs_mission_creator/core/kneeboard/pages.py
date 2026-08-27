@@ -44,6 +44,7 @@ the theatre variation, so it is a subtraction away).
 
 from __future__ import annotations
 
+import textwrap
 from datetime import timedelta
 from typing import TYPE_CHECKING, Sequence
 
@@ -59,7 +60,7 @@ from dcs_mission_creator.core.kneeboard.flightplan import (
     magnetic,
     variation_deg,
 )
-from dcs_mission_creator.core.kneeboard.page import Column, Page
+from dcs_mission_creator.core.kneeboard.page import COLUMNS, Column, Page
 
 if TYPE_CHECKING:
     from dcs.mission import Mission
@@ -283,7 +284,18 @@ def comms_page(
     if remarks:
         page.section("remarks")
         for remark in remarks:
-            page.line(remark)
+            # Wrapped, not clipped. Every other block on these cards is derived
+            # from the mission and sized by the code that writes it; a remark is
+            # the one place a mission hands the card prose it typed by hand
+            # (`kneeboard.remark`), so its length is not something this page can
+            # assume. Measured: both of `coastal_cover`'s ran off the right edge
+            # and lost the half of the sentence they existed to carry — the laser
+            # code survived, "where to find the readout" did not. Continuation
+            # lines are indented so a two-line remark still reads as one item.
+            for line in textwrap.wrap(
+                remark, width=COLUMNS, subsequent_indent="  "
+            ) or [""]:
+                page.line(line)
     return page
 
 

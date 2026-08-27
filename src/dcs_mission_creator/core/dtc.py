@@ -416,40 +416,55 @@ def route_steerpoints(
 def plan_steerpoints(plan: "PlanOverlay") -> list[NavPoint]:
     """The F10 plan's *points*, as steerpoints to append after the route.
 
-    What qualifies is everything the map marks that the cockpit has nowhere else
-    to put: the objective (as a `TGT`), the mission's own text labels — a seam to
-    cross, an off-load point — the air defence that moves, and a vague enemy
-    area. Emplaced threats are deliberately **not** here: they are already the
-    cartridge's pre-planned threat points, and spending a navigation steerpoint
-    on a second copy of the same ring buys nothing.
+        What qualifies is everything the map marks that the cockpit has nowhere else
+        to put: the objective (as a `TGT`), the mission's own text labels — a seam to
+        cross, an off-load point — the air defence that moves, and a vague enemy
+        area. Emplaced threats are deliberately **not** here: they are already the
+        cartridge's pre-planned threat points, and spending a navigation steerpoint
+        on a second copy of the same ring buys nothing.
 
     An orbit is a *place*, so every race-track also yields one steerpoint at its
-    midpoint — the thing a pilot actually wants from a tanker station is a range
-    and a bearing to it, and a line on the HSD gives neither. `plan_geo_lines`
-    may draw the track as well, when there is a line left after the geometry
-    that has nowhere else to go.
+        midpoint — the thing a pilot actually wants from a tanker station is a range
+        and a bearing to it, and a line on the HSD gives neither. `plan_geo_lines`
+        may draw the track as well, when there is a line left after the geometry
+        that has nowhere else to go.
 
-    Every position here is the one `PlanOverlay` **drew**, so an estimated site
-    stays estimated in the DED. That is the whole reason this reads back off the
-    overlay rather than off the mission's own variables.
+        **Everything is returned in the mission's own draw order**, marks and orbits
+        interleaved by `PlanLine.seq` / `PlanMark.seq`, because that order is what
+        decides who survives when the tab is oversubscribed — the route is written
+        first and takes what it needs. Listing all the marks and then all the orbits
+        made "draw it first to keep it" false for anything that happened to be a
+        line: `core/sanctuary.py` draws its marshal leg before any other point on the
+        plan precisely so a pilot with a broken jet keeps it, and on `daryal_run` —
+        twenty-one route waypoints, four slots left — it was dropped anyway, behind a
+        vague CAP area drawn twenty lines later.
 
-    Each keeps the editor's own defaults for planned altitude and speed. Nothing
-    planned a leg to a seam or to a tanker station, and inheriting the cruise
-    numbers off the route would put a figure on the DTE page that no part of the
-    mission promised.
+        Every position here is the one `PlanOverlay` **drew**, so an estimated site
+        stays estimated in the DED. That is the whole reason this reads back off the
+        overlay rather than off the mission's own variables.
+
+        Each keeps the editor's own defaults for planned altitude and speed. Nothing
+        planned a leg to a seam or to a tanker station, and inheriting the cruise
+        numbers off the route would put a figure on the DTE page that no part of the
+        mission promised.
     """
     kinds = {"objective": "TGT", "waypoint": "STPT", "mobile": "STPT", "area": "STPT"}
-    points = [
-        NavPoint(mark.position, note=mark.label, kind=kinds[mark.kind])
+    drawn: list[tuple[int, NavPoint]] = [
+        (mark.seq, NavPoint(mark.position, note=mark.label, kind=kinds[mark.kind]))
         for mark in plan.marks()
         if mark.kind in kinds
     ]
-    points += [
-        NavPoint(line.points[0].midpoint(line.points[-1]), note=line.label or "ORBIT")
+    drawn += [
+        (
+            line.seq,
+            NavPoint(
+                line.points[0].midpoint(line.points[-1]), note=line.label or "ORBIT"
+            ),
+        )
         for line in plan.lines()
         if line.kind == "orbit" and len(line.points) >= 2
     ]
-    return points
+    return [point for _, point in sorted(drawn, key=lambda pair: pair[0])]
 
 
 def plan_geo_lines(

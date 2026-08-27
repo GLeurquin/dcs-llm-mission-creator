@@ -17,6 +17,7 @@ individual scatter offsets.
 from __future__ import annotations
 
 import math
+from typing import Sequence
 
 import structlog
 from dcs.mapping import Point
@@ -276,6 +277,66 @@ def infantry_treeline(
     spots = scene.overlay.find_placement(near, radius_m=radius_m, require=require)
     if not spots:
         raise LookupError("no infantry treeline spot found")
+    return spots[0]
+
+
+def observation_post(
+    scene: TacticalScene,
+    watching: Sequence[Point],
+    *,
+    radius_m: float = 6_000.0,
+    min_standoff_m: float = 600.0,
+    max_standoff_m: float = 4_500.0,
+) -> Point:
+    """Concealed ground with line of sight to every point in `watching`.
+
+    A JTAC party's spot, and the constraint this carries that
+    `infantry_treeline` does not is that **it has to see the thing**. A DCS
+    ground controller lases what its own sensor sees, so a party tucked into the
+    nearest treeline is one that checks in, talks the pilot on and never puts a
+    spot on anything — which from the cockpit is indistinguishable from a wrong
+    laser code. `line_of_sight_to` is a hard filter here rather than a
+    preference, measured against the elevation raster.
+
+    **Pass several points along whatever is being watched, not one.** A single
+    point is satisfied by any spot that can see one spot, and in a bending
+    valley that is usually a hollow with a three-kilometre sight line: measured
+    on `coastal_cover`'s march route, one watch point produced a post that saw
+    3.5 km of road (about six minutes of a convoy) while two points 4 km apart
+    forced one that sees 12 km of it. The pair is not a stricter version of the
+    same request — it is a different request, and it is the one a real party
+    would make.
+
+    The standoff band is the other half: too close and the party is inside the
+    weapon effects it is calling, too far and both the DCS laser and the
+    designation geometry give up. `min_relative_height_m` keeps it on the
+    valley's shoulder rather than its floor, since the floor is exactly where
+    sight of a road two kilometres away runs into the next spur.
+    """
+    if not watching:
+        raise ValueError("observation_post needs at least one point to watch")
+    anchor = Point(
+        sum(p.x for p in watching) / len(watching),
+        sum(p.y for p in watching) / len(watching),
+        watching[0]._terrain,
+    )
+    require = Placement.near_treeline(
+        within_m=120.0,
+        light_forest_ok=True,
+        max_slope_deg=15,
+        not_in_built_up=True,
+        min_relative_height_m=5.0,
+        relative_height_radius_m=1_500.0,
+        line_of_sight_to=tuple(watching),
+        min_distance_to=tuple((p, min_standoff_m) for p in watching),
+        max_distance_to=tuple((p, max_standoff_m) for p in watching),
+    )
+    spots = scene.overlay.find_placement(anchor, radius_m=radius_m, require=require)
+    if not spots:
+        raise LookupError(
+            "no concealed observation post with line of sight to all of "
+            f"{[(round(p.x), round(p.y)) for p in watching]}"
+        )
     return spots[0]
 
 

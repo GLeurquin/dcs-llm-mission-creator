@@ -8,7 +8,8 @@ layer does not:
 1. **Faction-correct placement.** Everything lands on the blue `StandardLayer`
    so only the player's coalition sees it.
 2. **Difficulty-scaled enemy reveal.** The friendly plan (routes, orbits,
-   objective) is always drawn precisely; an emplaced enemy threat is drawn at
+   objective, and the `umbrella` our own SAMs hold) is always drawn precisely;
+   an emplaced enemy threat is drawn at
    every difficulty, but as a claim that gets steadily less precise — exact at
    `recruit`, a coarsened "(est.)" ring at `trained`, and a wide, dashed
    "(approx.)" ring further off truth at `veteran` and `ace`. See the
@@ -88,6 +89,10 @@ class PlanLine:
     #: `"route"` | `"orbit"` | `"frontline"`.
     kind: str
     enemy: bool
+    #: Where this fell in the mission's `_draw_plan`, counted across lines *and*
+    #: marks. It is what lets a consumer honour draw order when it has to choose
+    #: between the two — see `core/dtc.plan_steerpoints`.
+    seq: int = 0
 
 
 @dataclass(frozen=True)
@@ -96,15 +101,22 @@ class PlanMark:
 
     position: Point
     label: str
-    #: `"objective"` | `"waypoint"` | `"threat"` | `"mobile"` | `"area"`.
+    #: `"objective"` | `"waypoint"` | `"threat"` | `"mobile"` | `"area"` |
+    #: `"umbrella"`. Only the first five become cartridge steerpoints — see
+    #: `core/dtc.plan_steerpoints`, whose table is the list of kinds a cockpit
+    #: has nowhere else to put.
     kind: str
     enemy: bool
+    #: Where this fell in the mission's `_draw_plan`, counted across marks *and*
+    #: lines. See `PlanLine.seq`.
+    seq: int = 0
 
 
 # -- palette (see skill: enemy red, friendly cyan, objective amber, notes white)
 _ENEMY = Rgba(200, 30, 30, 255)
 _ENEMY_FILL = Rgba(200, 30, 30, 40)
 _FRIENDLY = Rgba(0, 160, 255, 255)
+_FRIENDLY_FILL = Rgba(0, 160, 255, 30)
 _OBJECTIVE = Rgba(255, 170, 0, 255)
 _OBJECTIVE_FILL = Rgba(255, 170, 0, 35)
 _TRANSPARENT = Rgba(0, 0, 0, 0)
@@ -120,6 +132,16 @@ class PlanOverlay:
         self._estimates: dict[tuple[int, int, int], tuple[Point, float]] = {}
         self._lines: list[PlanLine] = []
         self._marks: list[PlanMark] = []
+        #: One sequence across both lists, so "drawn first" is a total order.
+        #: Two separate lists made it a per-list order, and a consumer choosing
+        #: between a mark and a line then had to invent a rule — which is how
+        #: `daryal_run`'s marshal point ended up behind every mark on the plan
+        #: however early the mission drew it.
+        self._seq = 0
+
+    def _next_seq(self) -> int:
+        self._seq += 1
+        return self._seq
 
     # -- friendly own-plan: always drawn precisely -------------------------
 
@@ -136,7 +158,9 @@ class PlanOverlay:
         )
         if label:
             self._label(pts[0], label, _FRIENDLY)
-        self._lines.append(PlanLine(tuple(pts), label, "route", enemy=False))
+        self._lines.append(
+            PlanLine(tuple(pts), label, "route", enemy=False, seq=self._next_seq())
+        )
 
     def orbit(self, p1: Point, p2: Point, label: Optional[str] = None) -> None:
         """Draw a friendly race-track leg (tanker / AWACS / CAP) as a dashed line."""
@@ -145,12 +169,55 @@ class PlanOverlay:
         )
         if label:
             self._label(p1.midpoint(p2), label, _FRIENDLY)
-        self._lines.append(PlanLine((p1, p2), label, "orbit", enemy=False))
+        self._lines.append(
+            PlanLine((p1, p2), label, "orbit", enemy=False, seq=self._next_seq())
+        )
 
     def waypoint_label(self, pos: Point, text: str) -> None:
         """Drop a plain friendly text label at `pos`."""
         self._label(pos, text, _FRIENDLY)
-        self._marks.append(PlanMark(pos, text, "waypoint", enemy=False))
+        self._marks.append(
+            PlanMark(pos, text, "waypoint", enemy=False, seq=self._next_seq())
+        )
+
+    def umbrella(self, center: Point, radius: float, label: str) -> None:
+        """Draw a **friendly** missile envelope — the volume our own SAMs hold.
+
+        Precise at every difficulty, and not because it is convenient: the
+        reveal policy in this module governs what the mission claims to know
+        about *the enemy*, and a battery the player's own side emplaced is not
+        intelligence. Coarsening it would be modelling ignorance of our own
+        order of battle, and it would break the one thing the drawing is for —
+        a pilot who is hit, low on fuel or out of missiles has to be able to
+        read off the map where he stops being shot at. An estimate 6 km off
+        truth is no use for that.
+
+        It is a friendly cyan ring rather than a red one for the same reason:
+        the map's red circles all mean "do not go here", and this one means the
+        opposite. See `core/sanctuary.py`, which is the only caller and which
+        owns the invariant that the ring may not reach the AO.
+
+        Recorded under its own `"umbrella"` kind, which `core/dtc.py` does not
+        turn into a steerpoint, and that is deliberate rather than an omission.
+        A ring is an *area*, and its centre is the battery — 4.5 km off the
+        runway, and a place nobody needs a range and bearing to. The navigation
+        tab is a scarce twenty-five slots shared with the flight's own route
+        (`daryal_run` flies twenty-one waypoints and has four left), so a ring
+        that took one would be spending it on a point whose value is that it is
+        drawn, not that it can be flown to. What a pilot does need from a
+        sanctuary is the marshal leg, and that comes through `orbit`.
+        """
+        self._layer.add_circle(
+            center,
+            radius=radius,
+            color=_FRIENDLY,
+            fill=_FRIENDLY_FILL,
+            line_thickness=3,
+        )
+        self._label(center, label, _FRIENDLY)
+        self._marks.append(
+            PlanMark(center, label, "umbrella", enemy=False, seq=self._next_seq())
+        )
 
     # -- ground truth both sides already have ------------------------------
 
@@ -176,7 +243,9 @@ class PlanOverlay:
         )
         if label:
             self._label(pts[len(pts) // 2], label, _ENEMY)
-        self._lines.append(PlanLine(tuple(pts), label, "frontline", enemy=True))
+        self._lines.append(
+            PlanLine(tuple(pts), label, "frontline", enemy=True, seq=self._next_seq())
+        )
 
     # -- objective area: precision scales with difficulty ------------------
 
@@ -191,7 +260,9 @@ class PlanOverlay:
                 line_thickness=3,
             )
             self._label(center, label, _OBJECTIVE)
-            self._marks.append(PlanMark(center, label, "objective", enemy=False))
+            self._marks.append(
+                PlanMark(center, label, "objective", enemy=False, seq=self._next_seq())
+            )
         else:
             # veteran / ace: a vague area, offset from truth, "vicinity" wording.
             # Through `estimate` rather than a fresh offset of its own: on a
@@ -209,7 +280,11 @@ class PlanOverlay:
             )
             vicinity = f"{label} — vicinity"
             self._label(vague, vicinity, _OBJECTIVE)
-            self._marks.append(PlanMark(vague, vicinity, "objective", enemy=False))
+            self._marks.append(
+                PlanMark(
+                    vague, vicinity, "objective", enemy=False, seq=self._next_seq()
+                )
+            )
 
     # -- enemy threats: reveal scales with difficulty ----------------------
 
@@ -281,7 +356,9 @@ class PlanOverlay:
         suffix = _REVEAL[self._d][2]
         text = f"{label}{suffix}"
         self._ring(*drawn, text, icon, dashed=self._is_vague)
-        self._marks.append(PlanMark(drawn[0], text, "threat", enemy=True))
+        self._marks.append(
+            PlanMark(drawn[0], text, "threat", enemy=True, seq=self._next_seq())
+        )
         return drawn
 
     def detections(
@@ -360,7 +437,9 @@ class PlanOverlay:
         position, _ = self.estimate(center)
         text = f"{label}{_REVEAL[self._d][2]}"
         self._mark(position, text, icon)
-        self._marks.append(PlanMark(position, text, "mobile", enemy=True))
+        self._marks.append(
+            PlanMark(position, text, "mobile", enemy=True, seq=self._next_seq())
+        )
 
     def threat_area(self, center: Point, radius: float, label: str) -> None:
         """Draw a deliberately vague enemy zone (veteran air threat / ace hint)."""
@@ -374,7 +453,9 @@ class PlanOverlay:
             line_style=LineStyle.Dash,
         )
         self._label(vague, label, _ENEMY)
-        self._marks.append(PlanMark(vague, label, "area", enemy=True))
+        self._marks.append(
+            PlanMark(vague, label, "area", enemy=True, seq=self._next_seq())
+        )
 
     # -- what the cockpit is allowed to be handed --------------------------
 

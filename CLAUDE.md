@@ -154,7 +154,11 @@ before releasing brakes. Withholding the ring never withheld the position; it
 moved the leak to the one channel the reveal policy did not cover. So every
 difficulty now draws a ring and hands the estimate back, and every channel
 downstream is built from that one imprecise claim. Friendly-plan calls (`route`, `orbit`,
-`waypoint_label`) always draw precisely. `.frontline()` is the one *enemy* call
+`waypoint_label`, `umbrella`) always draw precisely — and `umbrella` is the one
+whose precision is load-bearing rather than incidental: it is the envelope of our
+*own* SAMs (`core/sanctuary.py`), coarsening it would model an ignorance nobody
+has, and a pilot who is hit and low on fuel cannot use a refuge drawn 6 km off
+truth. `.frontline()` is the one *enemy* call
 that also draws precisely at every difficulty — a front line is ground both
 armies have held for weeks, and the briefing's "cross at the seam" needs
 something on the map to point at; the air defence sitting on it still goes
@@ -234,6 +238,178 @@ right before `_draw_plan`; prefer it over `conceal` so a
 late-activated reserve or a newly added EWR cannot be forgotten. Design rules
 live in the `dcs-mission` skill; the raw pydcs attributes in
 PYDCS_REFERENCE.md §5.
+
+## Somewhere to fall back to (project-owned)
+
+[`sanctuary`](src/dcs_mission_creator/core/sanctuary.py) gives each side a
+**defended** place to run to. Every mission here used to have none: measured
+across all six, not one friendly SAM, not one AAA piece, not one blue
+air-defence group anywhere. The recovery field was bare ground with a runway on
+it, so a MiG that chased a bingo-fuel, out-of-missiles jet home followed it to
+the flare and shot it in the overhead — and nothing on the F10 map, in the DED or
+on the kneeboard marked a square kilometre where that could not happen.
+
+That is a design defect, not a missing feature, and it breaks two things at once.
+**Disengaging stops being a decision**: a player who correctly reads a fight as
+lost has no move that changes the odds, so running is a slower death and the only
+playable line is to press a losing merge — while every mission's threat layout is
+priced on the assumption the player *can* leave (`core/frontline.py` is entirely
+about pricing the ways in). And **pursuit costs nothing**: a red interceptor that
+follows the player 150 km into friendly airspace should be making the mistake it
+really is, and the way to make it one is not to script the MiG, it is to put a
+battery where the MiG has to fly.
+
+```python
+from dcs_mission_creator.core import sanctuary as sanc
+
+home = sanc.build_sanctuary(
+    m, usa, scene.batumi, callsign="BULLDOG",
+    facing=scene.ao_center,               # the threat axis
+    battery=sanc.HAWK,                    # 45 km, off the jet's own table
+    keep_clear=[scene.ao_center, *red_sites],
+    alternates=[scene.kobuleti],          # warns if not actually covered
+    overlay=scene.overlay.overlay, terrain=self._terrain,
+)
+red = sanc.build_sanctuary(
+    m, russia, scene.sukhumi, callsign="Sukhumi field",
+    facing=scene.ao_center, battery=sanc.SA_3,
+    enemy=True, label="SA-3 Sukhumi",     # <=20 chars: the kneeboard column
+    keep_clear=[scene.ao_center, *friendly_stations],
+    skill=Skill.Average, overlay=..., terrain=...,
+)
+```
+
+Then in `_draw_plan`, **first**, and in `_assemble` before `_conceal_red`:
+
+```python
+home.draw(plan)                    # returns [] — our battery is not a threat
+return hsd + red.draw(plan)        # returns the pre-planned threat point
+```
+
+plus `sanc.remark_all(m, home, red)` and one
+`mission_triggers.checkin(..., text=sanc.checkin_text(home, controller="Magic"))`.
+The check-in is not decoration: a cyan ring reads as decoration and nobody opens
+the F10 map again after push — same argument as `core/jtac`'s `push_at_s`. Each
+remark is written to fit `kneeboard.page.COLUMNS` (98) on **one** line, because a
+mission with a primary field, a divert and a JTAC carries five of them and a
+remark that runs over costs two lines of the block.
+
+**Both sides get one, and what differs is the reveal, not the geometry.** That
+split is why this module knows about `map_draw.py` at all:
+
+| | friendly | enemy |
+|---|---|---|
+| F10 | `PlanOverlay.umbrella` — precise at **every** difficulty | `PlanOverlay.threat` — estimated, per the reveal policy |
+| cartridge | the marshal leg / a divert field, as steerpoints | a pre-planned threat point via `dtc.briefed` |
+| kneeboard | a REMARKS line naming the cover | the route card's threat block, like any belt |
+
+A battery the player's own side emplaced is not intelligence, so coarsening it
+would model an ignorance nobody has — and it would break the one thing the ring
+is for, since a pilot who is hit and low on fuel cannot use an envelope drawn
+6 km off truth. `PlanOverlay.umbrella` is therefore the second thing on the map
+drawn precisely at every difficulty (the first is `frontline`), and it is cyan
+rather than red because every red circle on the map means "do not go here" and
+this one means the opposite.
+
+**`keep_clear` is the invariant, and `build_sanctuary` raises on it.** An area SAM
+is a mission-warping object — a Patriot reaches 100 km, further than four of the
+six missions' entire ingress — and an umbrella that touches the AO does not give
+anybody a refuge, it deletes the mission: the belts the player was briefed to
+work around get shot from the other side of the map by an asset nobody planned
+the sortie against. The reach comes off the F-16C's own `THREAT_PTS` table in
+`core/dtc.py`, the same rows the cartridge is written from, so nobody re-types a
+range. Four things learned from wiring it into all six:
+
+- **The two lists are not the same list, and the helper cannot tell them apart
+  for you.** Out of *our* umbrella goes whatever the enemy needs left standing
+  (the AO, the belts, the EWRs) and nothing else — a CAP station 45 km up the
+  axis and a PUSH point 25 km north of the field are *supposed* to be inside it.
+  Out of *theirs* goes every friendly station and the whole ingress corridor.
+  Passing the CAP station to the blue list is the first thing that failed.
+- **On the red side, the objective is often *on* the enemy field**, and then no
+  system fits: `eastern_shield`'s depot is the Kuweires apron, `idlib_gauntlet`'s
+  convoy off-loads 4 km from Taftanaz, `daryal_run`'s S-300 is 12 km from Beslan,
+  `kodori_strike`'s FOB 9 km from Sukhumi. Put the sanctuary on the field the
+  **fighters recover to** instead — that is the one it is for. All four missions
+  do, and `build_sanctuary` refuses the other choice rather than shipping it.
+- **The front line can be the binding constraint.** `idlib_gauntlet`'s Hatay is
+  52 km from the Syrian forward line — closer to the player's own field than to
+  his target — so a Hawk there stops 2.5 km short of it and is refused. It gets
+  NASAMS (15 km, cover for an approach rather than for a fight) and the real
+  recovery umbrella is a Hawk at Incirlik 105 km back. Refusing was right: an
+  umbrella touching the front would shoot into the ground battle the mission
+  spends 90 km of frontage setting up, and the seam would stop mattering.
+- **Airfields are on coasts.** Sochi-Adler's threat axis runs out over the Black
+  Sea, so the doctrinal 4.5 km offset put the whole battery in the water and
+  `snap_units_clear` could not save it — every cell inside its 250 m search
+  radius was water too. `_emplace` walks the offset back *along the same
+  bearing* (4.5 → 3 → 1.5 → 0 km) rather than sideways, because sideways would
+  silently take the battery off the axis it exists to cover. Batumi and Sochi
+  both needed it.
+
+`Battery` is a table entry: name, the `dtc.ThreatSystem` its reach comes from,
+how to build it, and the self-cueing SHORAD that goes on the field (Avenger for
+NATO, 2S6 for Russian — it comes with the area system because the two are not
+independent). `HAWK` / `PATRIOT` / `NASAMS` blue, `SA_2` / `SA_3` / `SA_10` red.
+The two pydcs `VehicleTemplate` sites hard-code `mission.country("USA")` and
+ignore the country handed to them, so those **refuse** any other country rather
+than filing a Turkish battery under the USA.
+
+**A primary field and a divert want opposite things from the cartridge**, and
+`divert=True` is that one distinction. The primary field is already the flight's
+own take-off and landing waypoint — on the route, on the HSD, in the route card's
+first and last rows — so a mark on it restates the route; what it adds is the
+**marshal leg**, a race-track abeam the field inside the envelope. A divert has
+no waypoint anywhere near it, so its **position** is the whole point, and nobody
+diverts in order to orbit. Two consequences that were bugs first:
+
+- **The marshal leg has to fit inside its own envelope.** The un-shrunk 14 km leg
+  put both ends 18–19 km from a NASAMS battery's launchers — outside the 15 km
+  umbrella, which makes the one drawing whose entire purpose is "hold here and
+  nothing can reach you" a lie. It now halves until the far end is inside
+  `_MARSHAL_FIT` of the envelope, measured **from the battery**, which is offset
+  up the threat axis.
+- **A ring takes no navigation steerpoint.** `PlanOverlay.umbrella` records its
+  own `"umbrella"` mark kind, which `dtc.plan_steerpoints` does not turn into a
+  point: a ring is an *area* and its centre is a battery 4.5 km off the runway,
+  which nobody needs a bearing to.
+
+That budget is real and it forced a fix in `core/dtc.py`. `plan_steerpoints`
+listed all the marks and then all the orbits, so "a mission that cares which
+point survives draws it first" — the documented contract — was **false for
+anything that was a line**. `daryal_run` flies twenty-one waypoints and has four
+of twenty-five slots left; its marshal leg was drawn before every other point on
+the plan and dropped anyway, behind a vague CAP area drawn twenty lines later.
+`PlanLine.seq` / `PlanMark.seq` now number both lists from one counter and
+`plan_steerpoints` interleaves by it, so draw order is a total order.
+
+Design rule as everywhere else in `core/`: absolute world `Point` / pydcs
+`Airport` and `Country` in, built groups out. Which field, which system and what
+the briefing says are the mission's decisions. Every mission states its callsign
+and battery as module constants (`_SANCTUARY`, `_SANCTUARY_BATTERY`) and
+interpolates them into both briefing views, so the prose cannot drift from the
+reach that was actually emplaced.
+
+**Every mission carries one on each side**, with a `## Fall-back` briefing
+section, a "not cleared to pursue over `<enemy field>`" ROE line, and the enemy
+field's belt in the HSD cartridge and the kneeboard threat block:
+
+| mission | ours | theirs | note |
+|---|---|---|---|
+| coastal_cover | `BULLDOG` Hawk, Batumi | SA-3 Sukhumi | Kutaisi is 97 km out — a runway, deliberately not claimed as cover |
+| kodori_strike | `CASTLE` Hawk, Kutaisi | SA-3 Gudauta | Senaki (37 km) is inside the envelope, so the existing divert became real |
+| daryal_run | `RAMPART` Hawk, Vaziani | SA-3 Mozdok | Soganlug newly blue at 8 km; the ace mission needs this most |
+| abkhaz_sweep | `BASTION` Hawk, Batumi | SA-3 Sochi | Kobuleti newly blue at 42 km; the briefing had named Senaki, which the mission never made friendly |
+| eastern_shield | `REDOUBT` Hawk, Incirlik + `PICKET` NASAMS, Gaziantep (divert) | SA-3 Bassel | 213 km egress, the longest here — Gaziantep is 85 km from the target |
+| idlib_gauntlet | `KEEPER` NASAMS, Hatay + `ANVIL` Hawk, Incirlik (divert) | SA-3 Bassel | front line 52 km off Hatay caps the forward umbrella; the Bassel belt joins the Skynet net |
+
+Two things worth noting about the red half. It needs no scripting to work: DCS AI
+already RTBs on bingo (`tasking.apply_ai_difficulty` sets it), so a defended red
+field turns "chase him home" into a priced decision using the same missiles as
+everything else. And on a mission with an IADS net the red field battery belongs
+**in** it — `idlib_gauntlet` adds Bassel as a `Site`, slowest reactions and
+shortest `react_range_m` in the net, because leaving it out would make the
+airfield belt the one battery in Syria that stays up under a HARM.
 
 ## Air-defense builder (project-owned)
 
@@ -599,7 +775,16 @@ the DED and a site the mission never drew is not in the list to leak. Both
 default — and either may be made without the other.
 
 - **`NAV_PTS`, steerpoints 1–25.** The flight's own route first, then the plan's
-  marks: the objective as a `TGT`, the mission's text labels (a seam, an
+  points **in the mission's own draw order** — marks and orbit midpoints
+  interleaved by `PlanLine.seq` / `PlanMark.seq`, since that order is what
+  decides who survives an oversubscribed tab. It used to list every mark and then
+  every orbit, which made the documented "draw it first to keep it" contract
+  false for anything that was a *line*: `daryal_run` flies twenty-one waypoints,
+  has four slots left, and dropped the marshal leg `core/sanctuary.py` had drawn
+  before every other point on the plan, behind a vague CAP area drawn twenty
+  lines later. A `PlanOverlay.umbrella` ring takes no slot at all (its own
+  `"umbrella"` kind) — a ring is an area and its centre is a battery 4.5 km off
+  the runway. The marks that do qualify: the objective as a `TGT`, the mission's text labels (a seam, an
   off-load point), the air defence that moves, a vague enemy area — and one
   steerpoint per **orbit**, at the midpoint of the race-track, because what a
   pilot wants from a tanker station is a range and a bearing to it. Emplaced
@@ -1214,8 +1399,25 @@ are computed in the mission while `VoiceSynth` renders its audio ahead of time.
 This does not replace `tasking.fac_attack_group`: that is what makes the
 controller acquire, lase and talk. Arm both.
 
+**Place a ground controller with
+[`placement.observation_post`](src/dcs_mission_creator/core/placement.py)**, not
+with a concealment helper. A DCS JTAC lases what its *own* sensor sees, so the
+constraint that decides whether the feature works at all is line of sight to the
+target's ground, and `place_ambush_on_route` / `infantry_treeline` do not carry
+one — in `coastal_cover` the ambush helper picked a spot 830 m from the march
+route, 38 m below it and behind a rise, which from the cockpit is
+indistinguishable from a wrong laser code. Pass **several points spread along
+whatever is being watched**: one point is satisfied by any hollow that can see
+one point, and measured on that mission's road it produced a post seeing 3.5 km
+of it (six minutes of a convoy) where two points 4 km apart forced one seeing
+12 km. The visible stretch is then the mission's strike window, so it is worth
+measuring and worth saying out loud on the radio.
+
 **Pass `push_at_s`** (mission seconds, just after the controller's check-in
-call) unless there is a reason not to. It reads out the first target's position
+call) unless there is a reason not to. Time it after whatever call announces the
+target, not at check-in — the readout answers off a live unit, so it will
+happily read out coordinates for something the controller has not yet said he
+can see. It reads out the first target's position
 once, unprompted, to whoever is in the cockpit and to anyone slotting in later.
 Without it the feature is invisible: DCS keeps reading its own grid, the player
 has no reason to go looking in F10 → Other, and the mission looks like it never
@@ -1337,8 +1539,12 @@ kneeboard.remark(m, "Target coordinates in your own cockpit's format: "
                     "F10 -> Other -> Hammer 1-1.")
 ```
 
-Keep that list short. Everything else on the cards is derived and should stay
-that way — a remark is prose, and prose goes stale exactly the way the
+Remarks are **wrapped** to the page rather than clipped, which they were not
+until `coastal_cover` put two long ones on the card and lost the halves that
+mattered — the laser code survived, "where to find the readout" ran off the
+right edge. Continuation lines are indented so a two-line remark still reads as
+one item. Keep that list short anyway. Everything else on the cards is derived
+and should stay that way — a remark is prose, and prose goes stale exactly the way the
 hand-typed FREQUENCIES block in every briefing was one edit from being wrong.
 That block is what these cards make true: the briefings have always said
 "Batumi tower: per kneeboard".
@@ -1641,12 +1847,33 @@ remain only at the pydcs API layer (`airport.set_blue()`,
 ## Existing missions
 
 - [coastal_cover.py](src/dcs_mission_creator/missions/coastal_cover.py) —
-  Caucasus mix: F-16C escort/CAP from Batumi over an A-10C strike on a
-  Russian convoy near Senaki, MiG-29S intercept from Sukhumi-Babushara,
-  trained difficulty, ~50 min sortie. Generates to `out/coastal_cover.miz`.
-  Carries a **recon still** (`core/recon`) of the column on the valley road,
-  which is the whole intelligence picture here: every claim in its briefing is
-  sourced to one Reaper that has been up since first light.
+  Caucasus, trained, ~60 min: an F-16C out of Batumi flying a sortie that
+  **changes task three times**, and the reference for a *layered* frag rather
+  than a single one. It opens as escort over an A-10C pair working a Russian
+  column on the Inguri valley road, becomes a strike when the load the march is
+  actually for — a fuel and ammunition detachment a dozen kilometres behind —
+  comes down the same road, and becomes a defensive problem when a pair of
+  Mi-24Ps is sent after `Pinpoint 1-1`, the ground party lasing it. Two GBU-12s
+  against three trucks, and the party is what makes two enough: lose him and the
+  pass is self-designated. Carries a **recon still** (`core/recon`) of the
+  column, and it is the mission's whole intelligence picture — every claim in
+  the briefing is sourced to one Reaper up since first light, which is also why
+  the detachment is not in the frame.
+
+  Read it for three things the other five do not do. **Two objectives, priced
+  separately**: the column is `Hawg`'s and the detachment is the player's, and
+  the end triggers say which is which rather than merging them into a score.
+  **A talk-on that is the mechanism, not decoration** — `core/jtac` +
+  `tasking.fac_attack_group` on a ground party placed by
+  `placement.observation_post`, whose sight line is measured against the
+  elevation raster and whose ~12 km of visible road *is* the strike window (the
+  party says so on the radio when it opens and when it closes). And **a
+  withheld threat aimed at the deviation**: the SA-8 travelling with the
+  detachment has no ring, no cartridge point and no place in any friendly route,
+  the briefing names the gap and gives a hard release floor above its ceiling,
+  and it is late-activated at the moment the party calls the trucks — because
+  emplaced from mission start it sat inside `Hawg`'s briefed 4,000 m run, which
+  is the difference between fog of war and a bug wearing its costume.
 - [kodori_strike.py](src/dcs_mission_creator/missions/kodori_strike.py) —
   Caucasus: F-16C strike out of Kutaisi on a Russian FOB astride the coast road
   at the Kodori delta, with an F-16C SEAD element against the SA-6 on the rising

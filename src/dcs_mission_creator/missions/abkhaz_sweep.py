@@ -57,6 +57,7 @@ from dcs.unitgroup import FlyingGroup, VehicleGroup
 from dcs_mission_creator.core import (
     air_defense as ad,
     dtc,
+    sanctuary as sanc,
     triggers as mission_triggers,
 )
 from dcs_mission_creator.core.cli import run_cli
@@ -175,6 +176,7 @@ class _Scene:
     """Resolved airports + key positions used by every spawn step."""
 
     batumi: Airport
+    kobuleti: Airport
     sochi: Airport
     gudauta: Airport
     sukhumi: Airport
@@ -191,6 +193,19 @@ class _Scene:
     mig29_intrusion: Point
     threats: tuple[ThreatRing, ...]
     overlay: TacticalScene
+
+
+# Batumi's own air defence, and why it does not break the ace composition.
+#
+# "No tanker, no escort, no wingman" *is* this mission's difficulty statement —
+# see the force-balance note in CLAUDE.md — so nothing here may be a friendly
+# asset in the fight. `BASTION` is not: it is 149 km behind the sweep stations,
+# it cannot reach anything, and it does not fire a shot unless a bandit follows
+# a jet with an empty rail 150 km home. What it changes is that breaking off is
+# a plan. Kobuleti at 42 km comes free inside the same envelope, which matters
+# for a jet that has taken a hit and wants the nearest runway.
+_SANCTUARY = "BASTION"
+_SANCTUARY_BATTERY = sanc.HAWK
 
 
 class AbkhazSweep(MissionBuilder):
@@ -274,6 +289,10 @@ INTELLIGENCE
         from inland. Both sites are marked approximately.
         You will be seen from the coast in, and both
         fields will be vectored onto you.
+  Base: Sochi is defended in its own right — an S-125
+        battery on the field, guns in the overhead. It
+        reaches 79 km short of your northern station. Do
+        not follow the Flankers home to find out.
 
 ROE / FRAGS
   - Weapons free on any Russian fighter inside the
@@ -284,9 +303,20 @@ ROE / FRAGS
   - Do NOT descend below 4500 m AGL over the AO — Snow
     Drum will see you the moment you drop into its
     envelope.
+  - Not cleared to pursue over Sochi-Adler.
   - Bingo fuel: 3500 lb. RTB Batumi direct (divert:
-    Senaki-Kolkhi). Do not chase north of Gudauta on
-    bingo or on an empty magazine.
+    Kobuleti). Do not chase north of Gudauta on bingo or
+    on an empty magazine.
+
+FALL-BACK ({_SANCTUARY})
+  Batumi and Kobuleti both sit under a
+  {_SANCTUARY_BATTERY.name} battery — {_SANCTUARY_BATTERY.radius_m / 1000:.0f} km,
+  cyan ring on the map, guns in the overhead of Batumi.
+  You have six missiles and nobody with you: the moment
+  the magazine or the fuel says the fight is over, that
+  ring is where it ends. Cross it and nothing follows.
+  {_SANCTUARY} MARSHAL is a hold abeam Batumi, on the
+  map and in the DED. Either runway takes you.
 
 NAV
   Bullseye (own side) : {bx:.0f}, {by:.0f} (DCS world m)
@@ -294,6 +324,7 @@ NAV
   STATION_SOUTH       : offshore south of Sukhumi
   STATION_NORTH       : offshore north of Sukhumi
   EGRESS              : south back to Batumi
+  BASTION MARSHAL     : hold abeam Batumi, inside the ring
 
 FREQUENCIES
   Magic AWACS  : 251.000 AM
@@ -379,6 +410,11 @@ picture off `Magic`, the RWR and the tally.
   behind each field. Both are marked approximately; a search radar has no
   envelope, so neither carries a ring you could fly around. You are seen from
   the coast in, and both fields get vectored onto you.
+- **Sochi-Adler field defence:** an S-125 battery on the airfield, with
+  self-propelled guns in the overhead, assessed at the same confidence as
+  everything else here. It reaches 18 km and your northern station is 79 km
+  from it, so it touches no part of the sweep — it is the reason a Flanker that
+  turns for home stops being a target.
 
 ## ROE
 
@@ -387,8 +423,28 @@ picture off `Magic`, the RWR and the tally.
   moves — you are cleared home with the Gudauta section still flying.
 - Do **not** descend below 4500 m AGL over the AO — Snow Drum sees you the
   moment you drop into its envelope.
-- Bingo fuel: 3500 lb. RTB Batumi direct (divert: Senaki-Kolkhi). Do not
-  chase north of Gudauta on bingo or on an empty magazine.
+- **Not cleared to pursue over Sochi-Adler.** A withdrawing Flanker is not
+  worth an S-125, and on this magazine it is not worth the missiles either.
+- Bingo fuel: 3500 lb. RTB Batumi direct (divert: Kobuleti). Do not chase
+  north of Gudauta on bingo or on an empty magazine.
+
+## Fall-back
+
+Batumi is covered by a `{_SANCTUARY}` {_SANCTUARY_BATTERY.name} battery reaching
+{_SANCTUARY_BATTERY.radius_m / 1000:.0f} km, drawn as the cyan ring on the F10 map, with gun sections in
+the overhead. Kobuleti is 42 km up the coast and **inside the same envelope** —
+take whichever runway is closer to where you break off.
+
+This is the counterpart to the magazine arithmetic above. You launch with six
+air-to-air missiles against crews flown at their best, with no tanker, no escort
+and no wingman, and the frag is deliberately smaller than the airspace: the
+Gudauta section is a threat to beat, not a target list. Disengaging is therefore
+a legitimate line rather than a failure — and it only means anything because the
+ring is there for it to end at. `{_SANCTUARY} MARSHAL` is a hold abeam Batumi
+inside the envelope, on the map and in the DED.
+
+The battery sits 149 km behind your southern station. It is not support and it
+will not help you in the fight; it is where the fight stops.
 
 ## Navigation
 
@@ -397,11 +453,13 @@ picture off `Magic`, the RWR and the tally.
 - STATION_SOUTH: offshore south of Sukhumi
 - STATION_NORTH: offshore north of Sukhumi
 - EGRESS: south back to Batumi
+- `BASTION MARSHAL`: hold abeam Batumi, inside the umbrella
 
 ## Frequencies
 
 - Magic AWACS: 251.000 AM
 - Batumi tower: per kneeboard
+- `{_SANCTUARY}` details and the Kobuleti divert are on the kneeboard comms card.
 
 ## Weather
 
@@ -455,9 +513,15 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         mig29s = self._spawn_red_mig29(m, russia, scene)
         player, route = self._spawn_player(m, usa, scene, threats=scene.threats)
 
+        home, sochi_ad = self._spawn_sanctuaries(m, usa, russia, scene, route=route)
+
         self._add_end_triggers(m, su27s=su27s, mig29s=mig29s, player=player)
+        self._add_sanctuary_checkin(m, home)
+        sanc.remark_all(m, home, sochi_ad)
         self._conceal_red(russia)
-        briefed_threats = self._draw_plan(m, scene, plan=plan, route=route)
+        briefed_threats = self._draw_plan(
+            m, scene, plan=plan, route=route, home=home, sochi_ad=sochi_ad
+        )
         self._load_cartridge(m, scene, briefed_threats, plan=plan)
         self._add_briefing(m)
         return scene.overlay.overlay
@@ -490,10 +554,14 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         """Claim Batumi for blue, Sochi/Gudauta/Sukhumi for red, derive AO geometry."""
         t = self._terrain
         batumi = t.airports["Batumi"]
+        # Kobuleti is 42 km up the coast and inside the same missile umbrella —
+        # a second runway for a jet coming back hit, at no cost in cover.
+        kobuleti = t.airports["Kobuleti"]
         sochi = t.airports["Sochi-Adler"]
         gudauta = t.airports["Gudauta"]
         sukhumi = t.airports["Sukhumi-Babushara"]
         batumi.set_blue()
+        kobuleti.set_blue()
         sochi.set_red()
         gudauta.set_red()
         sukhumi.set_red()
@@ -520,6 +588,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         mig29_intrusion = offset(sukhumi.position, east_m=-20_000, north_m=35_000)
         return _Scene(
             batumi=batumi,
+            kobuleti=kobuleti,
             sochi=sochi,
             gudauta=gudauta,
             sukhumi=sukhumi,
@@ -866,8 +935,99 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         """
         return (ThreatRing(sa6_pos, _SA6_RING_M, "SA-6"),)
 
+    def _spawn_sanctuaries(
+        self,
+        m: Mission,
+        usa: Country,
+        russia: Country,
+        scene: _Scene,
+        *,
+        route: list[Point],
+    ) -> tuple[sanc.Sanctuary, sanc.Sanctuary]:
+        """A covered field at each end: Batumi under Hawk, Sochi under S-125.
+
+        The blue half is the answer to this mission's own magazine arithmetic.
+        `Dodge` launches with six air-to-air missiles against bandits scaled off
+        the slot count and is explicitly cleared to leave the Gudauta section
+        flying — but "disengage" only means something if there is somewhere the
+        disengagement ends. `BASTION` is that somewhere, and it stays outside the
+        fight by 149 km, so it buys the player an exit without giving him a
+        friendly asset to fight behind.
+
+        Sochi gets the red battery because that is where the tasked Su-27 element
+        recovers, and following one home with an empty jet is the mistake this
+        prices. Gudauta is the field a mission would reach for second and the one
+        `build_sanctuary` refuses: the northern sweep station is 18 km off its
+        threshold, so any envelope there covers the airspace the player is
+        fragged to hold.
+
+        The two `keep_clear` lists differ. Out of *ours* goes the red order of
+        battle — the Kub, the Shilka and both EWRs. Out of *theirs* goes every
+        flown point of the sweep, both stations included, which is what stops an
+        S-75 being chosen here by mistake: at 43 km it would reach the northern
+        station and quietly turn a fighter sweep into a SAM problem.
+        """
+        home = sanc.build_sanctuary(
+            m,
+            usa,
+            scene.batumi,
+            callsign=_SANCTUARY,
+            facing=scene.station_north,
+            battery=_SANCTUARY_BATTERY,
+            keep_clear=[
+                scene.sa6_site,
+                scene.shilka_pos,
+                scene.ewr_su27,
+                scene.ewr_mig29,
+            ],
+            alternates=[scene.kobuleti],
+            overlay=scene.overlay.overlay,
+            terrain=self._terrain,
+        )
+        sochi_ad = sanc.build_sanctuary(
+            m,
+            russia,
+            scene.sochi,
+            callsign="Sochi field",
+            facing=scene.station_north,
+            battery=sanc.SA_3,
+            enemy=True,
+            label="SA-3 Sochi",
+            keep_clear=[
+                scene.station_north,
+                scene.station_south,
+                scene.awacs_anchor,
+                *route,
+            ],
+            skill=Skill.Average,
+            overlay=scene.overlay.overlay,
+            terrain=self._terrain,
+        )
+        return home, sochi_ad
+
+    def _add_sanctuary_checkin(self, m: Mission, home: sanc.Sanctuary) -> None:
+        """Read the umbrella out once, on the climb-out.
+
+        Without it the feature is invisible: a cyan ring on the F10 map reads as
+        decoration, and nobody opens the map again after push.
+        """
+        mission_triggers.checkin(
+            m,
+            at_seconds=180,
+            comment="BASTION umbrella check-in",
+            voice=self._voice,
+            text=sanc.checkin_text(home, controller="Magic"),
+        )
+
     def _draw_plan(
-        self, m: Mission, scene: _Scene, *, plan: PlanOverlay, route: list[Point]
+        self,
+        m: Mission,
+        scene: _Scene,
+        *,
+        plan: PlanOverlay,
+        route: list[Point],
+        home: sanc.Sanctuary,
+        sochi_ad: sanc.Sanctuary,
     ) -> list[dtc.ThreatPoint]:
         """Paint the plan on the F10 map (ace: the ground picture, badly located).
 
@@ -888,6 +1048,12 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         needing this mission's claim about a site — a steerpoint, a cartridge
         point — gets the same memoised estimate rather than a second guess.
         """
+        # The sanctuary goes on first so its marshal leg wins the cartridge's
+        # navigation budget: `core/dtc.py` fills that tab in draw order after the
+        # flight's own route, and on a sortie flown with six missiles and no
+        # support the hold behind the umbrella is the point a pilot is most
+        # likely to need.
+        home.draw(plan)
         ao = scene.station_south.midpoint(scene.station_north)
         plan.objective(ao, "Sweep AO", radius=8_000.0)
         plan.route(route, "Dodge sweep")
@@ -911,6 +1077,11 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         ):
             plan.threat(pos, radius=4_000.0, label=name, icon=StandardIcon.SearchRadar)
         plan.threat_area(scene.sukhumi.position, 28_000.0, "Bandit CAP — vicinity")
+        # Sochi's own belt is a red ring like any other, drawn at ace confidence
+        # — approximate, and into the cartridge beside the Kub. It reaches 18 km
+        # and the stations are 79 km away, so it costs the sweep nothing and
+        # costs a chase everything.
+        briefed += sochi_ad.draw(plan)
         return briefed
 
     def _load_cartridge(

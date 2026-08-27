@@ -43,6 +43,7 @@ from dcs.unit import Skill
 from dcs_mission_creator.core import (
     air_defense as ad,
     dtc,
+    sanctuary as sanc,
     triggers as mission_triggers,
     waypoints,
 )
@@ -160,6 +161,7 @@ class _Scene:
     """Resolved airports + key positions used by every spawn step."""
 
     vaziani: Airport
+    soganlug: Airport
     mozdok: Airport
     beslan: Airport
     sa10_site: Point
@@ -175,6 +177,17 @@ class _Scene:
     def ip(self) -> Point:
         """The pop point: the last corridor point, at the mouth of the gorge."""
         return self.ingress[-1].position
+
+
+# Vaziani's own air defence, and the reason an ace mission needs it most.
+#
+# This is the sortie where the player is deepest and most alone: 168 km out,
+# one flight, no tanker, no escort, against a battery flown by the best crew in
+# the game. `RAMPART` is what makes turning for home a plan rather than a hope,
+# and Soganlug 8 km away means the same envelope covers a second runway for a
+# jet that will not make a normal approach.
+_SANCTUARY = "RAMPART"
+_SANCTUARY_BATTERY = sanc.HAWK
 
 
 class DaryalRun(MissionBuilder):
@@ -249,6 +262,10 @@ INTELLIGENCE
         detected south of Beslan.
   EWR : Early-warning radar on a ridge near Mozdok feeds
         the fighters their picture.
+  Base: Mozdok is defended in its own right — an S-125
+        battery on the field, guns in the overhead. It
+        reaches nothing on your route. Do not follow the
+        MiGs home to find out.
 
 ROE / FRAGS
   - Weapons free on the SA-10 cluster and any Russian
@@ -256,8 +273,19 @@ ROE / FRAGS
     the border.
   - Keep below 1000 m AGL from Stepantsminda to the gorge
     mouth — Big Bird sees you the moment you crest.
+  - Not cleared to pursue over Mozdok.
   - Bingo fuel: 2500 lb. RTB Vaziani via the Ardon and
     Roki, not back through Daryal.
+
+FALL-BACK ({_SANCTUARY})
+  Vaziani and Soganlug both sit under a
+  {_SANCTUARY_BATTERY.name} battery — {_SANCTUARY_BATTERY.radius_m / 1000:.0f} km,
+  cyan ring on the map, guns in the overhead of Vaziani.
+  You are alone out there and you will know before
+  anyone else does whether this is still working. If it
+  is not, the ring is the plan: cross it and the sortie
+  is over. {_SANCTUARY} MARSHAL is a hold abeam Vaziani,
+  on the map and in the DED. Either runway takes you.
 
 NAV
   Bullseye (own side) : {bx:.0f}, {by:.0f} (DCS world m)
@@ -360,6 +388,10 @@ not over the launchers. Find the radars with the HTS.
 - **EWR:** early-warning radar on a ridge near Mozdok feeding the fighters.
 - **Air:** a MiG-29S pair at Mozdok, R-77 shooters, experienced crews. They
   will launch once you are detected south of Beslan.
+- **Mozdok field defence:** the same ELINT work puts an S-125 battery on the
+  airfield, with self-propelled guns in the overhead. It reaches 18 km, 78 km
+  from your target, so it touches no part of the run — it is the reason a MiG
+  that turns for home stops being a target.
 
 ## ROE
 
@@ -367,8 +399,25 @@ not over the launchers. Find the radars with the HTS.
   against you north of the border.
 - Stay below 1000 m AGL from Stepantsminda to the gorge mouth — Big Bird
   sees you the moment you crest.
+- **Not cleared to pursue over Mozdok.** A withdrawing MiG is not worth an
+  S-125, least of all on the fuel you will have by then.
 - Bingo fuel: 2500 lb. RTB Vaziani via the Ardon and Roki, **not** back
   through Daryal.
+
+## Fall-back
+
+Vaziani is covered by a `{_SANCTUARY}` {_SANCTUARY_BATTERY.name} battery reaching
+{_SANCTUARY_BATTERY.radius_m / 1000:.0f} km, drawn as the cyan ring on the F10 map, with gun sections in
+the overhead. Soganlug is 8 km away and **inside the same envelope**, so a jet
+that cannot fly a normal approach has two runways under one battery.
+
+That matters more on this sortie than on any other. You go 168 km alone against
+the best crew on the map, with four HARMs, no tanker, no escort and no wingman —
+and the one thing that makes "abort and run" a plan rather than a slower loss is
+that it ends somewhere. If the run has gone wrong, turn south, take the Ardon and
+the Roki as briefed, and cross that ring. `{_SANCTUARY} MARSHAL` is a hold abeam
+Vaziani inside the envelope, on the map and in the DED, for a damaged jet waiting
+on the pattern.
 
 ## Navigation
 
@@ -398,6 +447,7 @@ between the two.
 
 - Magic AWACS: 251.000 AM
 - Vaziani tower: per kneeboard
+- `{_SANCTUARY}` details and the Soganlug divert are on the kneeboard comms card.
 
 ## Weather
 
@@ -446,9 +496,15 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self._spawn_red_intercept(m, russia, scene)
         player, route = self._spawn_player(m, usa, scene, plan=plan)
 
+        home, mozdok_ad = self._spawn_sanctuaries(m, usa, russia, scene, route=route)
+
         self._add_end_triggers(m, sa10=sa10, player=player)
+        self._add_sanctuary_checkin(m, home)
+        sanc.remark_all(m, home, mozdok_ad)
         self._conceal_red(russia)
-        briefed_threats = self._draw_plan(m, scene, plan=plan, route=route)
+        briefed_threats = self._draw_plan(
+            m, scene, plan=plan, route=route, home=home, mozdok_ad=mozdok_ad
+        )
         self._load_cartridge(m, scene, briefed_threats, plan=plan)
         self._add_briefing(m)
         return scene.overlay.overlay
@@ -483,7 +539,11 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         vaziani = t.airports["Vaziani"]
         mozdok = t.airports["Mozdok"]
         beslan = t.airports["Beslan"]
+        # Soganlug is 8 km from Vaziani and inside the same missile umbrella —
+        # a second runway for a jet coming back damaged, at no cost in cover.
+        soganlug = t.airports["Soganlug"]
         vaziani.set_blue()
+        soganlug.set_blue()
         mozdok.set_red()
         beslan.set_red()
 
@@ -513,6 +573,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
         return _Scene(
             vaziani=vaziani,
+            soganlug=soganlug,
             mozdok=mozdok,
             beslan=beslan,
             sa10_site=sa10_site,
@@ -780,8 +841,90 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         """
         conceal_country(russia)
 
+    def _spawn_sanctuaries(
+        self,
+        m: Mission,
+        usa: Country,
+        russia: Country,
+        scene: _Scene,
+        *,
+        route: list[Point],
+    ) -> tuple[sanc.Sanctuary, sanc.Sanctuary]:
+        """A covered field at each end: Vaziani under Hawk, Mozdok under S-125.
+
+        The blue half matters more here than in any other mission in the project.
+        `Dodge` flies 168 km alone into an S-300 with four HARMs and no support
+        beyond an AWACS track behind the border; the only reason "abort and run"
+        is a real option rather than a slower loss is that there is somewhere for
+        it to end. Soganlug is 8 km from Vaziani, so it comes free inside the
+        same envelope and a jet that cannot fly a normal approach has two
+        runways.
+
+        Mozdok gets the red battery because that is where the MiG-29S pair
+        recovers — 78 km from the target, so 18 km of S-125 cannot touch the
+        SEAD run and can absolutely punish a Viper that follows a withdrawing
+        MiG north with two missiles left. Beslan, 12 km from the battery, is the
+        field a mission would reach for first and the one `build_sanctuary` would
+        refuse: nothing emplaced there clears the objective.
+
+        `keep_clear` on our side is the whole red order of battle, which at 168
+        and 245 km is never in question — it is passed anyway so a future change
+        to the AO fails loudly instead of quietly switching the mission off.
+        On theirs it is the objective plus every flown point of the route,
+        including the egress up the Ardon, which is the leg that comes back
+        nearest Russian territory.
+        """
+        home = sanc.build_sanctuary(
+            m,
+            usa,
+            scene.vaziani,
+            callsign=_SANCTUARY,
+            facing=scene.sa10_site,
+            battery=_SANCTUARY_BATTERY,
+            keep_clear=[scene.sa10_site, scene.shorad, scene.ewr_pos],
+            alternates=[scene.soganlug],
+            overlay=scene.overlay.overlay,
+            terrain=self._terrain,
+        )
+        mozdok_ad = sanc.build_sanctuary(
+            m,
+            russia,
+            scene.mozdok,
+            callsign="Mozdok field",
+            facing=scene.sa10_site,
+            battery=sanc.SA_3,
+            enemy=True,
+            label="SA-3 Mozdok",
+            keep_clear=[scene.sa10_site, scene.awacs_anchor, *route],
+            skill=Skill.Average,
+            overlay=scene.overlay.overlay,
+            terrain=self._terrain,
+        )
+        return home, mozdok_ad
+
+    def _add_sanctuary_checkin(self, m: Mission, home: sanc.Sanctuary) -> None:
+        """Read the umbrella out once, on the climb-out up the Aragvi.
+
+        Without it the feature is invisible: a cyan ring on the F10 map reads as
+        decoration, and on this route nobody opens the map again after Pasanauri.
+        """
+        mission_triggers.checkin(
+            m,
+            at_seconds=200,
+            comment="RAMPART umbrella check-in",
+            voice=self._voice,
+            text=sanc.checkin_text(home, controller="Magic"),
+        )
+
     def _draw_plan(
-        self, m: Mission, scene: _Scene, *, plan: PlanOverlay, route: list[Point]
+        self,
+        m: Mission,
+        scene: _Scene,
+        *,
+        plan: PlanOverlay,
+        route: list[Point],
+        home: sanc.Sanctuary,
+        mozdok_ad: sanc.Sanctuary,
     ) -> list[dtc.ThreatPoint]:
         """Paint the plan on the F10 map (ace: the ELINT cut, drawn as a cut).
 
@@ -801,6 +944,11 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         Returns the two emplaced systems as HSD threat points. The EWR is not
         among them: a search radar has no envelope to fly around.
         """
+        # The sanctuary goes on first so its marshal point is the first mark in
+        # the cartridge's navigation tab: `core/dtc.py` fills those in draw order
+        # after the flight's own route, and on this sortie the one mark a pilot
+        # may need with a broken jet should not lose to the AWACS anchor.
+        home.draw(plan)
         plan.objective(scene.sa10_site, "TARGET — SA-10", radius=8_000.0)
         plan.route(route, "Dodge ingress (Daryal)")
         plan.waypoint_label(scene.awacs_anchor, "Magic AWACS")
@@ -830,6 +978,11 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             scene.ewr_pos, radius=4_000.0, label="EWR", icon=StandardIcon.SearchRadar
         )
         plan.threat_area(scene.intrusion_center, 30_000.0, "MiG-29S CAP — vicinity")
+        # Mozdok's own belt is a red ring like any other, drawn at ace confidence
+        # — approximate, and into the cartridge beside the Big Bird. It reaches
+        # 18 km and the target is 78 km away, so it costs the SEAD run nothing
+        # and costs a chase everything.
+        briefed += mozdok_ad.draw(plan)
         return briefed
 
     def _load_cartridge(

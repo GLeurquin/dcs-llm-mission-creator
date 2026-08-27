@@ -84,6 +84,7 @@ from dcs_mission_creator.core import (
     dtc,
     kneeboard,
     routing,
+    sanctuary as sanc,
     triggers as mission_triggers,
     waypoints,
 )
@@ -227,6 +228,27 @@ class _Scene:
     overlay: TacticalScene
 
 
+# The two covered fields, and why the forward one is deliberately small.
+#
+# Hatay is 78 km from the convoy axis and the Syrian front line stands 52 km off
+# its threshold — closer to the player's own field than to his target. That is
+# what fixes the system: a Hawk at Hatay reaches 45 km, and with the battery
+# emplaced 4.5 km up the threat axis its envelope stops 2.5 km short of the
+# forward line, which `build_sanctuary` refuses outright. It is right to refuse.
+# An umbrella that touches the front would be shooting into the ground battle the
+# mission spends 90 km of frontage setting up, and the seam the player is funnelled
+# through would stop being a decision.
+#
+# So `KEEPER` is 15 km — cover for an approach, not for a fight — and the real
+# recovery umbrella is `ANVIL` at Incirlik, 105 km back, where the support
+# package already lives. Forward strip barely covered, main base properly
+# covered, which is what a forward strip 52 km from a front line actually is.
+_SANCTUARY = "KEEPER"
+_SANCTUARY_BATTERY = sanc.NASAMS
+_REAR_SANCTUARY = "ANVIL"
+_REAR_BATTERY = sanc.HAWK
+
+
 class IdlibGauntlet(MissionBuilder):
     name = "idlib_gauntlet"
     title = "Idlib Gauntlet"
@@ -338,6 +360,11 @@ INTELLIGENCE
         cockpit alert. MiG-29S, experienced crews. That
         is minutes from the corridor — plan on them
         being airborne at some point in the sortie.
+  Base: Bassel is defended in its own right — an S-125
+        battery on the field, guns in the overhead, and
+        it is in the same net as the belts. It is 102 km
+        from the convoy road and reaches nothing you
+        need. Do not follow the MiGs home.
 
 ROE / FRAGS
   - Cleared to engage the convoy and any air defence
@@ -359,8 +386,26 @@ ROE / FRAGS
     to — shoot from behind terrain and the round gets
     a live emitter, shoot in the open and you are
     racing their reaction time.
+  - Not cleared to pursue over Bassel Al-Assad.
   - Tank from Texaco before the push if the SEAD phase
-    runs long. Bingo fuel 3500 lb, RTB Hatay.
+    runs long. Bingo fuel 3500 lb, RTB Hatay, or
+    Incirlik — see FALL-BACK.
+
+FALL-BACK ({_SANCTUARY} / {_REAR_SANCTUARY})
+  Hatay is a forward strip and the Syrian forward line
+  stands 52 km off its threshold, closer to your own
+  field than to your target. So the cover here is thin
+  on purpose:
+  {_SANCTUARY}  : {_SANCTUARY_BATTERY.name} at Hatay, {_SANCTUARY_BATTERY.radius_m / 1000:.0f} km. A
+    bubble over the field and the pattern — cover for an
+    approach, not for a fight. Anything wider would
+    reach the front and the seam would stop mattering.
+    {_SANCTUARY} MARSHAL is a short hold abeam the field.
+  {_REAR_SANCTUARY}   : {_REAR_BATTERY.name} at Incirlik, {_REAR_BATTERY.radius_m / 1000:.0f} km, where
+    Magic and Texaco come from. 105 km further back and
+    properly covered. If Hatay is not an option, that is
+    where you go; the field is a steerpoint in your
+    cartridge.
 
 NAV
   Bullseye (own side): {bx:.0f}, {by:.0f} (DCS world m)
@@ -564,6 +609,11 @@ picture, and the last bullet is there to say where it is thin.
   experienced crews. Cockpit alert is minutes from the runway and the field is
   minutes from the corridor; whether they are released and when is the Syrian
   air-defence commander's call, so plan on the fight rather than on a warning.
+- **Bassel Al-Assad field defence:** an S-125 battery on the alert pair's own
+  airfield, with self-propelled guns in the overhead, and in the same net as the
+  belts — it goes dark under a HARM like everything else. It is 102 km from the
+  convoy road and reaches 18 km, so it touches no part of the run. It is the
+  reason a MiG that turns for home stops being a target.
 - **Not located:** a Gadfly-class search radar came up on the net in the
   northern rear overnight and we never got a fix on it. There is no ring for it
   on the map and no point for it on your cartridge, because we would be drawing
@@ -588,7 +638,32 @@ picture, and the last bullet is there to say where it is thin.
   racing their reaction time.
 - Tank from `Texaco` before the push if SEAD runs long — F-16C internal fuel
   does not cover a 60-minute sortie plus a MEZ fight.
-- Bingo fuel: 3500 lb. RTB Hatay (no divert).
+- **Not cleared to pursue over Bassel Al-Assad.** A withdrawing MiG is not
+  worth an S-125, and it is 102 km the wrong way on the fuel you will have.
+- Bingo fuel: 3500 lb. RTB Hatay, or Incirlik if Hatay will not do — see below.
+
+## Fall-back
+
+The cover on this sortie is deliberately thin at the front and solid at the
+back, and the front line is what decides that. Hatay is a forward strip with ten
+fighter stands, and the Syrian forward line stands **52 km** off its threshold —
+closer to your own field than to your target.
+
+- `{_SANCTUARY}` — a {_SANCTUARY_BATTERY.name} battery at Hatay reaching {_SANCTUARY_BATTERY.radius_m / 1000:.0f} km, the
+  smaller cyan ring, with gun sections in the overhead. That is cover for an
+  approach, not cover for a fight: a wider battery here would reach the forward
+  line and start shooting into the partner force's ground battle, which would
+  make the seam you are briefed to cross irrelevant. `{_SANCTUARY} MARSHAL` is a
+  short hold abeam the field, inside the bubble.
+- `{_REAR_SANCTUARY}` — a {_REAR_BATTERY.name} battery at Incirlik reaching {_REAR_BATTERY.radius_m / 1000:.0f} km, the larger
+  ring, covering the field `Magic`, `Texaco` and `Eagle` work from. 105 km
+  further back and properly held. If Hatay is not an option — weather, damage,
+  a blocked runway — that is where you go. There is no marshal point there
+  because nobody diverts in order to hold; the field is a steerpoint in your
+  cartridge and a label on the map.
+
+Neither battery will help you over the seam. What they do is make breaking off a
+plan instead of a hope.
 
 ## Navigation
 
@@ -611,6 +686,8 @@ picture, and the last bullet is there to say where it is thin.
   point is a claim we cannot make; the north being spoken for is the warning.
 
 ## Frequencies
+
+- `{_SANCTUARY}` and `{_REAR_SANCTUARY}` details are on the kneeboard comms card.
 
 - Magic AWACS: {_FREQ_AWACS}.000 AM — {_PRESET_AWACS}
 - Texaco tanker: {_FREQ_TANKER}.000 AM, TACAN 10X — {_PRESET_TANKER}
@@ -704,6 +781,17 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             threats=(sa2_pos, sa6_pos, sa8_pos, *ewr_positions),
         )
 
+        home, rear_field, bassel_ad = self._spawn_sanctuaries(
+            m,
+            usa,
+            russia,
+            scene,
+            front=front,
+            red_sites=(*(b.position for b in belts), *ewr_positions),
+            stations=(*awacs_track, *tanker_track, *tarcap_track, *corridor),
+        )
+        sanc.remark_all(m, home, rear_field, bassel_ad)
+
         self._conceal_red(russia, syria)
         briefed_threats = self._draw_plan(
             m,
@@ -717,6 +805,9 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             fac_track=fac_track,
             awacs_track=awacs_track,
             tanker_track=tanker_track,
+            home=home,
+            rear_field=rear_field,
+            bassel_ad=bassel_ad,
         )
         self._load_cartridge(m, scene, briefed_threats, plan=plan)
         self._render_recon(m, scene, plan=plan, convoy=convoy)
@@ -730,10 +821,11 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             shoulders=shoulders,
             rear=rear,
             unfixed=unfixed,
+            bassel_ad=bassel_ad,
         )
         self._add_fac_coord_readout(m, convoy=convoy)
         self._add_intro_voice(m)
-        self._add_support_checkins(m)
+        self._add_support_checkins(m, home)
         self._add_front_crossing_trigger(m, front=front, player=player)
         self._add_strike_release_triggers(m, sa6=sa6, pontiac=pontiac)
         self._add_scramble_trigger(m, convoy=convoy, migs=migs)
@@ -1712,6 +1804,80 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             ThreatRing(rear_pos, _SHOULDER_RING_M, "SA-3 rear battery"),
         )
 
+    def _spawn_sanctuaries(
+        self,
+        m: Mission,
+        usa: Country,
+        russia: Country,
+        scene: _Scene,
+        *,
+        front: Frontline,
+        red_sites: tuple[Point, ...],
+        stations: tuple[Point, ...],
+    ) -> tuple[sanc.Sanctuary, sanc.Sanctuary, sanc.Sanctuary]:
+        """Two covered fields on our side, one on theirs.
+
+        The blue geometry is set by the front line rather than chosen — see
+        `_SANCTUARY_BATTERY` above for the arithmetic. `KEEPER` is a NASAMS
+        bubble over Hatay because anything larger reaches the forward line, and
+        `ANVIL` is the Hawk at Incirlik that a jet which cannot use Hatay
+        actually recovers to. Both `keep_clear` lists carry the front's own
+        trace, so a later change to `_FRONT_STANDOFF_M` fails the build instead
+        of quietly putting a friendly SAM over the Syrian strongpoints.
+
+        Bassel Al-Assad gets the red battery because that is where the alert
+        MiG-29S pair recovers. Taftanaz cannot host one — the convoy off-loads
+        4 km from its threshold, so any envelope there covers the objective and
+        `build_sanctuary` refuses it. Bassel is 102 km from the convoy axis,
+        which makes 18 km of S-125 irrelevant to the run and decisive against
+        someone who follows a withdrawing MiG down the coast.
+        """
+        keep_blue = [scene.route_mid, *red_sites, *front.trace, *front.shoulders]
+        home = sanc.build_sanctuary(
+            m,
+            usa,
+            scene.hatay,
+            callsign=_SANCTUARY,
+            facing=scene.route_mid,
+            battery=_SANCTUARY_BATTERY,
+            keep_clear=keep_blue,
+            overlay=scene.overlay.overlay,
+            terrain=self._terrain,
+        )
+        rear_field = sanc.build_sanctuary(
+            m,
+            usa,
+            scene.incirlik,
+            callsign=_REAR_SANCTUARY,
+            facing=scene.route_mid,
+            battery=_REAR_BATTERY,
+            divert=True,
+            keep_clear=keep_blue,
+            overlay=scene.overlay.overlay,
+            terrain=self._terrain,
+        )
+        bassel_ad = sanc.build_sanctuary(
+            m,
+            russia,
+            scene.bassel,
+            callsign="Bassel field",
+            facing=scene.route_mid,
+            battery=sanc.SA_3,
+            enemy=True,
+            label="SA-3 Bassel",
+            keep_clear=[
+                scene.route_mid,
+                scene.convoy_origin,
+                scene.convoy_destination,
+                front.seam,
+                *stations,
+            ],
+            skill=Skill.Average,
+            overlay=scene.overlay.overlay,
+            terrain=self._terrain,
+        )
+        return home, rear_field, bassel_ad
+
     def _draw_plan(
         self,
         m: Mission,
@@ -1726,6 +1892,9 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         fac_track: tuple[Point, Point],
         awacs_track: tuple[Point, Point],
         tanker_track: tuple[Point, Point],
+        home: sanc.Sanctuary,
+        rear_field: sanc.Sanctuary,
+        bassel_ad: sanc.Sanctuary,
     ) -> list[dtc.ThreatPoint]:
         """Paint the plan on the F10 map (trained: coarse, estimated threats).
 
@@ -1741,6 +1910,11 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         ZU-23 pit); and the Gadfly behind the northern shoulder is drawn nowhere
         at all, because nothing in the briefing claims to have found it.
         """
+        # The sanctuaries go on first so `KEEPER MARSHAL` wins the cartridge's
+        # navigation budget: `core/dtc.py` fills that tab in draw order after the
+        # flight's own route, and this plan already oversubscribes it.
+        home.draw(plan)
+        rear_field.draw(plan)
         plan.objective(scene.route_mid, "Convoy axis — Taftanaz road", radius=7_000.0)
         plan.frontline(
             front.trace, "FRONT LINE — Syrian positions, guns and MANPADS below 10,000"
@@ -1782,7 +1956,10 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         plan.mobile_threat(
             scene.convoy_origin, "Convoy SHORAD", icon=StandardIcon.Mechanized
         )
-        return hsd
+        # Bassel's own belt is a red ring like any other — estimated, and into
+        # the cartridge beside the belts. It reaches 18 km and the axis is 102 km
+        # away, so it costs the run nothing and costs a chase everything.
+        return hsd + bassel_ad.draw(plan)
 
     def _load_cartridge(
         self,
@@ -1903,6 +2080,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         shoulders: list[VehicleGroup],
         rear: VehicleGroup,
         unfixed: VehicleGroup,
+        bassel_ad: sanc.Sanctuary,
     ) -> None:
         """Wire every radar-guided site into one net.
 
@@ -2026,6 +2204,23 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                 react_range_m=70_000.0,
                 net_relay=0.3,
             ),
+            # Bassel's own field battery. It is 102 km from the convoy axis and
+            # will almost certainly never cue, and it is in the net anyway: this
+            # mission's whole SEAD model is that a radar-guided site goes dark
+            # when it is shot at, and leaving one out would make the airfield
+            # belt the single battery in Syria that stays up under a HARM. A
+            # rear crew on a quiet field, so the slowest reactions here and the
+            # shortest reach down the net.
+            Site(
+                bassel_ad.groups[0],
+                "the Bassel field battery",
+                go_live_percent=150,
+                probability=0.6,
+                delay_s=(35.0, 90.0),
+                shutdown_s=(240.0, 360.0),
+                react_range_m=40_000.0,
+                net_relay=0.2,
+            ),
         ]
         arm_iads(
             m,
@@ -2101,8 +2296,20 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             ),
         )
 
-    def _add_support_checkins(self, m: Mission) -> None:
-        """Staged support check-ins across the early sortie (TimeAfter)."""
+    def _add_support_checkins(self, m: Mission, home: sanc.Sanctuary) -> None:
+        """Staged support check-ins across the early sortie (TimeAfter).
+
+        The umbrella is read out with them, and it has to be read out at all:
+        the cyan ring is easy to take for decoration and nobody opens the F10
+        map again after push. Same argument as `core/jtac`'s `push_at_s`.
+        """
+        mission_triggers.checkin(
+            m,
+            voice=self._voice,
+            at_seconds=120,
+            comment="KEEPER umbrella check-in",
+            text=sanc.checkin_text(home, controller="Magic"),
+        )
         mission_triggers.checkin(
             m,
             voice=self._voice,

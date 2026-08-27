@@ -48,6 +48,7 @@ from dcs_mission_creator.core import (
     air_defense as ad,
     dtc,
     routing,
+    sanctuary as sanc,
     triggers as mission_triggers,
     waypoints,
 )
@@ -106,6 +107,16 @@ class _Scene:
     senaki: Airport
     ao_center: Point
     overlay: TacticalScene
+
+
+# Kutaisi's own air defence, and the reason the mission has any.
+#
+# The AO is 127 km out and the sortie is 75 minutes; Senaki sits 37 km from
+# Kutaisi, so one Hawk battery covers both runways and the whole recovery
+# quarter without reaching anything the mission needs alive. That pairing is
+# what makes the divert field a real option rather than a second bare strip.
+_SANCTUARY = "CASTLE"
+_SANCTUARY_BATTERY = sanc.HAWK
 
 
 class KodoriStrike(MissionBuilder):
@@ -167,12 +178,25 @@ INTELLIGENCE
         the target box until Weasel calls the SA-6 cold.
   AAA : Guns inside the FOB perimeter, seen on every
         imagery pass this week.
+  Base: Gudauta is defended in its own right — an S-125
+        battery on the field and guns in the overhead.
+        Do not follow the Su-27s home.
 
 ROE / FRAGS
   - Cleared to engage Russian aircraft entering the AO.
   - Hold ordnance until Weasel reports the SA-6 down or
     the FOB is the only viable target.
+  - Not cleared to pursue over Gudauta.
   - Bingo fuel: 3000 lb. RTB Kutaisi (divert: Senaki).
+
+FALL-BACK ({_SANCTUARY})
+  Kutaisi and Senaki both sit under a
+  {_SANCTUARY_BATTERY.name} battery — {_SANCTUARY_BATTERY.radius_m / 1000:.0f} km,
+  cyan ring on the map, guns in the overhead of Kutaisi.
+  If you are hit, out of ordnance or out of fuel, that
+  ring is the answer: get inside it and the fight is
+  over. {_SANCTUARY} MARSHAL is a hold abeam Kutaisi,
+  on the map and in the DED. Either runway works.
 
 NAV
   Bullseye (own side): {bx:.0f}, {by:.0f} (DCS world m)
@@ -182,10 +206,11 @@ NAV
   Ingress           : terrain-masked corridor, routed to keep
                       ridgelines between you and the reported
                       radars and the Gudauta approach.
-  Cartridge         : the Gainful and the IR launchers are
-                      loaded as pre-planned threats — select
-                      PRE on the HSD for the rings. Estimates,
-                      same as the map, no better than the cut.
+  Cartridge         : the Gainful, the IR launchers and the
+                      Gudauta belt are loaded as pre-planned
+                      threats — select PRE on the HSD for the
+                      rings. Estimates, same as the map, no
+                      better than the cut.
   Imagery           : yesterday's satellite pass over the base
                       is on the briefing screen. Wide-area
                       mosaic, 50 m posts, so the bracket is the
@@ -278,13 +303,33 @@ pass over it.
 - **AAA:** guns inside the FOB perimeter, on every imagery pass this week.
 - **EWR:** early-warning radar on commanding ground in the Russian rear,
   feeding the Gudauta GCI.
+- **Gudauta field defence:** the same ELINT work that found the Gainful puts an
+  S-125 battery on the airfield itself, with self-propelled guns in the
+  overhead. It reaches 18 km and covers nothing you need — but it is the reason
+  a Su-27 that turns for home stops being a target.
 
 ## ROE
 
 - Cleared to engage any Russian aircraft entering the AO.
 - Hold ordnance until `Weasel` reports SA-6 down or the FOB is the only
   viable target.
+- **Not cleared to pursue over Gudauta.** A withdrawing Su-27 is not worth an
+  S-125.
 - Bingo fuel: 3000 lb. RTB Kutaisi (divert: Senaki-Kolkhi).
+
+## Fall-back
+
+Kutaisi is covered by a `{_SANCTUARY}` {_SANCTUARY_BATTERY.name} battery reaching
+{_SANCTUARY_BATTERY.radius_m / 1000:.0f} km, drawn as the cyan ring on the F10 map, with gun sections in
+the overhead. Senaki-Kolkhi is 37 km away and sits
+**inside the same envelope**, so the divert is a runway with cover over it
+rather than an unmarked strip: take whichever is closer to where you break off.
+
+That ring is where the sortie stops being dangerous. If you are hit, out of
+ordnance or below bingo, run for it rather than turning back into a fight you
+have already lost. `{_SANCTUARY} MARSHAL` is a hold abeam Kutaisi inside the
+envelope, on the map and in the DED, for sorting out a damaged jet or waiting
+on the pattern.
 
 ## Navigation
 
@@ -295,16 +340,17 @@ pass over it.
 - Ingress: terrain-masked corridor, routed to keep ridgelines between you and
   the reported radar positions and the Gudauta approach.
 - TANK orbit: standoff track behind Kutaisi.
-- Your data cartridge carries the Gainful and the IR launchers as pre-planned
-  threats — select PRE on the HSD (they show on the HAD too) for the rings.
-  They are the same estimates as the map, and no better than the cut they
-  came from.
+- Your data cartridge carries the Gainful, the IR launchers and the Gudauta
+  field battery as pre-planned threats — select PRE on the HSD (they show on
+  the HAD too) for the rings. They are the same estimates as the map, and no
+  better than the cut they came from.
 
 ## Frequencies
 
 - Magic AWACS: 251.000 AM
 - Texaco tanker: 252.000 AM, TACAN 10Y
 - Kutaisi tower: per kneeboard
+- `{_SANCTUARY}` details and the divert are on the kneeboard comms card.
 
 ## Weather
 
@@ -349,7 +395,18 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             threats=(sa6_pos, ewr_pos, scene.gudauta.position, *sa13_positions),
         )
 
+        home, gudauta_ad = self._spawn_sanctuaries(
+            m,
+            usa,
+            russia,
+            scene,
+            red_sites=(sa6_pos, ewr_pos, *sa13_positions),
+            stations=(*awacs_track, *tanker_track, *escort_track, *corridor),
+        )
+
         self._add_end_triggers(m, fob=fob, sa6=sa6, weasel=weasel)
+        self._add_sanctuary_checkin(m, home)
+        sanc.remark_all(m, home, gudauta_ad)
         self._conceal_red(russia)
         # One overlay for every reveal channel: the F10 plan, the cockpit
         # cartridge and the recon still all have to make the same claim, and the
@@ -367,6 +424,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             escort_track=escort_track,
             awacs_track=awacs_track,
             tanker_track=tanker_track,
+            home=home,
+            gudauta_ad=gudauta_ad,
         )
         self._load_cartridge(m, scene, briefed_threats, plan=plan)
         self._render_recon(m, scene, plan=plan, fob=fob)
@@ -992,6 +1051,82 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         player.land_at(scene.kutaisi)
         return [*corridor, egress]
 
+    # -- somewhere to fall back to ------------------------------------------
+
+    def _spawn_sanctuaries(
+        self,
+        m: Mission,
+        usa: Country,
+        russia: Country,
+        scene: _Scene,
+        *,
+        red_sites: tuple[Point, ...],
+        stations: tuple[Point, ...],
+    ) -> tuple[sanc.Sanctuary, sanc.Sanctuary]:
+        """A covered field at each end: Kutaisi under Hawk, Gudauta under S-125.
+
+        One Hawk at Kutaisi covers Senaki as well, 37 km away, so the divert the
+        mission already claimed by calling `senaki.set_blue()` becomes a runway
+        with something over it instead of an unmarked strip. The helper checks
+        that rather than taking the briefing's word for it — pass Senaki as an
+        `alternate` and it warns if the envelope does not actually reach.
+
+        Gudauta gets the red battery rather than Sukhumi, and that is forced
+        geometry rather than a preference: the FOB is 9 km from the Sukhumi
+        threshold, so **no** system emplaced there clears the target, and
+        `build_sanctuary` would refuse. Gudauta is 63 km out, it is where the
+        Su-27s recover, and 18 km of S-125 is exactly the price a player should
+        pay for chasing one onto its own runway.
+
+        The two `keep_clear` lists are different lists. Out of *our* umbrella
+        goes everything the enemy needs left standing — the SA-6, the SA-13s and
+        the EWR; the tanker and escort tracks sit close to home on purpose and
+        are supposed to be inside it. Out of *theirs* goes every friendly station
+        and the whole ingress corridor.
+        """
+        home = sanc.build_sanctuary(
+            m,
+            usa,
+            scene.kutaisi,
+            callsign=_SANCTUARY,
+            facing=scene.ao_center,
+            battery=_SANCTUARY_BATTERY,
+            keep_clear=[scene.ao_center, *red_sites],
+            alternates=[scene.senaki],
+            overlay=scene.overlay.overlay,
+            terrain=self._terrain,
+        )
+        gudauta_ad = sanc.build_sanctuary(
+            m,
+            russia,
+            scene.gudauta,
+            callsign="Gudauta field",
+            facing=scene.ao_center,
+            battery=sanc.SA_3,
+            enemy=True,
+            label="SA-3 Gudauta",
+            keep_clear=[scene.ao_center, *stations],
+            skill=Skill.Average,
+            overlay=scene.overlay.overlay,
+            terrain=self._terrain,
+        )
+        return home, gudauta_ad
+
+    def _add_sanctuary_checkin(self, m: Mission, home: sanc.Sanctuary) -> None:
+        """Read the umbrella out once, on the climb-out.
+
+        Without it the feature is invisible: a cyan ring on the F10 map reads as
+        decoration, and nobody opens the map again after push. Same argument as
+        `core/jtac`'s `push_at_s`.
+        """
+        mission_triggers.checkin(
+            m,
+            at_seconds=180,
+            comment="CASTLE umbrella check-in",
+            voice=self._voice,
+            text=sanc.checkin_text(home, controller="Magic"),
+        )
+
     # -- F10 map briefing ---------------------------------------------------
 
     def _conceal_red(self, russia: Country) -> None:
@@ -1016,6 +1151,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         escort_track: tuple[Point, Point],
         awacs_track: tuple[Point, Point],
         tanker_track: tuple[Point, Point],
+        home: sanc.Sanctuary,
+        gudauta_ad: sanc.Sanctuary,
     ) -> list[dtc.ThreatPoint]:
         """Paint the plan on the F10 map (trained: coarse, estimated threats).
 
@@ -1023,6 +1160,11 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         Weasel's cockpit shows the same claim as the map. The FOB and the EWR
         stay map-only — neither is a missile envelope to stay outside of.
         """
+        # The sanctuary goes on first so its marshal point is the first mark in
+        # the cartridge's navigation tab: `core/dtc.py` fills those in draw order
+        # after the flight's own route, and the one mark a pilot may need with a
+        # broken jet should not lose a budget fight to a tanker track.
+        home.draw(plan)
         plan.objective(scene.ao_center, "AO — FOB Kodori", radius=6_000.0)
         plan.route(corridor, "Dodge ingress")
         plan.orbit(*escort_track, "Eagle CAP")
@@ -1050,7 +1192,11 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                 label="SA-13",
             )
         plan.threat(ewr_pos, radius=4_000.0, label="EWR", icon=StandardIcon.SearchRadar)
-        return hsd
+        # Gudauta's own belt is a red ring like any other — estimated, and into
+        # the cartridge beside the SA-6. It reaches 18 km and the AO is 63 km
+        # away, so it costs nothing to fly the strike and everything to follow a
+        # Su-27 home.
+        return hsd + gudauta_ad.draw(plan)
 
     # -- the imagery the briefing cites --------------------------------------
 

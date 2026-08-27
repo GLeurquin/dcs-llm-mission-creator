@@ -46,6 +46,7 @@ from dcs_mission_creator.core import (
     air_defense as ad,
     dtc,
     routing,
+    sanctuary as sanc,
     triggers as mission_triggers,
     waypoints,
 )
@@ -78,6 +79,7 @@ class _Scene:
     """Resolved airports + AO geometry + map overlay used by every spawn step."""
 
     incirlik: Airport
+    gaziantep: Airport
     bassel: Airport
     kuweires: Airport
     sa6_anchor: Point
@@ -85,6 +87,21 @@ class _Scene:
     reserve_origin: Point
     reserve_destination: Point
     overlay: TacticalScene
+
+
+# Two covered fields, because this is the longest sortie in the project.
+#
+# The depot is 213 km from Incirlik. A jet that takes a hit over Kuweires is
+# fifteen minutes from home on a good engine and may not have one, so `REDOUBT`
+# at Incirlik is the recovery umbrella and `PICKET` at Gaziantep — 85 km from the
+# target, 128 km nearer than home — is the forward field it can actually reach.
+# Gaziantep gets NASAMS rather than a second Hawk for the reason `keep_clear`
+# exists: 45 km from there would reach 40 km toward the AO across ground the
+# mission needs to stay contested.
+_SANCTUARY = "REDOUBT"
+_SANCTUARY_BATTERY = sanc.HAWK
+_FORWARD_SANCTUARY = "PICKET"
+_FORWARD_BATTERY = sanc.NASAMS
 
 
 class EasternShield(MissionBuilder):
@@ -242,6 +259,11 @@ map is an estimate — expect to find it with the HTS, not with the mark.
   early-warning radar along the frontier.
 - **Land reserve:** ground reporting places an armoured reserve east of
   Kuweires on the Aleppo road, held back to retake the site if we strike it.
+- **Bassel Al-Assad field defence:** the same ELINT work that put the MiGs at
+  readiness puts an S-125 battery on their airfield, with self-propelled guns in
+  the overhead. It is 172 km from the depot and reaches 18 km, so it touches no
+  part of the strike — it is the reason a MiG that turns for home stops being a
+  target.
 
 ## ROE
 
@@ -250,7 +272,27 @@ map is an estimate — expect to find it with the HTS, not with the mark.
 - Stay out of the SA-6 engagement zone until its search radar is down.
 - Tank from `Texaco` pre-push and post-AO; F-16C internal fuel does not
   cover a 2-hour sortie without at least one tanker pass.
-- Bingo fuel: 3500 lb. RTB Incirlik (no divert).
+- **Not cleared to pursue over Bassel Al-Assad.** A withdrawing MiG is not
+  worth an S-125, and it is 172 km the wrong way.
+- Bingo fuel: 3500 lb. RTB Incirlik, or Gaziantep if the jet will not make it —
+  see below.
+
+## Fall-back
+
+This is the longest egress in the set: the depot is **213 km** from Incirlik,
+which on a good engine is fifteen minutes and on a damaged one is not a number
+worth relying on. So there are two covered fields rather than one.
+
+- `{_SANCTUARY}` — a {_SANCTUARY_BATTERY.name} battery at Incirlik reaching {_SANCTUARY_BATTERY.radius_m / 1000:.0f} km,
+  drawn as the larger cyan ring, with gun sections in the overhead. Normal recovery. `{_SANCTUARY} MARSHAL` is a hold abeam the field
+  inside the envelope, on the map and in the DED.
+- `{_FORWARD_SANCTUARY}` — a {_FORWARD_BATTERY.name} battery at Gaziantep, the smaller ring. Its
+  {_FORWARD_BATTERY.radius_m / 1000:.0f} km is a bubble over the field and the pattern and nothing further: it is not cover for a fight, it is cover for an approach. What it
+  buys is distance — Gaziantep is 85 km from the target against Incirlik's 213.
+  There is no marshal point there because nobody diverts in order to hold; the
+  field itself is a steerpoint in your cartridge and a label on the map.
+
+If the jet is hurt, turn for the nearer ring and say so on the way.
 
 ## Navigation
 
@@ -268,6 +310,7 @@ map is an estimate — expect to find it with the HTS, not with the mark.
 - Magic AWACS: 251.000 AM
 - Texaco tanker: 270.000 AM, TACAN 10X
 - Incirlik tower: per kneeboard
+- `{_SANCTUARY}` and `{_FORWARD_SANCTUARY}` details are on the kneeboard comms card.
 
 ## Weather
 
@@ -316,6 +359,16 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             threats=(scene.sa6_anchor, shorad_pos, *ewr_positions),
         )
 
+        home, forward, bassel_ad = self._spawn_sanctuaries(
+            m,
+            usa,
+            russia,
+            scene,
+            red_sites=(scene.sa6_anchor, shorad_pos, *ewr_positions),
+            stations=(*awacs_track, *tanker_track, *tarcap_track, *corridor),
+        )
+        sanc.remark_all(m, home, forward, bassel_ad)
+
         self._conceal_red(russia)
         plan = PlanOverlay(m, self.difficulty)
         briefed_threats = self._draw_plan(
@@ -330,10 +383,13 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             tarcap_track=tarcap_track,
             awacs_track=awacs_track,
             tanker_track=tanker_track,
+            home=home,
+            forward=forward,
+            bassel_ad=bassel_ad,
         )
         self._load_cartridge(m, scene, briefed_threats, plan=plan)
         self._add_intro_voice(m)
-        self._add_support_checkins(m)
+        self._add_support_checkins(m, home)
         self._add_layered_triggers(
             m,
             sa6=sa6,
@@ -373,9 +429,14 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         """Claim Incirlik for blue, Bassel/Kuweires for red, derive AO anchors."""
         t = self._terrain
         incirlik = t.airports["Incirlik"]
+        # Gaziantep is the forward divert: 85 km from the depot against
+        # Incirlik's 213, which on a damaged jet is the difference between a
+        # recovery and a bail-out. See `_spawn_sanctuaries`.
+        gaziantep = t.airports["Gaziantep"]
         bassel = t.airports["Bassel Al-Assad"]
         kuweires = t.airports["Kuweires"]
         incirlik.set_blue()
+        gaziantep.set_blue()
         bassel.set_red()
         kuweires.set_red()
         sa6_anchor = offset(kuweires.position, east_m=0, north_m=8_000)
@@ -385,6 +446,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         overlay = load_scene("syria")
         return _Scene(
             incirlik=incirlik,
+            gaziantep=gaziantep,
             bassel=bassel,
             kuweires=kuweires,
             sa6_anchor=sa6_anchor,
@@ -858,6 +920,80 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         player.land_at(scene.incirlik)
         return [*corridor, scene.depot_anchor]
 
+    # -- somewhere to fall back to ------------------------------------------
+
+    def _spawn_sanctuaries(
+        self,
+        m: Mission,
+        usa: Country,
+        russia: Country,
+        scene: _Scene,
+        *,
+        red_sites: tuple[Point, ...],
+        stations: tuple[Point, ...],
+    ) -> tuple[sanc.Sanctuary, sanc.Sanctuary, sanc.Sanctuary]:
+        """Two covered fields on our side, one on theirs.
+
+        This is the only mission in the project with a **forward** sanctuary, and
+        the reason is the range: 213 km from Incirlik to the depot is the longest
+        egress here by 60 km. `REDOUBT` covers home, and `PICKET` at Gaziantep
+        covers a runway 85 km from the target — a jet losing oil pressure over
+        Kuweires can reach one of those and not the other.
+
+        The two systems are different because the geometry is. Hawk at Incirlik
+        reaches 45 km into empty Turkish airspace; the same battery at Gaziantep
+        would reach 40 km toward the AO, across the ground the MiGs transit and
+        the strike egresses through, which is exactly the quiet mission rewrite
+        `keep_clear` exists to refuse. NASAMS' 15 km covers the field, the
+        overhead and the pattern and nothing else, which is all a divert needs.
+
+        Bassel Al-Assad gets the red battery because that is where the MiG-21s
+        recover. Kuweires is the field a mission would reach for first and the one
+        `build_sanctuary` refuses outright: the depot **is** the Kuweires apron,
+        so no envelope emplaced there clears the objective. Bassel is 172 km from
+        the target, which makes 18 km of S-125 irrelevant to the strike and
+        decisive against a Viper that chases a withdrawing MiG down the coast.
+        """
+        home = sanc.build_sanctuary(
+            m,
+            usa,
+            scene.incirlik,
+            callsign=_SANCTUARY,
+            facing=scene.depot_anchor,
+            battery=_SANCTUARY_BATTERY,
+            keep_clear=[scene.depot_anchor, *red_sites],
+            overlay=scene.overlay.overlay,
+            terrain=self._terrain,
+        )
+        forward = sanc.build_sanctuary(
+            m,
+            usa,
+            scene.gaziantep,
+            callsign=_FORWARD_SANCTUARY,
+            facing=scene.depot_anchor,
+            battery=_FORWARD_BATTERY,
+            divert=True,
+            keep_clear=[scene.depot_anchor, *red_sites],
+            point_defence=2,
+            overlay=scene.overlay.overlay,
+            terrain=self._terrain,
+        )
+        bassel_ad = sanc.build_sanctuary(
+            m,
+            russia,
+            scene.bassel,
+            callsign="Bassel field",
+            facing=scene.depot_anchor,
+            battery=sanc.SA_3,
+            enemy=True,
+            label="SA-3 Bassel",
+            keep_clear=[scene.depot_anchor, *stations],
+            skill=Skill.Average,
+            overlay=scene.overlay.overlay,
+            terrain=self._terrain,
+        )
+        return home, forward, bassel_ad
+
     # -- F10 map briefing ---------------------------------------------------
 
     def _conceal_red(self, russia: Country) -> None:
@@ -895,6 +1031,9 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         tarcap_track: tuple[Point, Point],
         awacs_track: tuple[Point, Point],
         tanker_track: tuple[Point, Point],
+        home: sanc.Sanctuary,
+        forward: sanc.Sanctuary,
+        bassel_ad: sanc.Sanctuary,
     ) -> list[dtc.ThreatPoint]:
         """Paint the plan on the F10 map (trained: coarse, estimated threats).
 
@@ -902,6 +1041,13 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         cockpit shows the same claim as the map. The EWRs and the armor reserve
         stay map-only — neither is a missile envelope to stay outside of.
         """
+        # The two umbrellas go on first so their marshal legs win the
+        # cartridge's navigation budget: `core/dtc.py` fills that tab in draw
+        # order after the flight's own route, and on a 213 km egress the forward
+        # field is the mark most likely to matter. `PICKET` is drawn before
+        # `REDOUBT` for the same reason — it is the one a broken jet reaches.
+        forward.draw(plan)
+        home.draw(plan)
         plan.objective(scene.depot_anchor, "Depot — Kuweires", radius=5_000.0)
         plan.route(corridor, "Springfield ingress")
         plan.orbit(*tarcap_track, "Eagle TARCAP")
@@ -929,7 +1075,11 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         plan.mobile_threat(
             reserve_origin, "Reserve (Aleppo rd)", icon=StandardIcon.Mechanized
         )
-        return hsd
+        # Bassel's own belt is a red ring like any other — estimated, and into
+        # the cartridge beside the Gainful. It reaches 18 km and the depot is
+        # 172 km away, so it costs the strike nothing and costs a chase down the
+        # coast everything.
+        return hsd + bassel_ad.draw(plan)
 
     def _load_cartridge(
         self,
@@ -972,8 +1122,20 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             ),
         )
 
-    def _add_support_checkins(self, m: Mission) -> None:
-        """Staged support check-ins across the early sortie (TimeAfter)."""
+    def _add_support_checkins(self, m: Mission, home: sanc.Sanctuary) -> None:
+        """Staged support check-ins across the early sortie (TimeAfter).
+
+        The umbrella is read out with them, and it has to be read out at all:
+        the cyan ring is easy to take for decoration and nobody opens the F10
+        map again after push. Same argument as `core/jtac`'s `push_at_s`.
+        """
+        mission_triggers.checkin(
+            m,
+            voice=self._voice,
+            at_seconds=120,
+            comment="REDOUBT umbrella check-in",
+            text=sanc.checkin_text(home, controller="Magic"),
+        )
         mission_triggers.checkin(
             m,
             voice=self._voice,
