@@ -35,13 +35,16 @@ This is a pydcs-based DCS mission generator. Three docs, one job each:
     the mission briefing).
 - The base class owns everything around that, and **a mission overrides none
   of it**:
-  - `build_miz` constructs the `Mission`, calls `_assemble`, snaps every
-    flight's take-off/landing waypoints to field elevation, assigns datalink
-    identities, makes the output directory and saves. Both finishing steps have
-    to happen after the last flight exists and before the save — pydcs
-    hard-codes take-off/landing altitudes to zero, so a mission that skipped
-    the snap shipped a jet spawned underground, and it writes no datalink
-    identity at all, so a coop flight came up anonymous and blind to itself.
+  - `build_miz` constructs the `Mission`, calls `_assemble`, holds the friendly
+    package until a player is airborne, snaps every flight's take-off/landing
+    waypoints to field elevation, assigns datalink identities, makes the output
+    directory and saves. All three finishing steps have to happen after the
+    last flight exists and before the save — pydcs hard-codes take-off/landing
+    altitudes to zero, so a mission that skipped the snap shipped a jet spawned
+    underground; it writes no datalink identity at all, so a coop flight came up
+    anonymous and blind to itself; and it launches every AI flight at
+    `TriggerStart`, so the package the player was briefed to escort was a
+    hundred kilometres down the route before he rotated (`core/join_up.py`).
     They are in the base precisely so they cannot be forgotten. Two steps run
     *after* the save for the mirror-image reason: any data cartridge a mission
     armed (`core/dtc.py`) and the kneeboard cards (`core/kneeboard.py`) are
@@ -385,6 +388,27 @@ the plan and dropped anyway, behind a vague CAP area drawn twenty lines later.
 `PlanLine.seq` / `PlanMark.seq` now number both lists from one counter and
 `plan_steerpoints` interleaves by it, so draw order is a total order.
 
+**`ansariyah_works` is the one mission where the umbrella is a piece of the
+briefing rather than a backstop**, and it is worth reading for what a sanctuary
+can be made to do. The AO is 279 km away, so a Patriot's 100 km cannot reach
+anything the enemy needs left standing and `keep_clear` passes trivially. What it
+buys instead is that *every* friendly station fits inside one envelope — the
+AWACS at 95 km, the tanker at 78, the CAP at 88, Paphos at 48 — while the red
+S-200's briefed ring reaches to within about 90 km of the field. The sixteen
+kilometres between those two circles is the only sky in the mission that is
+inside our missiles and outside theirs, it is where the tanker and the escort
+hold, and it is the whole answer to "why can the CAP not come with me". A
+sanctuary sized to make a *band* rather than a refuge; the briefing points at it
+and the player can read both rings off the F10 map.
+
+**On the red side it decided where the enemy fighters live.** The natural alert
+field was Bassel Al-Assad, 21 km from the briefed coast crossing — and an S-125
+there would have reached the corridor, so `build_sanctuary` refuses it. Moving
+the alert commitment to Hama, 72 km behind the range, is better doctrine as well
+as legal geometry: coastal fighters parked inside the raid's own axis are the
+first thing a raid like this kills. When the check refuses a field, the answer is
+usually that the field was wrong.
+
 Design rule as everywhere else in `core/`: absolute world `Point` / pydcs
 `Airport` and `Country` in, built groups out. Which field, which system and what
 the briefing says are the mission's decisions. Every mission states its callsign
@@ -404,6 +428,8 @@ field's belt in the HSD cartridge and the kneeboard threat block:
 | abkhaz_sweep | `BASTION` Hawk, Batumi | SA-3 Sochi | Kobuleti newly blue at 42 km; the briefing had named Senaki, which the mission never made friendly |
 | eastern_shield | `REDOUBT` Hawk, Incirlik + `PICKET` NASAMS, Gaziantep (divert) | SA-3 Bassel | 213 km egress, the longest here — Gaziantep is 85 km from the target |
 | idlib_gauntlet | `KEEPER` NASAMS, Hatay + `ANVIL` Hawk, Incirlik (divert) | SA-3 Bassel | front line 52 km off Hatay caps the forward umbrella; the Bassel belt joins the Skynet net |
+| ansariyah_works | `BULWARK` Patriot, Akrotiri | SA-3 Hama | the only Patriot here, and the only one where 100 km is the *small* number — see below |
+| kuban_forge | `PALISADE` Hawk, Senaki | SA-3 Min Vody | Kutaisi 37 km away comes free inside the envelope; the coastal field walked the battery back 3 km to find land |
 
 Two things worth noting about the red half. It needs no scripting to work: DCS AI
 already RTBs on bingo (`tasking.apply_ai_difficulty` sets it), so a defended red
@@ -569,6 +595,44 @@ and that is roughly its real approach speed, not a stall command, and DCS runs
 its own pattern logic off the landing waypoint. **Missions never call it** —
 `MissionBuilder.build_miz` does, right after `snap_base_waypoints`.
 
+## Altitude is a threat parameter, and the numbers are in the game
+
+A mission that says "fly low" is making a claim about what the enemy can do, and
+DCS will settle it either way. Three facts decide whether the claim survives
+contact, and all three are checkable before anything is built.
+
+**Every SAM's floor, ceiling and minimum range are in the install.** The missile
+tables under `<DCS>/CoreMods/tech/TechWeaponPack/Database/Weapons/*.lua` carry
+`H_min`, `H_max`, `D_min` and `D_max` per round, and they are the honest source
+for a briefing line. The S-200's `H_min = 300.0`, `D_min = 17e3`, `D_max = 240e3`
+is what `ansariyah_works` is built on: it reaches most of the way from Syria to
+Cyprus and it cannot bring a missile below three hundred metres, so that
+mission's hard deck is a number out of the game rather than a number that sounded
+right. Grep the table before promising the player anything about an envelope.
+
+**DCS has no earth curvature, so there is no radar horizon over water.** A
+wave-top run across 250 km of open sea is *not* hidden from a coastal radar the
+way it would be in life — line of sight is terrain only, and there is no terrain
+out there. So a mission may promise a **floor** ("they cannot shoot you below
+three hundred metres") and may promise **terrain masking** (measurable with
+`MapOverlay.line_of_sight`), and may not promise concealment over water. The
+useful move is to spend the detection rather than deny it: in `ansariyah_works`
+the coastal EWR *does* call the crossing, and that call is what rolls the target
+convoy and scrambles the alert pair, so the whole second half of the mission is
+caused by the player being exactly where he was briefed to be.
+
+**A transition waypoint carries the altitude it starts at, not the one it ends
+at.** DCS ramps linearly between waypoints, so a 6,500 m point followed by a 60 m
+point 200 km later puts the jet above the floor for nine tenths of the leg — and
+the route card then contradicts the ROE printed two inches under it. A descent or
+a climb needs a point at each end: `LETDOWN` at cruise and `DECK` at the deck,
+and on the way home `CLIMB` at the **deck**, with the climb on the leg after it.
+The same arithmetic decides whether the descent is flyable at all — a 6.8 % idle
+descent from 6,500 m needs about 95 km of run, which is what fixes where `DECK`
+goes. Where the geometry leaves no room, because the threat ring is wider than
+the distance available, say so in the briefing and price it rather than drawing a
+profile nobody can fly.
+
 ## Every speed is km/h true airspeed
 
 **Write speeds in km/h and check them against the airframe.** Every pydcs
@@ -650,6 +714,22 @@ tanks, four GBU-12 on BRU-33 racks, ATFLIR and three AAMs. It now flies
 680–750 (0.35–0.38, Mach 0.59–0.67, ~280 KIAS). Weigh the loadout as well as the
 airframe — a bombed-up jet sits at the bottom of the band, a clean CAP at the
 top.
+
+**`Mission.flight_group_inflight` is the same argument with no one watching it.**
+Its `speed` is km/h like every other pydcs speed, and unlike a runway start there
+is nothing downstream to catch a wrong one: `waypoints.set_departure_speeds` only
+rewrites runway waypoints, so an airborne spawn given metres per second holds
+that number for its whole first leg and the build says nothing. `ansariyah_works`
+shipped its held Hornet pair at 194 km/h — a tenth of the airframe's ceiling —
+from a `/ 3.6` that looked like a unit conversion and was the bug.
+
+**Check the last leg as well as the cruise.** `add_runway_waypoint` writes the
+*approach* gate at 108 kt and that is left alone on purpose, but the leg **into**
+it is flown at that speed, so a route whose last en-route point is 40 NM out
+spends twenty minutes of the sortie there. Put a let-down waypoint about 19 NM
+from the field — `daryal_run`'s `MTSKHETA` and `ansariyah_works`' `DESCENT` are
+both that fix, and on the second it took the mission from 66 to 57 minutes en
+route without changing any other number.
 
 Correct per airframe, **never by a blanket ×1.852** — 400 kt is 740 km/h,
 which is *above* the A-10C's never-exceed. Where a bare number would be
@@ -1095,6 +1175,87 @@ tasking.scramble_on_trigger(m, reserve,               # cold-ramp alert-5
   with a queued `StartCommand` and pushes it on the condition(s); generalizes
   pydcs `FlyingGroup.delay_start` (time-only) to any condition.
 
+## The package waits for the player (project-owned)
+
+[`join_up`](src/dcs_mission_creator/core/join_up.py) fixes the timing defect
+every mission here shipped with: **the AI launched without the player.** pydcs
+and the ME both start an AI flight at `TriggerStart`, and a cold or warm Viper
+is eight to twelve minutes of alignment, INS, DTE, checklist and taxi. An A-10
+pair at the same field is rolling in ninety seconds and is a hundred kilometres
+down the route by the time the player rotates — so `coastal_cover` briefed
+"escort `Hawg` to the AO" and handed the player a stern chase he could never
+close, and `kodori_strike`'s SEAD had rolled the SA-6 back and gone home before
+the strike it was clearing for was airborne. Nothing in the route fixes that:
+the AI is flying its plan correctly, it just started without him.
+
+So every friendly flight that departs from a field is set uncontrolled with a
+queued `StartCommand`, and one `TriggerOnce` per flight pushes it the moment
+**any player slot is above 50 m AGL**. The AI then starts up, taxis and takes
+off behind a player who is already turning overhead, which is the join-up the
+briefing describes. **Missions never call it** — `MissionBuilder.build_miz`
+does, right after `_assemble` returns, for the same reason as
+`waypoints.snap_base_waypoints`: a flight added later cannot miss it.
+
+Four exclusions, and each one is a way the sweep would otherwise break a
+mission rather than fix it:
+
+- **Anything whose job is a station** (`ON_STATION_TASKS` — AWACS, Refueling,
+  CAP). All three are defined by somewhere they have to *be* rather than
+  somebody they fly with, and all three have to be there before the package
+  needs them. The CAP is the one that had to be measured rather than argued:
+  `eastern_shield`'s Eagle needs **21 minutes** to reach its station and
+  `idlib_gauntlet`'s **14**, against a player who is over his target at 9 — so
+  holding a TARCAP leaves the whole ingress uncovered, which is a worse mission
+  than the one this fixes. The task name is the mission author's own
+  declaration of which kind of flight it is (`patrol_flight` writes `CAP`, a
+  strike or an escort does not), so it is what the split reads. This is the one
+  exclusion stated as a name rather than derived.
+- **A flight that spawns airborne** (`Mission.flight_group` with
+  `airport=None`). `idlib_gauntlet`'s Reaper has been over the road since before
+  dawn — that is the mission's whole intelligence claim — and an uncontrolled
+  aircraft in the air does not start up, it falls.
+- **A flight the mission already holds.** `tasking.scramble_on_trigger` and
+  pydcs's own `intercept_flight` both set `uncontrolled` themselves, so
+  `idlib_gauntlet`'s reserve strike and `coastal_cover`'s Gudauta pair keep the
+  release the mission wrote for them; a second push would race it.
+- **The enemy**, and it is derived rather than hard-coded: the sweep holds the
+  coalition the client slots are on. Red launching on its own clock is the
+  mission's threat model, not an oversight.
+
+`launch_immediately(group)` is the per-flight opt-out for what the task name
+cannot express — an asset whose head start *is* the point. Nothing uses it yet.
+
+**Any** player slot, not all of them: in a six-slot coop, waiting for the last
+pilot to finish an alignment stalls the mission behind whoever is slowest, and
+in single-player the two tests are the same. The other half of that is the
+fallback — with no client airborne at all (a server with nobody slotted, a
+mission opened to look at) the package would sit on the ramp for the whole
+sortie, so a `TimeAfter(FALLBACK_S)` is OR'd in and the flight launches on its
+own after fifteen minutes.
+
+What is left is exactly the flight the player was briefed to fly *with*, and
+across the eight missions that is three: `coastal_cover` `Hawg` (the A-10 pair
+the frag says to escort), `kodori_strike` `Weasel` (the SEAD element clearing
+the strike's path) and `eastern_shield` `Hawg`. The rest hold nothing, and each
+for a reason the mission already had — `idlib_gauntlet`'s `Pontiac` is a
+mission-owned reserve and its Reaper is airborne from the start; `abkhaz_sweep`,
+`daryal_run` and `kuban_forge` fly with no friendly AI but an AWACS and a
+tanker, which is the composition those missions *are*.
+
+The three briefings that describe those flights all read *better* afterwards,
+which is the check worth running on any package this touches. Measured on the
+built routes, from each flight's own take-off: `coastal_cover`'s `Hawg` was
+attacking the column at what is now the player's T-3 — its run was over before
+the player was airborne, under a briefing that says "escort `Hawg` onto the
+column" — and now rolls in at about T+9 against the player's T+10 on station.
+`kodori_strike`'s "`Weasel` rolls back the SA-6 ahead of you" stops being a
+ten-minute head start, which was long enough for the belt to re-radiate before
+the strike arrived (`core/iads.py` `shutdown_s` is minutes), and becomes the
+two or three minutes its own taxi costs: the HARM lands at about T+11 against
+`Dodge`'s T+11 on target. `eastern_shield`'s `Hawg` is briefed to hold west of
+the AO until the SEAD is done, so a later launch is the same plan with less
+loiter.
+
 ## Integrated air-defence helper (project-owned)
 
 [`iads`](src/dcs_mission_creator/core/iads.py) gives radar sites the two
@@ -1517,7 +1678,7 @@ field. [`kneeboard/charts.py`](src/dcs_mission_creator/core/kneeboard/charts.py)
 answers the question by looking — matching the airport name against the chart file
 names, since that is all the name a chart has and pydcs carries no ICAO to join on
 — and the card is written only where the answer is no. Today that is Hatay and
-nothing else across the six missions. **With no install the answer is unknown and
+nothing else across the eight missions. **With no install the answer is unknown and
 the card is written**, because the two failure modes are not symmetric: a
 redundant page costs a page, a missing one costs the player their field's
 elevation, its ATC channel and where their jet is parked.
@@ -1897,6 +2058,32 @@ remain only at the pydcs API layer (`airport.set_blue()`,
 | `_in_game_briefing`    | "Russian MiG-29S", "USAF AWACS"          |
 | Side-task text         | Name the faction, never "red/blue"       |
 
+## Buildings as objectives
+
+Every mission here but one attacks vehicles. A factory, a depot, a hardened shed
+is **statics** — `m.static_group(country, name, dcs.statics.Fortification.X,
+position=..., heading=...)` — and three things follow that a vehicle objective
+never raises.
+
+**`condition.UnitDead` works on a static.** The mission editor's own
+`unitsLister` (`<DCS>/MissionEditor/modules/me_predicates.lua`) enumerates
+`Mission.unit_by_id`, which holds statics alongside vehicles, so `c_unit_dead`
+resolves them and "destroy the building" is a one-line trigger on
+`group.units[0].id`. `GroupDead` is the wrong tool — a static group is not a
+group in the scripting sense.
+
+**Spacing is the design.** Aimpoints closer together than one weapon's effect are
+not separate objectives, they are one objective with extra steps.
+`ansariyah_works` puts its three buildings 400–430 m apart precisely so that two
+2,000 lb bombs cannot take all three, which is what turns the second bomb into a
+briefed decision — this month's production, or next year's — instead of a lucky
+pattern. Surround them with compound that is in *no* trigger (tanks, a crane,
+containers) so finding the right roof through the pod is a task.
+
+**`conceal_country` covers statics**, and that matters more here than for
+vehicles: an unhidden compound shows every building as an icon on the F10 map and
+hands the player the whole aimpoint choice before he starts engines.
+
 ## Existing missions
 
 - [coastal_cover.py](src/dcs_mission_creator/missions/coastal_cover.py) —
@@ -1961,40 +2148,91 @@ remain only at the pydcs API layer (`airport.set_blue()`,
   still** (`core/recon`): a wide-area radar frame of the resupply column on the
   briefing screen and in the README, which is the imagery its Intelligence
   section was already citing.
+- [ansariyah_works.py](src/dcs_mission_creator/missions/ansariyah_works.py) —
+  Syria **veteran**, and the only one at that label: F-16C out of Akrotiri
+  against a Syrian rocket-motor plant in a basin on the seaward side of the
+  Jebel al-Ansariyah, 279 km east with all of it water. The reference for a
+  **low ingress whose floor is a number out of the game's own weapon table**:
+  the S-200 behind Jableh has `H_min = 300 m`, `D_min = 17 km`, `D_max = 240 km`
+  (`<DCS>/CoreMods/tech/TechWeaponPack/Database/Weapons/misc_sams.lua`), so it
+  reaches most of the way to Cyprus and cannot touch anything below three
+  hundred metres — and the whole sortie, the player's *and* the AI strike pair's,
+  is flown under that one figure. Read it for three more things:
+  **statics as objectives** (three aimpoints, two bombs, and a briefed choice
+  between this month's motors and next year's oxidiser — see below on
+  `c_unit_dead`); **detection spent rather than denied**, since DCS models no
+  earth curvature and the mission says so, so the coastal radar *does* call the
+  crossing and that call is what rolls the load-out and scrambles the alert
+  pair; and a **seam between two coastal S-125s** checked against what the
+  batteries actually reach (18.1 and 16.4 km of margin) rather than against the
+  wider rings the veteran reveal draws (9.7 and 8.2 km).
+- [kuban_forge.py](src/dcs_mission_creator/missions/kuban_forge.py) — Caucasus
+  **ace**, ~55 min: F-16C out of Senaki against a Russian solid-motor plant on
+  the Kuban north of Karachayevsk, flown up the Abkhaz coastal plain, inland
+  through the Kodori and over the **Klukhori Pass**. The nearest thing here to
+  `ansariyah_works` — statics as objectives, a plant in terrain that denies an
+  approach from altitude — and worth reading for where the two diverge. Three
+  things it is the reference for. **A low route whose floor is measured, not
+  chosen**: at 250 m AGL this corridor needs twenty-three waypoints to keep
+  every straight leg out of the rock and at 600 m it needs eleven, and 600 m is
+  still masked from the Buk and both EWRs at every point down to `KARACHAY` —
+  the massif does the hiding, not the last three hundred metres, and the
+  waypoint budget is what makes that worth knowing. **`core/iads.py` used for
+  the cueing alone**: the package carries no HARM, so half that module never
+  rolls, and the net is there purely so the belts sit cold until the chain hands
+  them a track — without it the RWR is full before the coast and two hundred
+  kilometres of valley buy nothing. And **low in, high out**: the egress is a
+  climb over the range because the valley bought surprise and the halls spend
+  it, which is also the only egress the cartridge can afford (the Marukh, the
+  one other pass, costs eleven waypoints on its own).
 
-Every one of the six also ships kneeboard cards — route and comms — built by the
+Every one of the eight also ships kneeboard cards — route and comms — built by the
 base class from the mission itself (`core/kneeboard`), plus an airfield page
-wherever the theatre ships no chart of the field, which across the six is Hatay
-alone. `idlib_gauntlet` is also the only one that adds `kneeboard.remark` lines,
-for Hammer's laser code and where his readout sits in the radio menu.
+wherever the theatre ships no chart of the field, which across the eight is
+Hatay alone — Akrotiri is one of the three fields ED charts on Syria, so
+`ansariyah_works` gets no page for its own base either. `idlib_gauntlet` and
+`ansariyah_works` are the two that add `kneeboard.remark` lines: Hammer's laser
+code and radio-menu path in the first, the hard deck in the second.
 
 The route card's **threat block** prints whatever the mission briefed
-(idlib_gauntlet six, kodori_strike three — its two SA-13s come out `SA-13 1` and
-`SA-13 2`, abkhaz_sweep one, daryal_run two). The ace pair's rows are the
-`(approx.)` estimates, so the card is as imprecise as the map it repeats.
+(idlib_gauntlet six, ansariyah_works five, kuban_forge four, kodori_strike
+three — its two SA-13s come out `SA-13 1` and `SA-13 2`, abkhaz_sweep one,
+daryal_run two). The three ace missions and the veteran one print `(approx.)`
+estimates, so those cards are as imprecise as the maps they repeat. `ansariyah_works` is also where the briefed
+radius earns its override: its SA-5 row prints the 160 km the flight plan was
+built from, not the 255 km the jet's own threat table carries for the system.
 
-All six missions ([coastal_cover](src/dcs_mission_creator/missions/coastal_cover.py),
+All eight missions ([coastal_cover](src/dcs_mission_creator/missions/coastal_cover.py),
 [kodori_strike](src/dcs_mission_creator/missions/kodori_strike.py),
 [eastern_shield](src/dcs_mission_creator/missions/eastern_shield.py),
 [idlib_gauntlet](src/dcs_mission_creator/missions/idlib_gauntlet.py),
 [abkhaz_sweep](src/dcs_mission_creator/missions/abkhaz_sweep.py),
-[daryal_run](src/dcs_mission_creator/missions/daryal_run.py)) paint an F10
-briefing plan via a `_draw_plan` step using `PlanOverlay` — see the
-map-drawing helper section above. All six draw estimated threat rings + NATO
+[daryal_run](src/dcs_mission_creator/missions/daryal_run.py),
+[ansariyah_works](src/dcs_mission_creator/missions/ansariyah_works.py),
+[kuban_forge](src/dcs_mission_creator/missions/kuban_forge.py)) paint an
+F10 briefing plan via a `_draw_plan` step using `PlanOverlay` — see the
+map-drawing helper section above. All eight draw estimated threat rings + NATO
 icons; what separates them is how far off the estimate is. The four trained
 missions (coastal_cover, kodori_strike, eastern_shield, idlib_gauntlet) draw a
-`(est.)` ring 2 km off truth; the two ace missions (abkhaz_sweep, daryal_run)
-draw a wider dashed `(approx.)` ring 6 km off, plus a vague `threat_area` for
-the airborne threat, which is not an emplaced envelope anybody can ring.
+`(est.)` ring 2 km off truth; `ansariyah_works` at veteran draws a dashed
+`(approx.)` ring a quarter wider and 4 km off; the three ace missions
+(abkhaz_sweep, daryal_run, kuban_forge) draw wider again and 6 km off, plus a
+vague `threat_area` for the airborne threat, which is not an emplaced envelope
+anybody can ring. `kuban_forge` is the one that draws an *enemy* thing
+precisely, and states why: a chemical works has been on the 1:100,000 sheet for
+forty years and a team has been looking at it for six days, so the plant is a
+`waypoint_label` at its true position while every ring around it is an
+assessment — the same argument `PlanOverlay.frontline` makes, applied to the
+other kind of fixed geography.
 
-All six then pass the rings their `_draw_plan` drew to a `_load_cartridge`
+All eight then pass the rings their `_draw_plan` drew to a `_load_cartridge`
 step (`core/dtc.py`), so the F-16C player's HSD carries the briefed envelopes as
 pre-planned threats. The ace pair used to be the exception and no longer is —
 loading nothing there did not withhold the sites, it just left the mission with
 no coarsened position to build its own steerpoints from, so it used the true
 one.
 
-All six also run a `_conceal_red` step (`conceal_country`) immediately before
+All eight also run a `_conceal_red` step (`conceal_country`) immediately before
 `_draw_plan`, so no enemy group shows up as a unit icon on the F10 map, the
 briefing mission-planner map, or the datalink — the drawn plan and the
 briefing are the player's only intel.
