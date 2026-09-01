@@ -68,7 +68,7 @@ import structlog
 from dcs import planes
 from dcs.unit import Skill
 
-from dcs_mission_creator.core import unit_extras, waypoints
+from dcs_mission_creator.core import mission_kit, unit_extras, waypoints
 
 if TYPE_CHECKING:
     from dcs.flyingunit import FlyingUnit
@@ -665,7 +665,9 @@ def arm_plan(
     Raises if the mission has no player-flown Viper, or more than one Viper
     *flight*: there is one steerpoint tab and it can only hold one route, so two
     flights with two routes is a mission asking for something the jet will not
-    give it.
+    give it. The **sections** of one flight are not that — above four coop slots
+    the player flight is two groups (`mission_kit.player_flight`) flying the same
+    route, so the tab that fits one fits both, and the lead section's is written.
     """
     groups = _client_groups(m)
     if not groups:
@@ -673,7 +675,8 @@ def arm_plan(
             f"arm_plan found no {AIRCRAFT.id} client slot to load; "
             "only the Viper reads a steerpoint / GEO-line cartridge"
         )
-    if len(groups) > 1:
+    sections = mission_kit.sections_of(m, groups[0])
+    if any(group not in sections for group in groups):
         raise ValueError(
             "arm_plan writes one steerpoint tab and every Viper slot loads it, "
             f"but this mission has {len(groups)} player Viper flights "

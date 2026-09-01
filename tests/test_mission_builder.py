@@ -33,15 +33,31 @@ class FakeBuilder(MissionBuilder):
         return f"# {self.title}\nplayers={self.players}\n"
 
 
-@pytest.mark.parametrize("n", [1, 2, 3, 4])
+@pytest.mark.parametrize("n", [1, 2, 3, 4, 5, 6])
 def test_players_in_range_ok(n: int):
     assert FakeBuilder(players=n).players == n
 
 
-@pytest.mark.parametrize("n", [0, -1, 5, 100])
+@pytest.mark.parametrize("n", [0, -1, 7, 100])
 def test_players_out_of_range_raises(n: int):
-    with pytest.raises(ValueError, match="players must be 1..4"):
+    with pytest.raises(ValueError, match="players must be 1..6"):
         FakeBuilder(players=n)
+
+
+def test_slot_summary_is_plain_below_the_group_limit():
+    assert FakeBuilder(players=4).slot_summary("Dodge") == "4 coop slot(s)"
+
+
+@pytest.mark.parametrize(
+    "players, expected",
+    [
+        (5, "5 coop slot(s), flown as 2 sections: Dodge (3), Dodge 2 (2)"),
+        (6, "6 coop slot(s), flown as 2 sections: Dodge (4), Dodge 2 (2)"),
+    ],
+)
+def test_slot_summary_names_the_sections(players: int, expected: str):
+    """Past four slots the briefing has to name the second group the ME shows."""
+    assert FakeBuilder(players=players).slot_summary("Dodge") == expected
 
 
 def test_generate_creates_dir_and_writes_files(tmp_path: Path):

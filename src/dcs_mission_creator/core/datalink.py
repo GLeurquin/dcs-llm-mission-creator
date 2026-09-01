@@ -51,7 +51,7 @@ from typing import TYPE_CHECKING, Any, Callable
 import structlog
 from dcs import planes
 
-from dcs_mission_creator.core import unit_extras
+from dcs_mission_creator.core import mission_kit, unit_extras
 
 if TYPE_CHECKING:
     from dcs.flyingunit import FlyingUnit
@@ -135,7 +135,7 @@ def assign_datalink_identities(m: Mission) -> None:
     for group in _flying_groups(m):
         _name_flight(group)
         _number_flight(group, blocks)
-        wired += _wire_flight(group)
+        wired += _wire_flight(group, mission_kit.sections_of(m, group))
     log.debug("datalink identities assigned", flights=wired)
 
 
@@ -215,19 +215,26 @@ def _track_property(unit_type: type[FlyingType]) -> str | None:
     return None
 
 
-def _wire_flight(group: FlyingGroup) -> int:
+def _wire_flight(group: FlyingGroup, sections: tuple[FlyingGroup, ...]) -> int:
     """List the whole flight as every member's team members; 1 if it applies.
 
     This is the half that puts the other players on the scope: the ME fills the
     network tab with the group's own units, and a module with an empty one
     comes up with nobody on the net.
+
+    `sections` is the flight, which above four coop slots is more than one
+    group: a six-slot `Dodge` is two DCS groups and one flight, and teaming each
+    group only with itself would reintroduce exactly the blindness this module
+    exists to fix — half the flight invisible to the other half. Every other
+    flight is its own single section, so nothing else changes.
     """
     net = _NETS.get(group.units[0].unit_type.id)
     if net is None:
         return 0
     members = [
         {"missionUnitId": unit.id} | ({"TDOA": True} if net.tdoa else {})
-        for unit in group.units
+        for section in sections
+        for unit in section.units
     ]
     for index, unit in enumerate(group.units, start=1):
         unit.datalinks = {

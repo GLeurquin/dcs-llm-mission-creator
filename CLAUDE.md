@@ -28,7 +28,9 @@ This is a pydcs-based DCS mission generator. Three docs, one job each:
     a string) — it drives both the F10 reveal and the enemy ROE;
   - `def _assemble(self, m: Mission) -> MapOverlay` — builds the whole mission
     into `m` and returns the overlay its positions came from. Use
-    `self.players` (1–4, validated by the base class) for client-slot counts;
+    `self.players` (1–6, validated by the base class) for client-slot counts —
+    build the player flight with `mission_kit.player_flight`, never with a raw
+    `group_size=self.players` (see below);
   - `def readme(self) -> str` — returns the README.md content (markdown,
     the mission briefing).
 - The base class owns everything around that, and **a mission overrides none
@@ -1543,7 +1545,23 @@ Remarks are **wrapped** to the page rather than clipped, which they were not
 until `coastal_cover` put two long ones on the card and lost the halves that
 mattered — the laser code survived, "where to find the readout" ran off the
 right edge. Continuation lines are indented so a two-line remark still reads as
-one item. Keep that list short anyway. Everything else on the cards is derived
+one item.
+
+The wrap is a **floor, not a licence**: it guarantees nothing is silently
+truncated, and the one-line budget in the sanctuary section above is the ceiling
+— nothing on this card should need a second line in the first place. Both halves
+matter because they fail differently. Without the floor a remark loses its back
+half and nobody can tell; without the ceiling every remark is two lines and the
+block is prose. The test for a line that will not fit is not "shorten it" but
+"which half of this is a fact the page cannot derive, and which half is
+*explaining* the fact" — the first stays on the card, the second is briefing
+prose and probably already there. `coastal_cover`'s readout line was 109
+characters, of which 35 explained that DCS's own nine-line is a grid; its README
+had said so all along, so the card lost that clause and kept the menu path. And
+verify on the rendered page rather than by counting characters: the width is a
+function of the font, so the card is what knows.
+
+Keep that list short anyway. Everything else on the cards is derived
 and should stay that way — a remark is prose, and prose goes stale exactly the way the
 hand-typed FREQUENCIES block in every briefing was one edit from being wrong.
 That block is what these cards make true: the briefings have always said
@@ -1720,6 +1738,41 @@ of them holds policy: force composition, timings and text stay in the mission.
   the radar". pydcs's own `VehicleTemplate.Russia.sa10_site` puts a paratrooper
   at index 1, so an index-based win condition silently becomes "kill one
   infantryman"; `unit_of_type` raises instead.
+
+  **The player flight is `mission_kit.player_flight`, not
+  `flight_group_from_airport`.** A DCS plane group holds **four** airframes and
+  pydcs does not enforce that, it *clamps* —
+  `group_size = min(group_size, aircraft_type.group_size_max)`, no warning — so
+  six coop slots in one group silently shipped four and the CLI's own
+  `--players 6` was a lie. `player_flight` splits the slots
+  (`section_sizes`: 5 is `(3, 2)`, 6 is `(4, 2)`, never a four-ship trailed by a
+  lone jet), builds each section from the same field with the same `stores`,
+  marks the slots and records the groups as **one flight**. The mission then
+  gives each section the same route, which is why every `_spawn_player` here now
+  ends in a `_route_<callsign>` helper: the corridor is a search against the
+  terrain, and two sections searching separately would fly two plans under one
+  briefing.
+
+  Three things read that record rather than counting groups, and each was a way
+  a split flight would otherwise be quietly wrong:
+
+  - `core/datalink.py` teams the **sections together**, so a six-slot flight sees
+    all of itself on the scope rather than splitting into two nets — which is the
+    exact blindness that module exists to fix.
+  - `core/dtc.py`'s "two player Viper flights" guard asks *what the groups are*,
+    not how many: two sections fly one route, so one steerpoint tab still fits.
+  - `MissionBuilder.slot_summary(flight)` writes the README's `**Players:**` line,
+    so a briefing that says `Dodge` while the slot list offers `Dodge` and
+    `Dodge 2` cannot happen. `readme()` holds no `Mission`, so the naming comes
+    off `mission_kit.section_names` — the same table the groups were built from.
+
+  A trigger gated on "the player" needs every section: `GroupDead` ANDed
+  (`daryal_run`, `abkhaz_sweep` — the loss call must not fire with jets still up)
+  and `PartOfGroupInZone` ORed with `condition.Or()` (`idlib_gauntlet`'s seam
+  crossing — pydcs's condition list is ANDed, so listing both would hold the call
+  until both had crossed). `mission_kit.sections_of(m, group)` hands back the
+  section-mates of any flight, and just that flight for one built any other way.
+
 - [`core/weather.py`](src/dcs_mission_creator/core/weather.py) — state the
   weather as a record instead of fourteen assignments:
 

@@ -65,7 +65,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import cast
+from typing import Sequence, cast
 
 from dcs import action, condition, planes, task, templates, triggers, vehicles
 from dcs.country import Country
@@ -95,7 +95,11 @@ from dcs_mission_creator.core.iads import Listener, Site, arm_iads
 from dcs_mission_creator.core.jtac import CoordTarget, arm_jtac_coords
 from dcs_mission_creator.core.map_draw import PlanOverlay
 from dcs_mission_creator.core.mission_builder import MissionBuilder
-from dcs_mission_creator.core.mission_kit import arm, mark_clients, race_track
+from dcs_mission_creator.core.mission_kit import (
+    arm,
+    player_flight,
+    race_track,
+)
 from dcs_mission_creator.core.placement import (
     convoy_spawn,
     find_clear_spot,
@@ -467,7 +471,7 @@ FREQUENCIES
 **Theater:** Syria
 **Date / time:** 12 September 2026, 08:40 local
 **Player aircraft:** F-16C-50 (`Uzi`), Hatay, hot ramp
-**Players:** {self.players} coop slot(s)
+**Players:** {self.slot_summary("Uzi")}
 **Difficulty:** trained (medium) — a 90 km front line with an S-125 battery on
 each shoulder and a third in the southern rear, three layered SAM belts with
 drilled EMCON-capable crews, an unlocated SA-11 covering the northern rear,
@@ -773,7 +777,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         sead_aim, _ = plan.estimate(
             sa6_pos, radius=self._belt_named(belts, "SA-6 belt").radius_m
         )
-        player, corridor = self._spawn_player(
+        uzi, corridor = self._spawn_player(
             m,
             usa,
             scene,
@@ -826,7 +830,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self._add_fac_coord_readout(m, convoy=convoy)
         self._add_intro_voice(m)
         self._add_support_checkins(m, home)
-        self._add_front_crossing_trigger(m, front=front, player=player)
+        self._add_front_crossing_trigger(m, front=front, uzi=uzi)
         self._add_strike_release_triggers(m, sa6=sa6, pontiac=pontiac)
         self._add_scramble_trigger(m, convoy=convoy, migs=migs)
         self._add_end_triggers(m, scene, convoy=convoy, migs=migs)
@@ -1687,32 +1691,29 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         *,
         sead_ip: Point,
         threats: tuple[Point, ...],
-    ) -> tuple[FlyingGroup, list[Point]]:
+    ) -> tuple[list[FlyingGroup], list[Point]]:
         """Uzi F-16C-50 from Hatay, terrain-masked ingress to the SA-6 site.
 
-        Hands the group back as well as the route: the front-line crossing call
+        Hands the flight back as well as the route: the front-line crossing call
         is gated on this flight being at the seam, and gating it on the coalition
         instead had the Eagles trip it from their CAP station before the player
-        had taxied.
+        had taxied. Above four coop slots the flight is more than one group, so
+        it is a list — every section flies the one corridor.
         """
-        player = m.flight_group_from_airport(
+        # Wild Weasel + interdiction: two HARMs for the belts, two CBU-97 SFW
+        # for the column, HTS to find the emitters, LITENING to find the trucks.
+        harm = "AGM_88C_HARM___High_Speed_Anti_Radiation_Missile_"
+        sfw = "CBU_97___10_x_SFW_Cluster_Bomb"
+        sections = player_flight(
+            m,
             country=usa,
             name="Uzi",
             aircraft_type=planes.F_16C_50,
             airport=scene.hatay,
             maintask=task.SEAD,
             start_type=StartType.Warm,
-            group_size=self.players,
-        )
-        mark_clients(player)
-        # Wild Weasel + interdiction: two HARMs for the belts, two CBU-97 SFW
-        # for the column, HTS to find the emitters, LITENING to find the trucks.
-        harm = "AGM_88C_HARM___High_Speed_Anti_Radiation_Missile_"
-        sfw = "CBU_97___10_x_SFW_Cluster_Bomb"
-        arm(
-            player,
-            planes.F_16C_50,
-            [
+            slots=self.players,
+            stores=[
                 (1, "AIM_120C_AMRAAM___Active_Radar_AAM"),
                 (2, "AIM_9X_Sidewinder_IR_AAM"),
                 (3, harm),
@@ -1726,7 +1727,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                 (11, "AN_AAQ_28_LITENING___Targeting_Pod_"),
             ],
         )
-        player.add_runway_waypoint(scene.hatay)
         push = scene.hatay.position.point_from_heading(
             scene.hatay.position.heading_between_point(scene.route_mid), 25_000.0
         )
@@ -1737,7 +1737,21 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             waypoints=3,
             leg_search_radius_m=8_000.0,
         )
+        for player in sections:
+            self._route_uzi(player, scene, corridor)
+        return sections, [*corridor, scene.route_mid]
+
+    def _route_uzi(
+        self, player: FlyingGroup, scene: _Scene, corridor: Sequence[Point]
+    ) -> None:
+        """Hatay → PUSH → corridor → SEAD TGT → CONVOY AO → Hatay.
+
+        One route, flown by every section: the corridor is a terrain-masking
+        search against the overlay, so it is placed once and handed to each
+        section rather than searched again per group.
+        """
         ov = scene.overlay.overlay
+        player.add_runway_waypoint(scene.hatay)
         for i, pt in enumerate(corridor[:-1]):
             name = "PUSH" if i == 0 else f"INGRESS-{i}"
             player.add_waypoint(pt, altitude=7000, speed=800, name=name)
@@ -1752,7 +1766,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         )
         player.add_runway_waypoint(scene.hatay)
         player.land_at(scene.hatay)
-        return player, [*corridor, scene.route_mid]
 
     # -- F10 map briefing ---------------------------------------------------
 
@@ -2340,7 +2353,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         )
 
     def _add_front_crossing_trigger(
-        self, m: Mission, *, front: Frontline, player: FlyingGroup
+        self, m: Mission, *, front: Frontline, uzi: Sequence[FlyingGroup]
     ) -> None:
         """Magic puts a name to the unfixed Gadfly once the package is at the seam.
 
@@ -2352,6 +2365,10 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         also when it matters: the call is what makes "stay in the seam" a warning
         instead of a preference. It still does not hand over a position — nobody
         has one — so the flank stays a gamble rather than a target.
+
+        Whichever section reaches the seam first triggers it, hence the `Or`:
+        above four coop slots Uzi is two DCS groups, and pydcs's condition list
+        is ANDed, so listing both would hold the call until both had crossed.
         """
         seam = m.triggers.add_triggerzone(
             position=front.seam, radius=20_000, hidden=True, name="Front line seam"
@@ -2359,7 +2376,14 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         mission_triggers.message_to_coalition(
             m,
             comment="Front line crossed: unlocated Gadfly called",
-            conditions=(condition.PartOfGroupInZone(player.id, seam.id),),
+            conditions=tuple(
+                part
+                for index, group in enumerate(uzi)
+                for part in (
+                    *((condition.Or(),) if index else ()),
+                    condition.PartOfGroupInZone(group.id, seam.id),
+                )
+            ),
             voice=self._voice,
             text=(
                 "Uzi, Magic. Crossing the line — and we have that Gadfly search "

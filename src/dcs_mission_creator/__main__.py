@@ -37,7 +37,7 @@ import structlog
 
 from dcs_mission_creator import missions
 from dcs_mission_creator.core.log import configure as configure_logging
-from dcs_mission_creator.core.mission_builder import MissionBuilder
+from dcs_mission_creator.core.mission_builder import MAX_PLAYERS, MissionBuilder
 from dcs_mission_creator.map_overlay.layers import BuildLayer, QueryLayer, RenderLayer
 
 _MISSIONS_ENV = "DCS_MISSIONS_FOLDER"
@@ -302,7 +302,7 @@ def main(argv: list[str] | None = None) -> int:
         "--players",
         type=int,
         default=1,
-        choices=[1, 2, 3, 4],
+        choices=range(1, MAX_PLAYERS + 1),
         help="Number of coop client slots in the player flight (default: 1).",
     )
 

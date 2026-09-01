@@ -23,16 +23,26 @@ from dcs.unittype import UnitType
 from dcs_mission_creator.core.air_defense import set_skill
 
 if TYPE_CHECKING:
+    from dcs.country import Country
     from dcs.mapping import Point
+    from dcs.mission import Mission, StartType
+    from dcs.task import MainTask
+    from dcs.terrain.terrain import Airport
     from dcs.unit import Unit
     from dcs.unitgroup import FlyingGroup, Group
+    from dcs.unittype import FlyingType
 
 __all__ = [
     "arm",
     "mark_clients",
+    "MAX_FLIGHT_SIZE",
     "offset",
+    "player_flight",
     "RaceTrack",
     "race_track",
+    "section_names",
+    "section_sizes",
+    "sections_of",
     "set_skill",
     "unit_of_type",
 ]
@@ -127,3 +137,113 @@ def race_track(p1: Point, p2: Point) -> RaceTrack:
         race_distance=int(p1.distance_to_point(p2)),
         heading=int(p1.heading_between_point(p2)),
     )
+
+
+#: The most airframes a DCS fixed-wing group can hold. It is a hard limit of
+#: the format rather than a convention, and pydcs does not enforce it — it
+#: *clamps*: `Mission.flight_group_from_airport` does
+#: `group_size = min(group_size, aircraft_type.group_size_max)` and returns
+#: silently, so asking for six slots in one group used to hand back four and
+#: say nothing. Anything above this is a list of flights, never a bigger one.
+MAX_FLIGHT_SIZE = 4
+
+
+def section_sizes(total: int, *, maximum: int = MAX_FLIGHT_SIZE) -> tuple[int, ...]:
+    """Split `total` airframes into DCS-legal flights, biggest first.
+
+    A four-ship trailed by a single ship is neither realistic nor useful — on
+    the enemy side the lone jet dies first and its `GroupDead` gates a win
+    condition on one airframe, on ours it is a player sitting on his own — so a
+    would-be remainder of one is taken out of the flight ahead of it instead.
+    Five is `(3, 2)`, six is `(4, 2)`.
+    """
+    sizes: list[int] = []
+    left = total
+    while left > 0:
+        take = min(left, maximum)
+        if left - take == 1:
+            take -= 1
+        sizes.append(take)
+        left -= take
+    return tuple(sizes)
+
+
+#: Where the sections of one player flight are recorded on the mission, so the
+#: helpers that used to assume "one player flight, one group" can still tell a
+#: second section from a second flight. Mirrors the stashes in `core/dtc.py`
+#: and `core/kneeboard/publish.py`.
+_SECTIONS = "player_flight_sections"
+
+
+def player_flight(
+    m: Mission,
+    *,
+    country: Country,
+    name: str,
+    aircraft_type: type[FlyingType],
+    airport: Airport,
+    maintask: type[MainTask],
+    start_type: StartType,
+    slots: int,
+    stores: Sequence[tuple[int, str]],
+) -> list[FlyingGroup]:
+    """Build the player flight as however many DCS-legal sections it takes.
+
+    Above `MAX_FLIGHT_SIZE` coop slots the flight is two groups — `Dodge` and
+    `Dodge 2` — because a plane group holds four aircraft and pydcs clamps
+    rather than raises. They are one flight in every sense the player cares
+    about: same field, same loadout, and the caller gives each the same route.
+    What differs is what DCS makes differ — parking, callsign, track-number
+    block — so each section still reads as itself on the net and on its card.
+
+    Returns the sections in slot order, lead first; a mission that needs "the
+    player flight" for a trigger wants all of them (`sections_of`).
+    """
+    sections: list[FlyingGroup] = []
+    sizes = section_sizes(slots)
+    for section_name, size in zip(section_names(name, len(sizes)), sizes):
+        group = m.flight_group_from_airport(
+            country=country,
+            name=section_name,
+            aircraft_type=aircraft_type,
+            airport=airport,
+            maintask=maintask,
+            start_type=start_type,
+            group_size=size,
+        )
+        mark_clients(group)
+        arm(group, aircraft_type, stores)
+        sections.append(group)
+    _sections(m).append(tuple(sections))
+    return sections
+
+
+def sections_of(m: Mission, group: FlyingGroup) -> tuple[FlyingGroup, ...]:
+    """The sections `group` was built as part of, or just `group` itself.
+
+    For the callers that hold one flight and have to act on all of it: a trigger
+    gated on the player being somewhere, a cartridge that refuses two routes.
+    """
+    for sections in _sections(m):
+        if group in sections:
+            return sections
+    return (group,)
+
+
+def section_names(name: str, sections: int) -> tuple[str, ...]:
+    """What each section of `name` is called: `Dodge`, `Dodge 2`, ...
+
+    The briefing has to be able to say this without holding the built groups —
+    `readme()` takes no mission — so the naming lives here rather than inside
+    `player_flight`, and both read it from the same place.
+    """
+    return tuple(name if i == 1 else f"{name} {i}" for i in range(1, sections + 1))
+
+
+def _sections(m: Mission) -> list[tuple[FlyingGroup, ...]]:
+    """The mission's record of which groups are sections of one flight."""
+    stash = getattr(m, _SECTIONS, None)
+    if stash is None:
+        stash = []
+        setattr(m, _SECTIONS, stash)
+    return stash

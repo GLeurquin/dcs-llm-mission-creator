@@ -22,7 +22,14 @@ from typing import TYPE_CHECKING
 
 from dcs.mission import Mission
 
-from dcs_mission_creator.core import datalink, dcs_install, dtc, kneeboard, waypoints
+from dcs_mission_creator.core import (
+    datalink,
+    dcs_install,
+    dtc,
+    kneeboard,
+    mission_kit,
+    waypoints,
+)
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.recon import publish as recon
 
@@ -30,6 +37,13 @@ if TYPE_CHECKING:
     from dcs.terrain.terrain import Terrain
 
     from dcs_mission_creator.map_overlay.query import MapOverlay
+
+
+#: The most coop client slots a mission is built for. Above
+#: `mission_kit.MAX_FLIGHT_SIZE` the player flight is more than one group — a
+#: DCS plane group holds four aircraft — which is what `mission_kit.player_flight`
+#: is for, and why raising this number is not only a change to this line.
+MAX_PLAYERS = 6
 
 
 class MissionBuilder(ABC):
@@ -45,8 +59,8 @@ class MissionBuilder(ABC):
     _terrain: Terrain
 
     def __init__(self, *, players: int = 1) -> None:
-        if players < 1 or players > 4:
-            raise ValueError(f"players must be 1..4, got {players}")
+        if players < 1 or players > MAX_PLAYERS:
+            raise ValueError(f"players must be 1..{MAX_PLAYERS}, got {players}")
         self.players = players
         # Before any flight is built: pydcs caches its payload dirs on first use.
         dcs_install.configure()
@@ -60,6 +74,23 @@ class MissionBuilder(ABC):
         Returns the overlay the mission's positions came from, which the base
         uses to put take-off and landing waypoints on the terrain.
         """
+
+    def slot_summary(self, flight: str) -> str:
+        """The `**Players:**` line: how many slots, and what flight they are in.
+
+        Above `mission_kit.MAX_FLIGHT_SIZE` the player flight is more than one
+        DCS group, and a briefing that still says "Dodge" while the slot list
+        offers `Dodge` and `Dodge 2` is a briefing contradicting its own mission
+        file. `readme()` holds no `Mission`, so the naming comes off
+        `mission_kit.section_names`, which is the same table `player_flight`
+        builds the groups from.
+        """
+        sizes = mission_kit.section_sizes(self.players)
+        if len(sizes) == 1:
+            return f"{self.players} coop slot(s)"
+        names = mission_kit.section_names(flight, len(sizes))
+        parts = ", ".join(f"{n} ({s})" for n, s in zip(names, sizes))
+        return f"{self.players} coop slot(s), flown as {len(sizes)} sections: {parts}"
 
     @abstractmethod
     def readme(self) -> str:

@@ -42,6 +42,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Sequence
 
 from dcs import condition, planes, task, templates, vehicles
 from dcs.country import Country
@@ -63,8 +64,13 @@ from dcs_mission_creator.core import (
 from dcs_mission_creator.core.cli import run_cli
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.map_draw import PlanOverlay
-from dcs_mission_creator.core.mission_builder import MissionBuilder
-from dcs_mission_creator.core.mission_kit import arm, mark_clients, offset, set_skill
+from dcs_mission_creator.core.mission_builder import MAX_PLAYERS, MissionBuilder
+from dcs_mission_creator.core.mission_kit import (
+    offset,
+    player_flight,
+    section_sizes,
+    set_skill,
+)
 from dcs_mission_creator.core.placement import load_scene
 from dcs_mission_creator.core.routing import ThreatRing, avoid_threats
 from dcs_mission_creator.core.tasking import apply_ai_difficulty
@@ -93,37 +99,31 @@ _MISSILES_PER_JET = 6
 _SHOTS_PER_KILL = 2
 _KILLS_PER_JET = _MISSILES_PER_JET // _SHOTS_PER_KILL
 _TASKED_KILLS_PER_JET = 2
-_MAX_PLANES_PER_GROUP = 4  # DCS caps a plane group at four airframes.
 
+#: Bandit counts as the briefing says them out loud rather than as digits. The
+#: table is derived rather than typed because it has to keep up with the slot
+#: cap: the Sochi element is `_TASKED_KILLS_PER_JET` Su-27 per player jet, so a
+#: six-slot Dodge faces twelve, and the eight this stopped at was sized for a
+#: four-slot ceiling. Raising `MAX_PLAYERS` past the words below now fails at
+#: import, not two thirds of the way through a build.
+_NUMBER_WORDS = (
+    "zero",
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+    "ten",
+    "eleven",
+    "twelve",
+)
 _SPOKEN = {
-    1: "one",
-    2: "two",
-    3: "three",
-    4: "four",
-    5: "five",
-    6: "six",
-    7: "seven",
-    8: "eight",
+    n: _NUMBER_WORDS[n] for n in range(1, MAX_PLAYERS * _TASKED_KILLS_PER_JET + 1)
 }
-
-
-def _split_flights(total: int) -> tuple[int, ...]:
-    """Split `total` airframes into DCS-legal flights (four at most), biggest first.
-
-    A four-ship trailed by a single ship is neither realistic nor useful — the
-    lone jet dies first and its `GroupDead` gates a win condition on one
-    airframe — so a would-be remainder of one is taken out of the flight ahead
-    of it instead.
-    """
-    sizes: list[int] = []
-    left = total
-    while left > 0:
-        take = min(left, _MAX_PLANES_PER_GROUP)
-        if left - take == 1:
-            take -= 1
-        sizes.append(take)
-        left -= take
-    return tuple(sizes)
 
 
 @dataclass(frozen=True)
@@ -158,8 +158,8 @@ def _plan_bandits(players: int) -> _BanditPlan:
     tasked = players * _TASKED_KILLS_PER_JET
     spare_kills = players * _KILLS_PER_JET - tasked
     return _BanditPlan(
-        su27=_split_flights(tasked),
-        mig29=_split_flights(max(2, spare_kills)),
+        su27=section_sizes(tasked),
+        mig29=section_sizes(max(2, spare_kills)),
     )
 
 
@@ -350,7 +350,7 @@ NOTES
 **Theater:** Caucasus
 **Date / time:** 18 July 2026, 05:30 local (dawn)
 **Player aircraft:** F-16C-50 (`Dodge`), Batumi, hot ramp
-**Players:** {self.players} coop slot(s)
+**Players:** {self.slot_summary("Dodge")}
 **Difficulty:** ace
 **Expected sortie length:** ~55 minutes
 
@@ -511,11 +511,11 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self._spawn_awacs(m, usa, scene)
         su27s = self._spawn_red_su27(m, russia, scene)
         mig29s = self._spawn_red_mig29(m, russia, scene)
-        player, route = self._spawn_player(m, usa, scene, threats=scene.threats)
+        dodge, route = self._spawn_player(m, usa, scene, threats=scene.threats)
 
         home, sochi_ad = self._spawn_sanctuaries(m, usa, russia, scene, route=route)
 
-        self._add_end_triggers(m, su27s=su27s, mig29s=mig29s, player=player)
+        self._add_end_triggers(m, su27s=su27s, mig29s=mig29s, dodge=dodge)
         self._add_sanctuary_checkin(m, home)
         sanc.remark_all(m, home, sochi_ad)
         self._conceal_red(russia)
@@ -826,16 +826,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         threats: tuple[ThreatRing, ...],
     ):
         """Dodge F-16C-50 from Batumi, hot ramp; sweep stations offshore."""
-        player = m.flight_group_from_airport(
-            country=usa,
-            name="Dodge",
-            aircraft_type=planes.F_16C_50,
-            airport=scene.batumi,
-            maintask=task.CAP,
-            start_type=StartType.Warm,
-            group_size=self.players,
-        )
-        mark_clients(player)
         # ED's own "AIM-120C*4, AIM-9X*2, FUEL*2, ECM" load, station for station:
         # in a pure air-to-air fit the AMRAAM go outboard-in on 1/2/8/9 and the
         # Sidewinders sit on 3/7 — the reverse of the SEAD fit, where 3/7 are the
@@ -844,10 +834,16 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         # `_plan_bandits` sizes the opposition against. The centreline was empty;
         # every ED two-tank A/A payload has an ALQ-184 there, and a jet going
         # into R-27ER and Snow Drum country wants it.
-        arm(
-            player,
-            planes.F_16C_50,
-            [
+        sections = player_flight(
+            m,
+            country=usa,
+            name="Dodge",
+            aircraft_type=planes.F_16C_50,
+            airport=scene.batumi,
+            maintask=task.CAP,
+            start_type=StartType.Warm,
+            slots=self.players,
+            stores=[
                 (1, "AIM_120C_AMRAAM___Active_Radar_AAM"),
                 (2, "AIM_120C_AMRAAM___Active_Radar_AAM"),
                 (3, "AIM_9X_Sidewinder_IR_AAM"),
@@ -860,11 +856,16 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             ],
         )
 
-        player.add_runway_waypoint(scene.batumi)
-        route = self._route_sweep(player, scene, threats=threats)
-        player.add_runway_waypoint(scene.batumi)
-        player.land_at(scene.batumi)
-        return player, route
+        # Every section flies the one plan: `_route_sweep` is pure geometry
+        # against the same rings, so the routes it writes are identical, and the
+        # lead's is the one the map and the cartridge are drawn from.
+        routes = []
+        for player in sections:
+            player.add_runway_waypoint(scene.batumi)
+            routes.append(self._route_sweep(player, scene, threats=threats))
+            player.add_runway_waypoint(scene.batumi)
+            player.land_at(scene.batumi)
+        return sections, routes[0]
 
     def _route_sweep(
         self,
@@ -1117,7 +1118,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         *,
         su27s: list[FlyingGroup],
         mig29s: list[FlyingGroup],
-        player,
+        dodge: Sequence[FlyingGroup],
     ) -> None:
         """Success on the Sochi element; failure when Dodge dies first.
 
@@ -1127,6 +1128,10 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         the element that actually blocks the AWACS track, and the Gudauta
         section is scored as a bonus in a second call rather than as a
         requirement.
+
+        "Dodge is down" is every section of it down: above four coop slots the
+        flight is more than one DCS group, and gating the loss call on the lead
+        section alone would call the corridor lost with jets still in it.
         """
         mission_triggers.message_to_all(
             m,
@@ -1156,7 +1161,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         mission_triggers.message_to_all(
             m,
             comment="Dodge lost",
-            conditions=(condition.GroupDead(player.id),),
+            conditions=tuple(condition.GroupDead(group.id) for group in dodge),
             voice=self._voice,
             text=(
                 "Magic: Dodge is down and the corridor is still theirs. Holding "

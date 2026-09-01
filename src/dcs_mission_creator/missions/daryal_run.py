@@ -30,6 +30,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Sequence
 
 from dcs import action, condition, planes, task, templates, triggers, vehicles
 from dcs.country import Country
@@ -39,6 +40,7 @@ from dcs.mission import Mission, StartType
 from dcs.terrain.caucasus.caucasus import Caucasus
 from dcs.terrain.terrain import Airport
 from dcs.unit import Skill
+from dcs.unitgroup import FlyingGroup
 
 from dcs_mission_creator.core import (
     air_defense as ad,
@@ -52,9 +54,8 @@ from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.map_draw import PlanOverlay
 from dcs_mission_creator.core.mission_builder import MissionBuilder
 from dcs_mission_creator.core.mission_kit import (
-    arm,
-    mark_clients,
     offset,
+    player_flight,
     set_skill,
     unit_of_type,
 )
@@ -323,7 +324,7 @@ NOTES
 **Theater:** Caucasus
 **Date / time:** 12 October 2026, 18:15 local (dusk)
 **Player aircraft:** F-16C-50 (`Dodge`), Vaziani, hot ramp
-**Players:** {self.players} coop slot(s)
+**Players:** {self.slot_summary("Dodge")}
 **Difficulty:** ace
 **Expected sortie length:** ~55 minutes
 
@@ -494,11 +495,11 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         sa10, _tor, _shilkas, _ewr = self._spawn_red_ground(m, russia, scene)
         self._spawn_awacs(m, usa, scene)
         self._spawn_red_intercept(m, russia, scene)
-        player, route = self._spawn_player(m, usa, scene, plan=plan)
+        dodge, route = self._spawn_player(m, usa, scene, plan=plan)
 
         home, mozdok_ad = self._spawn_sanctuaries(m, usa, russia, scene, route=route)
 
-        self._add_end_triggers(m, sa10=sa10, player=player)
+        self._add_end_triggers(m, sa10=sa10, dodge=dodge)
         self._add_sanctuary_checkin(m, home)
         sanc.remark_all(m, home, mozdok_ad)
         self._conceal_red(russia)
@@ -730,20 +731,16 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self, m: Mission, usa: Country, scene: _Scene, *, plan: PlanOverlay
     ):
         """Dodge F-16C-50 from Vaziani, hot ramp; gorge ingress, Ardon egress."""
-        player = m.flight_group_from_airport(
+        sections = player_flight(
+            m,
             country=usa,
             name="Dodge",
             aircraft_type=planes.F_16C_50,
             airport=scene.vaziani,
             maintask=task.SEAD,
             start_type=StartType.Warm,
-            group_size=self.players,
-        )
-        mark_clients(player)
-        arm(
-            player,
-            planes.F_16C_50,
-            [
+            slots=self.players,
+            stores=[
                 (1, "AIM_120C_AMRAAM___Active_Radar_AAM"),
                 (2, "AIM_9X_Sidewinder_IR_AAM"),
                 (3, "AGM_88C_HARM___High_Speed_Anti_Radiation_Missile_"),
@@ -759,15 +756,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         overlay = scene.overlay.overlay
         ingress = self._route_altitudes(scene.ingress, overlay)
         egress = self._route_altitudes(scene.egress, overlay)
-
-        player.add_runway_waypoint(scene.vaziani)
-        for leg, altitude in ingress:
-            player.add_waypoint(
-                leg.position,
-                altitude=altitude,
-                speed=_TRANSIT_SPEED_KPH if altitude > 2_500 else _GORGE_SPEED_KPH,
-                name=leg.name,
-            )
         # The target steerpoint marks where the battery is *assessed* to be —
         # `plan.estimate`, the same point the map rings and the HSD carries —
         # not where it is. This mission hid every Russian icon, drew its S-300
@@ -776,8 +764,40 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         # the whole reveal policy was undone by the one channel it never
         # looked at. Finding the radars inside the ELINT cut is the sortie, and
         # that is what the HTS and the HARM are aboard for.
-        # The pop altitude is flown off the IP leg above, not written here.
         target, _ = plan.estimate(scene.sa10_site, radius=_SA10_RING_M)
+        for player in sections:
+            self._route_dodge(player, scene, ingress, egress, target)
+        route = [
+            *(leg.position for leg, _ in ingress),
+            target,
+            *(leg.position for leg, _ in egress),
+        ]
+        return sections, route
+
+    def _route_dodge(
+        self,
+        player: FlyingGroup,
+        scene: _Scene,
+        ingress: Sequence[tuple[_Leg, float]],
+        egress: Sequence[tuple[_Leg, float]],
+        target: Point,
+    ) -> None:
+        """Vaziani → the gorge → TARGET → the Ardon → Vaziani, per section.
+
+        The altitudes and the assessed target are worked out once in
+        `_spawn_player` and handed in: they are reads against the elevation
+        raster and against the plan's estimate, and two sections deriving them
+        separately could fly two different plans under one briefing.
+        """
+        player.add_runway_waypoint(scene.vaziani)
+        for leg, altitude in ingress:
+            player.add_waypoint(
+                leg.position,
+                altitude=altitude,
+                speed=_TRANSIT_SPEED_KPH if altitude > 2_500 else _GORGE_SPEED_KPH,
+                name=leg.name,
+            )
+        # The pop altitude is flown off the IP leg above, not written here.
         waypoints.add_ground_waypoint(
             player,
             target,
@@ -793,12 +813,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             )
         player.add_runway_waypoint(scene.vaziani)
         player.land_at(scene.vaziani)
-        route = [
-            *(leg.position for leg, _ in ingress),
-            target,
-            *(leg.position for leg, _ in egress),
-        ]
-        return player, route
 
     def _route_altitudes(
         self, legs: tuple[_Leg, ...], overlay: MapOverlay
@@ -1012,13 +1026,20 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     # -- triggers and briefing ----------------------------------------------
 
-    def _add_end_triggers(self, m: Mission, *, sa10, player) -> None:
+    def _add_end_triggers(
+        self, m: Mission, *, sa10, dodge: Sequence[FlyingGroup]
+    ) -> None:
         """Success when both SA-10 radars dead; failure when Dodge dies first.
 
         Both radars are found by type, not by index: the site comes from
         pydcs's template, whose `units[1]` is a paratrooper. Gating on the two
         radars lets the shot-capable launchers stay in the same group, which an
         S-300 launcher needs in order to fire at all.
+
+        "Dodge is down" is every section down, ANDed: above four coop slots the
+        flight is more than one DCS group, and gating the failure call on the
+        lead section alone would sound the mission over while the second section
+        is still in the gorge.
         """
         big_bird = unit_of_type(sa10, vehicles.AirDefence.S_300PS_64H6E_sr).id
         flap_lid = unit_of_type(sa10, vehicles.AirDefence.S_300PS_40B6M_tr).id
@@ -1042,7 +1063,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             m,
             comment="Dodge lost before kill",
             conditions=(
-                condition.GroupDead(player.id),
+                *(condition.GroupDead(group.id) for group in dodge),
                 condition.UnitAlive(flap_lid),
             ),
             voice=self._voice,

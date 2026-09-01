@@ -117,3 +117,45 @@ def test_units_without_datalinks_omit_the_key(mission: Mission):
     eagle = _flight(mission, "Eagle", planes.F_15C, 1)
     assign_datalink_identities(mission)
     assert "datalinks" not in eagle.units[0].dict()
+
+
+def test_split_player_flight_is_one_team(mission: Mission):
+    """Six coop slots are two DCS groups and one flight on the net.
+
+    Teaming each group only with itself would put half the flight off the other
+    half's scope, which is the blindness this module exists to fix.
+    """
+    from dcs.mission import StartType
+    from dcs.task import CAP
+
+    from dcs_mission_creator.core.mission_kit import player_flight
+
+    sections = player_flight(
+        mission,
+        country=mission.country("USA"),
+        name="Dodge",
+        aircraft_type=planes.F_16C_50,
+        airport=mission.terrain.airports["Batumi"],
+        maintask=CAP,
+        start_type=StartType.Warm,
+        slots=6,
+        stores=[],
+    )
+    assign_datalink_identities(mission)
+
+    assert [g.name for g in sections] == ["Dodge", "Dodge 2"]
+    everyone = [u.id for g in sections for u in g.units]
+    for group in sections:
+        for unit in group.units:
+            members = unit.datalinks["Link16"]["network"]["teamMembers"]
+            assert [m["missionUnitId"] for m in members] == everyone
+
+
+def test_unsplit_flights_stay_their_own_team(mission: Mission):
+    """Two separate flights of the same type are two teams, as before."""
+    one = _flight(mission, "Viper", planes.F_16C_50, 2)
+    two = _flight(mission, "Hawg", planes.F_16C_50, 2)
+    assign_datalink_identities(mission)
+    for group in (one, two):
+        members = group.units[0].datalinks["Link16"]["network"]["teamMembers"]
+        assert [m["missionUnitId"] for m in members] == [u.id for u in group.units]

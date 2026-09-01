@@ -18,10 +18,11 @@ from dcs import planes
 from dcs.drawing.drawings import StandardLayer
 from dcs.drawing.polygon import Circle
 from dcs.mapping import Point
-from dcs.mission import Mission
+from dcs.mission import Mission, StartType
+from dcs.task import CAP
 from dcs.terrain import Caucasus
 
-from dcs_mission_creator.core import dtc, waypoints
+from dcs_mission_creator.core import dtc, mission_kit, waypoints
 from dcs_mission_creator.core.kneeboard.flightplan import flight_plan
 from dcs_mission_creator.core.map_draw import PlanOverlay
 from dcs_mission_creator.core.mission_kit import mark_clients
@@ -559,3 +560,36 @@ def test_two_player_viper_flights_raise(mission: Mission):
     second.add_runway_waypoint(mission.terrain.airports["Batumi"])
     with pytest.raises(ValueError, match="player Viper flights"):
         dtc.arm_plan(mission, _drawn_plan(mission), overlay=_Overlay())
+
+
+def test_two_sections_of_one_flight_do_not_raise(mission: Mission, tmp_path: Path):
+    """Six coop slots are two DCS groups flying one route, not two flights.
+
+    The tab that fits the lead section fits the second, so the guard above has
+    to look at what the groups *are* rather than at how many there are.
+    """
+    batumi = mission.terrain.airports["Batumi"]
+    sections = mission_kit.player_flight(
+        mission,
+        country=mission.country("USA"),
+        name="Uzi",
+        aircraft_type=planes.F_16C_50,
+        airport=batumi,
+        maintask=CAP,
+        start_type=StartType.Warm,
+        slots=6,
+        stores=[],
+    )
+    for flight in sections:
+        flight.add_runway_waypoint(batumi)
+        flight.add_waypoint(
+            batumi.position.point_from_heading(45.0, 20_000.0),
+            altitude=6_000,
+            speed=800,
+            name="INGRESS-1",
+        )
+        flight.add_runway_waypoint(batumi)
+        flight.land_at(batumi)
+
+    dtc.arm_plan(mission, _drawn_plan(mission), overlay=_Overlay())
+    assert _nav_tab(mission, tmp_path)["NAV_PTS"]

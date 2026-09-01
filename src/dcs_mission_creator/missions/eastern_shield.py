@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import cast
+from typing import Sequence, cast
 
 from dcs import action, condition, planes, task, templates, triggers, vehicles
 from dcs.country import Country
@@ -39,7 +39,7 @@ from dcs.point import PointAction
 from dcs.terrain.syria.syria import Syria
 from dcs.terrain.terrain import Airport
 from dcs.unit import Skill
-from dcs.unitgroup import VehicleGroup
+from dcs.unitgroup import FlyingGroup, VehicleGroup
 from dcs.unittype import VehicleType
 
 from dcs_mission_creator.core import (
@@ -56,8 +56,8 @@ from dcs_mission_creator.core.map_draw import PlanOverlay
 from dcs_mission_creator.core.mission_builder import MissionBuilder
 from dcs_mission_creator.core.mission_kit import (
     arm,
-    mark_clients,
     offset,
+    player_flight,
     race_track,
     set_skill,
 )
@@ -201,7 +201,7 @@ FREQUENCIES
 **Theater:** Syria
 **Date / time:** 21 May 2026, 09:00 local
 **Player aircraft:** F-16C-50 (`Springfield`), Incirlik, hot ramp
-**Players:** {self.players} coop slot(s)
+**Players:** {self.slot_summary("Springfield")}
 **Difficulty:** trained — one radar SAM over the target with SHORAD and guns,
 experienced MiG-29S pair with GCI, an armoured counter-push, full support
 package (AWACS, tanker, TARCAP)
@@ -869,20 +869,16 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         threats: tuple[Point, ...],
     ) -> list[Point]:
         """Springfield F-16C-50 from Incirlik, terrain-masked SEAD ingress."""
-        player = m.flight_group_from_airport(
+        sections = player_flight(
+            m,
             country=usa,
             name="Springfield",
             aircraft_type=planes.F_16C_50,
             airport=scene.incirlik,
             maintask=task.SEAD,
             start_type=StartType.Warm,
-            group_size=self.players,
-        )
-        mark_clients(player)
-        arm(
-            player,
-            planes.F_16C_50,
-            [
+            slots=self.players,
+            stores=[
                 (1, "AIM_120C_AMRAAM___Active_Radar_AAM"),
                 (2, "AIM_9X_Sidewinder_IR_AAM"),
                 (3, "AGM_88C_HARM___High_Speed_Anti_Radiation_Missile_"),
@@ -894,7 +890,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                 (10, "AN_ASQ_213_HTS___HARM_Targeting_System"),
             ],
         )
-        player.add_runway_waypoint(scene.incirlik)
         push = offset(scene.incirlik.position, east_m=20_000, north_m=-25_000)
         corridor = scene.overlay.place_ingress_corridor(
             ip=push,
@@ -903,7 +898,21 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             waypoints=4,
             leg_search_radius_m=8_000.0,
         )
+        for player in sections:
+            self._route_springfield(player, scene, corridor)
+        return [*corridor, scene.depot_anchor]
+
+    def _route_springfield(
+        self, player: FlyingGroup, scene: _Scene, corridor: Sequence[Point]
+    ) -> None:
+        """Incirlik → PUSH → corridor → SA6 TGT → DEPOT → Incirlik.
+
+        One route, flown by every section: the corridor is a terrain-masking
+        search against the overlay, so it is placed once and handed to each
+        section rather than searched again per group.
+        """
         ov = scene.overlay.overlay
+        player.add_runway_waypoint(scene.incirlik)
         for i, pt in enumerate(corridor[:-1]):
             name = "PUSH" if i == 0 else f"INGRESS-{i}"
             player.add_waypoint(pt, altitude=7000, speed=800, name=name)
@@ -918,7 +927,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         )
         player.add_runway_waypoint(scene.incirlik)
         player.land_at(scene.incirlik)
-        return [*corridor, scene.depot_anchor]
 
     # -- somewhere to fall back to ------------------------------------------
 
