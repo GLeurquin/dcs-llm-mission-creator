@@ -209,6 +209,11 @@ def fac_attack_group(
     laser-guided weapon tracks it; `frequency` (MHz) is where the controller
     talks. Works for a ground JTAC vehicle group or an airborne FAC(A) flight.
 
+    **The code is not an argument here because it is not one in DCS**: the ME's
+    own FAC task takes `groupId` and `weaponType` and nothing else, so the spot
+    is on 1688 whatever a briefing says. `core/laser.py` owns that number and
+    the bombs that have to match it.
+
     Two things the task alone does not buy, and that the caller still owns:
     the FAC has to be close enough to *see* the target (DCS gives it no
     omniscience — park an airborne FAC within roughly 10 km of the target and

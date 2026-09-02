@@ -83,6 +83,7 @@ from dcs_mission_creator.core import (
     air_defense as ad,
     dtc,
     kneeboard,
+    laser,
     routing,
     sanctuary as sanc,
     triggers as mission_triggers,
@@ -182,7 +183,11 @@ _FREQ_AWACS = 251
 _FREQ_TANKER = 260
 _FREQ_TACP = 133
 _TANKER_TACAN = "10X"
-_LASER_CODE = 1688
+#: The mission's one laser code, and it is not a choice: the ME's FAC task
+#: carries no code field, so `Pinpoint` lases DCS's own 1688, and the Viper's
+#: GBU-12s and pod come up on the same number. `core/laser.py` owns the fact and
+#: refuses any other, so the briefings below cannot drift off what is emplaced.
+_LASER_CODE = laser.DEFAULT_CODE
 
 # The sortie's own clock, in mission seconds, and it is set against the route
 # rather than guessed: the kneeboard's own route card puts `Dodge` over the AO
@@ -286,14 +291,15 @@ MISSION (Dodge — F-16C-50, Batumi)
      alert pair off Hawg's run.
   2. STRIKE. Two GBU-12 for the fuel detachment when it
      comes down the valley road. Pinpoint 1-1 has eyes on
-     the road and will lase it for you.
+     the road and will lase it for you. Bombs and spot are
+     both on code {_LASER_CODE}; your pod comes up there too.
   3. COVER PINPOINT. He is three vehicles in a treeline
      and he is the reason two bombs are enough.
 
 PACKAGE
   Dodge 1 (you): F-16C-50, Batumi, hot ramp.
-                 2x AIM-120C, 2x AIM-9X, 2x GBU-12,
-                 targeting pod, two bags.
+                 2x AIM-120C, 2x AIM-9X, 2x GBU-12 on
+                 code {_LASER_CODE}, targeting pod, two bags.
   Hawg 1-2     : A-10C, Kutaisi, strike on the column.
   Eagle 1-2    : F-15C CAP toward Sukhumi. Eagle owns
                  the air-to-air fight — you have four
@@ -434,7 +440,9 @@ Three tasks, in the order the sortie will hand them to you.
    station over the AO, and keep the Russian alert pair off `Hawg`'s run.
 2. **Strike.** Two GBU-12 for the fuel detachment when it comes down the
    valley road. `Pinpoint 1-1` — a tactical air control party in the treeline
-   above the road — has eyes on it and will lase on code `{_LASER_CODE}`.
+   above the road — has eyes on it and will lase on code `{_LASER_CODE}`. Your
+   two bombs are coded `{_LASER_CODE}` as well, and the pod comes up on it, so
+   nothing needs retuning to take his spot.
 3. **Cover `Pinpoint`.** He is three vehicles in a treeline, he is the reason
    two bombs are enough for a moving detachment, and the Russians will work out
    where the laser is coming from.
@@ -450,12 +458,12 @@ Three tasks, in the order the sortie will hand them to you.
 | Texaco       | KC-135   | Batumi  | Tanker, {_FREQ_TANKER}.000 AM, TACAN {_TANKER_TACAN}      |
 | Pinpoint 1-1 | TACP     | ground  | Talk-on + laser, {_FREQ_TACP}.000 AM        |
 
-`Dodge` carries two AIM-120C on the wingtips, two AIM-9X, two GBU-12, a
-targeting pod, an ECM pod and two 370 gal bags. Four air-to-air missiles is
-two kills at the planning factor, which is why `Eagle` owns the air fight and
-why nothing airborne is a required kill in this frag. `Texaco` is on station
-because the jet launches heavy and then loiters — the fuel goes on waiting for
-the second echelon, not on the transit.
+`Dodge` carries two AIM-120C on the wingtips, two AIM-9X, two GBU-12 coded
+`{_LASER_CODE}`, a targeting pod, an ECM pod and two 370 gal bags. Four
+air-to-air missiles is two kills at the planning factor, which is why `Eagle`
+owns the air fight and why nothing airborne is a required kill in this frag.
+`Texaco` is on station because the jet launches heavy and then loiters — the
+fuel goes on waiting for the second echelon, not on the transit.
 
 ## Intelligence
 
@@ -1547,6 +1555,12 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                 (11, "AN_AAQ_28_LITENING___Targeting_Pod_"),
             ],
         )
+        # The bombs and the spot on one code. Nothing is written into the .miz
+        # for a Viper — there is no laser-code field on the airframe — so this
+        # is a build-time check that the number the briefing quotes is the one
+        # the jet comes up on and the one `Pinpoint` will actually lase.
+        for section in sections:
+            laser.set_code(section, _LASER_CODE)
         push = offset(scene.batumi.position, east_m=5_000, north_m=25_000)
         corridor = scene.overlay.place_ingress_corridor(
             ip=push,
@@ -1993,10 +2007,12 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             push_at_s=_TACP_READOUT_S,
         )
         # The two facts about the controller a derived card cannot carry: the
-        # laser code (pydcs writes it nowhere) and where the readout lives in the
-        # radio menu.
+        # laser code (pydcs writes it nowhere — the Viper carries no laser-code
+        # field, so the number lives only in the briefing, and the bombs' half of
+        # it goes on the same line) and where the readout lives in the radio menu.
         kneeboard.remark(
-            m, f"Pinpoint 1-1 lases the fuel detachment on code {_LASER_CODE}."
+            m,
+            f"Pinpoint 1-1 lases on {_LASER_CODE}; your GBU-12s are coded the same.",
         )
         # One line, under the card's column width, so it does not wrap: what a
         # remark is for is the fact the page cannot derive — where the readout

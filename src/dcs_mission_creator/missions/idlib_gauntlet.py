@@ -83,6 +83,7 @@ from dcs_mission_creator.core import (
     air_defense as ad,
     dtc,
     kneeboard,
+    laser,
     routing,
     sanctuary as sanc,
     triggers as mission_triggers,
@@ -136,7 +137,11 @@ _FLAG_STRIKE_RELEASE = 10
 _FREQ_AWACS = 251
 _FREQ_TANKER = 270
 _FREQ_FAC = 133
-_LASER_CODE = 1688
+#: `Hammer`'s spot and `Pontiac`'s GBU-12s, on one number — which is the only
+#: number available: the ME's FAC task has no code field, so a DCS controller
+#: lases 1688 and the Hornet's seekers come up there. See `core/laser.py`.
+_LASER_CODE = laser.DEFAULT_CODE
+
 # F-16C stock presets carrying the AWACS and tanker nets, so the briefing can say
 # "channel N" instead of leaving the player to hand-tune. The FAC net is quoted as
 # a frequency only: a "CH 10" next to the tanker's TACAN 10X reads as a TACAN
@@ -303,9 +308,9 @@ PACKAGE
   Uzi 1 (you): F-16C-50, Hatay, hot ramp. 2x AGM-88C,
         2x CBU-97 SFW, 2x AIM-120C, 2x AIM-9X, HTS pod,
         LITENING, 300 gal centerline.
-  Pontiac 1-2: F/A-18C, 4x GBU-12 + ATFLIR, Hatay. Held
-        in reserve, pushing onto the column once the
-        SAM threat over the route is suppressed.
+  Pontiac 1-2: F/A-18C, 4x GBU-12 coded {_LASER_CODE} + ATFLIR,
+        Hatay. Held in reserve, pushing onto the column
+        once the SAM threat over the route is suppressed.
   Eagle 1-2  : F-15C barrier CAP down the corridor on
         our side of the line.
   Hammer     : MQ-9, {_FREQ_FAC}.000 AM, FAC(A) over the
@@ -570,7 +575,10 @@ IR-guided.
 Loadouts are spelled out in the mission rather than left to the DCS payload
 defaults: `Uzi` carries 2x AGM-88C, 2x CBU-97 (SFW), 2x AIM-120C, 2x AIM-9X,
 the AN/ASQ-213 HTS pod, a LITENING pod and a 300 gal centerline; `Pontiac`
-carries 4x GBU-12 with ATFLIR — buddy-lase off `Hammer` or self-lase.
+carries 4x GBU-12 with ATFLIR — buddy-lase off `Hammer` or self-lase. Those
+bombs are coded `{_LASER_CODE}`, the code `Hammer` lases on, so the two need no
+arranging. Nothing `Uzi` carries rides a laser: the SFWs are self-guided
+submunitions and the pod is there to look, not to designate for yourself.
 
 ## Intelligence
 
@@ -1587,6 +1595,10 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             ],
         )
         ad.set_skill(pontiac, Skill.High)
+        # The GBU-12s and `Hammer`'s spot on one code. The Hornet carries no
+        # laser-code field either, so this is the check that the number the
+        # briefing hands the player is the one the reserve strike drops on.
+        laser.set_code(pontiac, _LASER_CODE)
         self._route_strike(pontiac, scene, convoy=convoy, threats=threats)
         self._limit_strike_engagement(pontiac, scene.route_mid)
         return pontiac
@@ -2283,9 +2295,13 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             push_at_s=_FAC_CHECKIN_S + 15,
         )
         # The two facts about the controller a card cannot derive: the laser code
-        # (DCS's own default, which pydcs writes nowhere) and where the readout
-        # lives in the radio menu.
-        kneeboard.remark(m, f"Hammer 1-1 lases the column on code {_LASER_CODE}.")
+        # (DCS's own default, which pydcs writes nowhere — no Viper or Hornet
+        # carries a laser-code field, so whose bombs are on it goes on the same
+        # line) and where the readout lives in the radio menu.
+        kneeboard.remark(
+            m,
+            f"Hammer 1-1 lases on {_LASER_CODE}; Pontiac's GBU-12s are coded the same.",
+        )
         kneeboard.remark(
             m,
             "Target coordinates in your own cockpit's format: "

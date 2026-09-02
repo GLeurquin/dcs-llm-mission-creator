@@ -29,6 +29,7 @@ from dcs_mission_creator.core import (
     join_up,
     kneeboard,
     mission_kit,
+    radio,
     waypoints,
 )
 from dcs_mission_creator.core.difficulty import Difficulty
@@ -100,8 +101,8 @@ class MissionBuilder(ABC):
     def build_miz(self, miz_path: Path) -> None:
         """Assemble the mission, then finish and save it.
 
-        Concrete on purpose. The first four finishing steps have to happen
-        after the last flight exists and before the save, and all four are
+        Concrete on purpose. The first five finishing steps have to happen
+        after the last flight exists and before the save, and all five are
         things pydcs leaves undone rather than things a mission decides:
 
         - the package hold (`core/join_up`), because every AI flight launches at
@@ -120,20 +121,25 @@ class MissionBuilder(ABC):
         - datalink identities, because pydcs writes neither track numbers nor
           the per-unit network table, so a coop flight spawned anonymous and
           could not see itself on the scope.
+        - radio frequencies (`core/radio`), because `awacs_flight` and
+          `refuel_flight` spend their `frequency=` argument on a waypoint task
+          and leave the group's own field on pydcs's 251 MHz default, which is
+          the field a player's radio has to match. Every tanker in this project
+          was briefed on a frequency it was not on.
 
-        The fifth finishing step is the mirror image: any data cartridge a
+        The sixth finishing step is the mirror image: any data cartridge a
         mission armed is a *file inside the package*, and `Mission.save` writes
         a fixed set of zip entries with no hook for another one, so it goes in
         after the save.
 
-        The sixth is the kneeboard (`core/kneeboard`) — files inside the
+        The seventh is the kneeboard (`core/kneeboard`) — files inside the
         package like the cartridge, since pydcs's own
         `add_aircraft_kneeboard` writes an entry path with an empty component in
         it. It runs after the save for the archive's sake and after every other
         step for the content's: the route card prints the take-off and landing
         altitudes `snap_base_waypoints` has just corrected.
 
-        The seventh has a different reason again, and it is worth stating rather
+        The eighth has a different reason again, and it is worth stating rather
         than letting the list above absorb it: a recon still (`core/recon`) is
         already inside the `.miz` as a briefing slide by the time we get here,
         because pydcs models briefing pictures. What it is *not* is next to the
@@ -148,6 +154,7 @@ class MissionBuilder(ABC):
         waypoints.snap_base_waypoints(m, overlay)
         waypoints.set_departure_speeds(m)
         datalink.assign_datalink_identities(m)
+        radio.tune_working_frequencies(m)
         miz_path.parent.mkdir(parents=True, exist_ok=True)
         m.save(str(miz_path))
         dtc.write_cartridges(m, miz_path)

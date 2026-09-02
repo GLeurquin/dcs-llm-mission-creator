@@ -430,6 +430,24 @@ the laser and the talk-on stay stock — and give it `push_at_s` (just after the
 controller's check-in) so one readout arrives unprompted: the player is otherwise
 read nothing but ED's grid and never learns the F10 entry exists.
 
+**The laser code is 1688 and no task carries it.** The ME's own
+`FAC - Attack Group` action declares `groupId` and `weaponType` and nothing else
+(`<DCS>/MissionEditor/modules/me_action_db.lua`), and pydcs's `FACAttackGroup`
+adds only designation, frequency, modulation, callsign and datalink — so the
+code in the AI controller's 9-line is DCS's own default, whatever any briefing
+says. The bombs are the same story for most of the fleet: the F-16C, F/A-18C and
+A-10C carry **no** laser-code property, so their seekers come up on 1688 and the
+pilot retunes in the cockpit. Only four families in pydcs expose the code as
+`AddPropAircraft` (`unit.set_property`) — AV-8B and JF-17 as
+`LaserCode100/10/1` digits (plus the Harrier's separate `GBULaserCode*`), F-4E
+as `LaserCodeDigit1..4`, F-15E as `Sta2LaserCode` and friends holding the last
+three digits — and every one of those defaults to 1688 too. **Project wrapper:**
+`laser.set_code(flight, laser.DEFAULT_CODE)` writes the properties where they
+exist and refuses a code the airframe cannot hold; `jtac.arm_jtac_coords`
+refuses a `CoordTarget.laser_code` that is not `laser.AI_JTAC_CODE`. Per-pylon
+`settings = {laser_code = …}` exists in ED's own F-14 payloads but pydcs's
+weapon table carries no `settings`, so that path is not reachable from here.
+
 ### 6.2 AI behaviour options — the difficulty dial
 Each is a `task.Opt*` appended to `points[0].tasks`:
 - `OptROE(OptROE.Values.X)` — `WeaponFree` / `OpenFireWeaponFree` / `OpenFire`
@@ -731,6 +749,10 @@ calling §11 / triggers directly. Their contracts live in
   beacons stay raw pydcs (§6.5).
 
 ---
+- **laser codes** ([core/laser.py](../../../src/dcs_mission_creator/core/laser.py))
+  — `DEFAULT_CODE` / `AI_JTAC_CODE` (1688), `set_code(flight, code)`,
+  `laser_guided_stores(flight)`. Owns which airframes can hold a code at all
+  (§6.1) so a briefing cannot quote one nothing is on.
 - **Recon stills** — `core/recon` (`sensor_still`, `Frame`, `Mark`,
   `Chrome`, `road_column`) renders a wide-area radar product from the overlay
   and attaches it as a briefing slide. Positions come only from
@@ -746,6 +768,9 @@ calling §11 / triggers directly. Their contracts live in
 - Loadouts come from the DCS install `$DCS_INSTALL_DIR` points at; unset, the
   jets fly empty. Spelling a loadout out means clearing `u.pylons` first —
   group creation already applied a task default (§4.5).
+- A JTAC's laser code is **not** a task parameter — the AI lases 1688, and the
+  F-16C/F/A-18C/A-10C carry no laser-code property either (§6.1). Brief that
+  number or brief nothing; `laser.set_code` refuses the alternative.
 - `Point` is world meters, not lat/lon; third ctor arg is the terrain.
 - `m.save(path)` does **not** mkdir the parent.
 - Resources reach the `.miz` via `zipf.write`, which records the source file's

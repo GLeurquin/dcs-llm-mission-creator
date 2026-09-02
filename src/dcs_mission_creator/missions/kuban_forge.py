@@ -76,6 +76,7 @@ from dcs_mission_creator.core import (
     air_defense as ad,
     dtc,
     kneeboard,
+    laser,
     sanctuary as sanc,
     triggers as mission_triggers,
     waypoints,
@@ -144,7 +145,11 @@ _FREQ_AWACS = 251
 _FREQ_TANKER = 253
 _TANKER_TACAN = "12X"
 _FREQ_RECON = 133
-_LASER_CODE = 1511
+#: The mission's one laser code. It was 1511, which nothing in the package was
+#: ever on: the ME's FAC task carries no code field, so `Ferret` lases DCS's own
+#: 1688 whatever a briefing says, and the Viper's four GBU-12s come up on 1688
+#: too. `core/laser.py` owns that and refuses anything else.
+_LASER_CODE = laser.DEFAULT_CODE
 
 #: Mission-clock moments. `Ferret` has been on that ridge for six days, so a
 #: scheduled check-in is what he would really make; the coordinate readout is
@@ -389,7 +394,8 @@ MISSION (Colt — F-16C-50, Senaki, hot ramp)
   - The night's shipment is loaded and will roll
     the moment they hear you coming. If you have
     bombs left, it is worth more than the tank
-    farm is. Ferret lases it, code {_LASER_CODE}.
+    farm is. Ferret lases it, code {_LASER_CODE} — the
+    same code your four GBU-12s are on.
   - Egress is a CLIMB, south-west, hard. You will
     be inside the Gadfly's ring for about two and
     a half minutes and there is no low way out of
@@ -492,6 +498,7 @@ FREQUENCIES
   Magic AWACS   : {_FREQ_AWACS}.000 AM
   Texaco tanker : {_FREQ_TANKER}.000 AM, TACAN {_TANKER_TACAN}
   Ferret        : {_FREQ_RECON}.000, laser {_LASER_CODE}
+                  (your GBU-12s are on the same code)
   Senaki tower  : per kneeboard
 
 NOTES
@@ -567,8 +574,10 @@ valley floor, which is always a smaller number. Fly the card.
 No escort, no SEAD element, no wingman. **And no HARM** — that is the shape of
 this sortie rather than an oversight. The belts here cannot be shot; they can
 only be avoided, so the terrain is the SEAD and the four GBU-12s are all for
-the target. `Colt` launches with two 370 gal bags, a targeting pod and a
-jammer, which is the ED-shipped fit for exactly this tasking.
+the target. They are coded `{_LASER_CODE}`, which is where your pod comes up and
+where `Ferret` lases, so his spot and your seekers need no arranging. `Colt`
+launches with two 370 gal bags, a targeting pod and a jammer, which is the
+ED-shipped fit for exactly this tasking.
 
 ## Objectives
 
@@ -578,10 +587,11 @@ Three, and they are priced separately.
   pass worth taking.
 - **The shipment.** The night's load is on transporters in the yard and will
   roll the moment the field hears the raid coming, north up the Kuban.
-  `Ferret` calls it and lases it on code {_LASER_CODE}, and his coordinate readout —
-  in *your* cockpit's format, off a live vehicle — is on the radio menu under
-  **F10 → Other → Ferret**. Catching it is worth more than the tank farm is.
-  It also costs bombs the halls may still need, which is the decision.
+  `Ferret` calls it and lases it on code {_LASER_CODE}, which is your bombs' own
+  code, and his coordinate readout — in *your* cockpit's format, off a live
+  vehicle — is on the radio menu under **F10 → Other → Ferret**. Catching it is
+  worth more than the tank farm is. It also costs bombs the halls may still
+  need, which is the decision.
 - **Getting out.** The alert section launches when the halls go up, and the
   climb out of that valley is flown inside the Buk's ring.
 
@@ -1480,6 +1490,12 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                 (11, "AN_AAQ_33___Advanced_Targeting_Pod"),
             ],
         )
+        # Four GBU-12s and `Ferret`'s spot on one code. The Viper carries no
+        # laser-code field, so this writes nothing into the .miz and instead
+        # refuses a code the jet would not come up on — which is what the
+        # briefed 1511 was, on a mission whose only guidance is that laser.
+        for section in sections:
+            laser.set_code(section, _LASER_CODE)
         overlay = scene.overlay.overlay
         ingress = self._route_altitudes(scene.ingress, overlay)
         egress = self._route_altitudes(scene.egress, overlay)
@@ -1844,7 +1860,10 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         # The two facts about the controller that a derived card cannot carry:
         # the laser code (pydcs writes it nowhere) and where the readout lives
         # in the radio menu.
-        kneeboard.remark(m, f"Ferret 1-1 lases the shipment on code {_LASER_CODE}.")
+        kneeboard.remark(
+            m,
+            f"Ferret 1-1 lases on {_LASER_CODE}; your four GBU-12s are coded the same.",
+        )
         kneeboard.remark(m, "Shipment coordinates: F10 -> Other -> Ferret 1-1.")
 
     def _add_valley_trigger(self, m: Mission, *, shipment: VehicleGroup) -> None:

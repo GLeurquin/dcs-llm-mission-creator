@@ -26,6 +26,12 @@ mission, and `VoiceSynth` renders its audio ahead of time.
 This does not replace `tasking.fac_attack_group`: that is what makes the
 controller acquire, lase and talk. Arm both — the laser spot and the 9-line
 stay stock, this only adds the coordinates in a form the cockpit can take.
+
+A `CoordTarget.laser_code` is checked against `laser.AI_JTAC_CODE` and refused
+if it differs, because the ME's FAC task carries no code field: whatever a
+mission writes here, the controller lases 1688. Briefing anything else gives
+the player a number to dial into a pod that will then track nothing, which
+from the cockpit looks exactly like a bomb that failed to guide.
 """
 
 from __future__ import annotations
@@ -37,7 +43,7 @@ from typing import TYPE_CHECKING, Mapping, Optional, Sequence
 import structlog
 from dcs import helicopters, planes, triggers
 
-from dcs_mission_creator.core import lua
+from dcs_mission_creator.core import laser, lua
 
 if TYPE_CHECKING:
     from dcs.mission import Mission
@@ -145,6 +151,13 @@ def arm_jtac_coords(
         raise ValueError("duration_s and scan_s must be positive")
     if push_at_s is not None and push_at_s < 0:
         raise ValueError("push_at_s must be a mission time in seconds")
+    for target in targets:
+        if target.laser_code is not None and target.laser_code != laser.AI_JTAC_CODE:
+            raise ValueError(
+                f"{target.label} is briefed on laser code {target.laser_code}, "
+                f"but a DCS AI controller lases on {laser.AI_JTAC_CODE} and the "
+                "FAC task carries no code field — see core/laser.py"
+            )
 
     table: dict[str, CoordFormat] = dict(COCKPIT_COORD_FORMAT)
     table.update(formats or {})

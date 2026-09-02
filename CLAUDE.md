@@ -37,12 +37,16 @@ This is a pydcs-based DCS mission generator. Three docs, one job each:
   of it**:
   - `build_miz` constructs the `Mission`, calls `_assemble`, holds the friendly
     package until a player is airborne, snaps every flight's take-off/landing
-    waypoints to field elevation, assigns datalink identities, makes the output
-    directory and saves. All three finishing steps have to happen after the
-    last flight exists and before the save — pydcs hard-codes take-off/landing
+    waypoints to field elevation, assigns datalink identities, tunes every AI
+    flight's radio to the frequency it was given, makes the output directory and
+    saves. All four finishing steps have to happen after the last flight exists
+    and before the save — pydcs hard-codes take-off/landing
     altitudes to zero, so a mission that skipped the snap shipped a jet spawned
     underground; it writes no datalink identity at all, so a coop flight came up
-    anonymous and blind to itself; and it launches every AI flight at
+    anonymous and blind to itself; it leaves every group's frequency field on one
+    default and spends the mission's own `frequency=` on a waypoint task, so
+    every tanker here was briefed on a channel it was not on (`core/radio.py`);
+    and it launches every AI flight at
     `TriggerStart`, so the package the player was briefed to escort was a
     hundred kilometres down the route before he rotated (`core/join_up.py`).
     They are in the base precisely so they cannot be forgotten. Two steps run
@@ -747,6 +751,58 @@ noise and so walked straight past the `200(0.10)` sitting on all thirty flights
 — pydcs's hard-coded departure speed, and a worse bug than the cruise numbers
 it was looking for (see `waypoints.set_departure_speeds`). A speed under ~0.2 of
 `max_speed` is the signal, not the noise.
+
+## Radio-frequency helper (project-owned)
+
+[`radio`](src/dcs_mission_creator/core/radio.py) puts a flight's frequency in
+the field DCS binds a radio to. `Mission.awacs_flight` and
+`Mission.refuel_flight` take a `frequency=` argument and spend it on a
+`SetFrequency` **waypoint task**, leaving the group's own `frequency` field on
+the 251 MHz that `MovingGroup.__init__` gives every group pydcs creates. The
+group field is what a player's radio has to match to raise an AI controller at
+all; the waypoint task retunes the AI minutes into its own route, after it has
+taxied and climbed to the departure point.
+
+So **every tanker in this project was briefed on a frequency it was not on** —
+and printed on the kneeboard on that frequency too, because
+`kneeboard/comms.py` reads the `SetFrequencyCommand` in preference to the field,
+that being where the mission's intent was recorded. The tell was which asset
+worked: all four missions with both a tanker and an AWACS put the AWACS on 251,
+which *is* pydcs's default, so the AWACS was reachable by accident and the
+tanker never was. ED's own missions do it the other way round — the working
+tanker in `Mods/aircraft/F-16C/Missions/QuickStart/F-16C - Caucasus - Air
+Refueling.miz` is written `["frequency"] = 305, ["radioSet"] = true`, and that
+mission contains no `SetFrequency` task anywhere.
+
+`tune_working_frequencies(m)` mirrors the intent back into the field,
+mission-wide. **Missions never call it** — `MissionBuilder.build_miz` does,
+after `assign_datalink_identities` and before the save, for the same reason as
+`waypoints.snap_base_waypoints`: a flight added later cannot miss it.
+`working_frequency(group)` is the single resolution both it and the comms card
+read, most specific source first — a FAC task's own params, then a
+`SetFrequencyCommand`, then nothing — so the card cannot print a number the
+sweep did not tune anyone to.
+
+Two things it deliberately leaves alone, and each is a way a blanket sweep would
+break something:
+
+- **A group holding a client slot.** `FlyingGroup.set_frequency` also sets
+  `radioSet`, which is DCS's "this mission overrides the cockpit preset table"
+  flag — it writes the group frequency into channel 1 of the first compatible
+  radio. The comms card annotates a frequency with its preset channel
+  (`253.000 AM  R1 CH19`) off the airframe's own `panel_radio`, on the
+  assumption nothing overrides it. No client group carries a `SetFrequency` task
+  today, which is why the guard costs nothing and is worth having anyway.
+- **Ground groups.** A `VehicleGroup` writes no frequency at all unless
+  `communication` is set, and a ground JTAC's radio is the frequency inside its
+  own FAC task params — where DCS reads it from, and what the card already
+  prints. Nothing broken there to mirror.
+
+One thing left as it was, on purpose: the **player flight's own** group field
+stays at pydcs's 251, which in every mission here is also the AWACS's channel.
+That field is the flight's intra-flight frequency rather than anything the
+player has to raise, and moving it means overriding the preset table the card
+is annotated from — a separate decision from this one.
 
 ## Datalink-identity helper (project-owned)
 
@@ -1586,6 +1642,53 @@ Without it the feature is invisible: DCS keeps reading its own grid, the player
 has no reason to go looking in F10 → Other, and the mission looks like it never
 had the readout. Say where the entry is in the briefing too, and say that the
 stock nine-line is a grid — otherwise the two calls look like a bug.
+
+## Laser codes (project-owned)
+
+[`laser`](src/dcs_mission_creator/core/laser.py) owns the one number a briefing
+must not get wrong. A mission that hangs a laser-guided weapon on the jet makes
+two claims — the controller's spot is on code N, and the bombs will track it —
+and for almost the whole fleet DCS has already decided both:
+
+- **An AI JTAC or FAC(A) lases 1688 and nothing else.** The ME's own
+  `FAC - Attack Group` action declares `groupId` and `weaponType` and no more
+  (`<DCS>/MissionEditor/modules/me_action_db.lua`); pydcs's `FACAttackGroup`
+  adds designation, frequency, callsign and datalink. There is no code field
+  anywhere in the task, so the number in the 9-line is the game's default.
+- **Most cockpits set their own.** The F-16C, F/A-18C and A-10C carry no
+  laser-code property at all — the pilot dials it on the TGP, the SMS or the
+  DSMS and it comes up at that same default. Four families in pydcs *do* expose
+  it as `AddPropAircraft`: the AV-8B and JF-17 (`LaserCode100/10/1`, plus the
+  Harrier's separate `GBULaserCode*` for the seekers), the F-4E
+  (`LaserCodeDigit1..4`) and the F-15E (`Sta2LaserCode` and friends, the last
+  three digits per station). Every one of them defaults to 1688 as well.
+
+```python
+_LASER_CODE = laser.DEFAULT_CODE      # the mission's one code
+laser.set_code(section, _LASER_CODE)  # after `arm`, per flight with a laser weapon
+laser.laser_guided_stores(flight)     # which loaded stores ride a spot
+```
+
+`set_code` writes the properties where they exist and **refuses** any other code
+where they do not — which is exactly the bug it was written for. `kuban_forge`
+briefed `Ferret` on 1511 in the README, the in-game briefing, a radio call and a
+kneeboard remark, while the controller lased 1688 and the player's four GBU-12s
+came up on 1688. Nothing in the game reports that: from the cockpit a bomb that
+tracks nothing is indistinguishable from one that failed to guide, and the
+player's own recourse — retune the pod — is the one thing that cannot help,
+because the pod was never the half that was wrong. `core/jtac.py` refuses a
+`CoordTarget.laser_code` that is not `laser.AI_JTAC_CODE` for the same reason.
+
+**Then the briefing says the number for the bombs, not only for the spot.**
+"`Pinpoint 1-1` lases on 1688" is half a fact; the half a player acts on is that
+his own GBU-12s and pod are already there, so there is nothing to arrange. Both
+briefing views carry it, and so does the `kneeboard.remark`, which is the one
+place it can live on a card — pydcs writes the code into no field, so nothing
+about it is derivable. The three missions that carry a laser weapon each say it
+on one line: `coastal_cover` ("Pinpoint 1-1 lases on 1688; your GBU-12s are
+coded the same"), `kuban_forge` and `idlib_gauntlet`, where the flight with the
+bombs is `Pontiac` rather than the player and the briefing says that too — `Uzi`
+carries self-guided SFW and nothing on a laser at all.
 
 ## Kneeboard helper (project-owned)
 

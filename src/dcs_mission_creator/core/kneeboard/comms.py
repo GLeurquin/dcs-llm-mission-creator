@@ -15,8 +15,10 @@ one:
   has its whole package nominally on one channel, and the page shows that rather
   than the tidier number a briefing might claim.
 - **`awacs_flight` and `refuel_flight` put the working frequency in a
-  `SetFrequencyCommand` task** on the first waypoint, not in the group field. That
-  is the frequency the AI controller actually transmits on, so it wins here.
+  `SetFrequencyCommand` task** on the first waypoint, not in the group field.
+  That is where the mission's intent is recorded, so it wins here — and
+  `core/radio` mirrors it back into the field before the save, because the field
+  is what a player's radio has to match to raise the controller at all.
 - **A tanker's TACAN is an `ActivateBeaconCommand`** whose params carry the
   channel, the X/Y mode and the beacon callsign.
 - **A JTAC's frequency is inside its `FAC*` task params**, in Hz.
@@ -35,6 +37,8 @@ from typing import TYPE_CHECKING, Iterator
 
 from dcs import task
 from dcs.unit import Skill
+
+from dcs_mission_creator.core import radio
 
 if TYPE_CHECKING:
     from dcs.mission import Mission
@@ -196,27 +200,15 @@ def _fac_designation(group: FlyingGroup) -> str | None:
 def _frequency(group: FlyingGroup) -> tuple[float | None, str]:
     """The frequency the flight actually works on, most specific source first.
 
-    A FAC task carries its own frequency in its params and that is where the
-    controller transmits, so it wins over both a `SetFrequencyCommand` and the
-    group field — an airborne FAC left at pydcs's default 251 in the group field
-    would otherwise be listed on the AWACS's channel.
+    `core/radio.working_frequency` is the one place that decides this, because
+    `MissionBuilder.build_miz` writes the same answer into the group field DCS
+    binds the radio to — a card that resolved it differently from the sweep
+    would print a number the mission had not tuned anyone to.
     """
-    for point in group.points:
-        for tsk in point.tasks:
-            if isinstance(tsk, (task.FAC, task.FACAttackGroup, task.FACEngageGroup)):
-                params = tsk.params
-                return (
-                    float(params["frequency"]) / 1_000_000.0,
-                    _MODULATION.get(int(params.get("modulation", 0)), "FM"),
-                )
-    for point in group.points:
-        for tsk in point.tasks:
-            if isinstance(tsk, task.SetFrequencyCommand):
-                params = tsk.params["action"]["params"]
-                return (
-                    float(params["frequency"]) / 1_000_000.0,
-                    _MODULATION.get(int(params.get("modulation", 0)), "AM"),
-                )
+    found = radio.working_frequency(group)
+    if found is not None:
+        frequency_mhz, modulation = found
+        return frequency_mhz, radio.MODULATION_NAME.get(modulation, "AM")
     if not group.frequency:
         return None, "AM"
     return float(group.frequency), _MODULATION.get(int(group.modulation or 0), "AM")
@@ -284,9 +276,9 @@ def _presets(unit_type: FlyingType | None) -> dict[tuple[int, str], str]:
     if not panel:
         return {}
     out: dict[tuple[int, str], str] = {}
-    for radio_id, radio in sorted(panel.items(), key=lambda kv: str(kv[0])):
+    for radio_id, preset_radio in sorted(panel.items(), key=lambda kv: str(kv[0])):
         for channel, frequency in sorted(
-            radio.get("channels", {}).items(), key=lambda kv: int(kv[0])
+            preset_radio.get("channels", {}).items(), key=lambda kv: int(kv[0])
         ):
             out.setdefault(_key(float(frequency), "AM"), f"R{radio_id} CH{channel}")
     return out

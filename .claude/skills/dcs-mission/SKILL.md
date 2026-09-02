@@ -176,6 +176,13 @@ A "realistic" mission is more than spawning aircraft. Hit these before done:
   `jtac.arm_jtac_coords` with it: the stock controller reads a military grid to
   every airframe, so without it the coordinates a Viper or Hornet driver is
   given are a kneeboard conversion before they are a steerpoint.
+- **Laser codes match, and the briefing states the bombs'.** One code per
+  mission, and it is 1688 unless every laser weapon in the package is on an
+  airframe whose code the mission file can write (AV-8B, JF-17, F-4E, F-15E) —
+  a DCS AI controller lases 1688 and nothing else. Call
+  `laser.set_code(flight, code)` on every flight carrying a laser-guided
+  weapon, and say the number for the bombs as well as for the spot. See *Laser
+  codes: one number*.
 - **Briefing exists.** `set_description_text`, `*_bluetask_text`,
   `*_redtask_text` with bullseye, AO coords, ROE, callsigns, bingo fuel.
 - **Briefing reads like intel, not like the trigger list.** Sourced enemy
@@ -651,6 +658,42 @@ interchangeable: 800 km/h is 0.38 on an F-16C (2120) and 0.41 on an F/A-18C
 (1950), so a package that gives the whole flight "800" puts only the Hornet in
 burner. Weigh the loadout too — a jet with two bags and four LGBs belongs at the
 bottom of the band, a clean CAP at the top.
+
+## Laser codes: one number, and the briefing says it
+
+A mission that puts a laser-guided weapon on the jet is making two claims — the
+controller's spot is on code N, and the bombs will track it. **Both are 1688,
+and neither is negotiable in the mission file:**
+
+- **A DCS AI JTAC or FAC(A) lases on 1688.** The ME's own `FAC - Attack Group`
+  action takes `groupId` and `weaponType` and nothing else
+  (`MissionEditor/modules/me_action_db.lua`), and pydcs's `FACAttackGroup` adds
+  only designation, frequency, callsign and datalink. There is no code field, so
+  whatever the briefing says, the spot is on the game's default.
+- **The F-16C, F/A-18C and A-10C carry no laser-code property**, so their
+  seekers come up on that same default and the pilot retunes in the cockpit.
+  Only four families in pydcs expose the code as a mission-file field
+  (`AddPropAircraft`): the AV-8B, the JF-17, the F-4E and the F-15E — and every
+  one of them also defaults to 1688.
+
+So use `laser.DEFAULT_CODE` for the mission's one code, and call
+`laser.set_code(flight, code)` on **every** flight carrying a laser-guided
+weapon, the AI strike pair included. On an airframe with no property it writes
+nothing and refuses a code the jet would never come up on, which is the failure
+it exists to catch: `kuban_forge` briefed `Ferret` on 1511 in the README, the
+in-game briefing, a radio call and a kneeboard remark, while the controller
+lased 1688 and the player's four GBU-12s came up on 1688. Nothing in the game
+says so — from the cockpit a bomb that tracks nothing looks exactly like a bomb
+that failed to guide.
+
+**Then say the number out loud, on the bombs' side as well as the spot's.**
+"`Pinpoint 1-1` lases on 1688" tells the player half of what he needs; the other
+half — that his own GBU-12s and pod are on the same code, so there is nothing to
+arrange — belongs in the same sentence, in `readme()`, in the in-game briefing
+and in the `kneeboard.remark` (pydcs writes the code into no field a card could
+derive). A flight carrying nothing on a laser is worth one clause too, where the
+mission's controller is lasing for somebody else: `idlib_gauntlet`'s `Uzi` drops
+self-guided SFW and `Hammer`'s spot is `Pontiac`'s.
 
 ## What the player can see (F10 map, planner, datalink)
 
