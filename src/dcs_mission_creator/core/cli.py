@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Sequence
 import structlog
 
 from dcs_mission_creator.core.log import configure as configure_logging
-from dcs_mission_creator.core.mission_builder import MAX_PLAYERS
+from dcs_mission_creator.core.mission_builder import MAX_PLAYERS, MIN_PLAYERS
 
 if TYPE_CHECKING:
     from dcs_mission_creator.core.mission_builder import MissionBuilder
@@ -47,9 +47,13 @@ def run_cli(
     parser.add_argument(
         "--players",
         type=int,
-        default=1,
-        choices=range(1, MAX_PLAYERS + 1),
-        help="Number of coop client slots in the player flight (default: 1).",
+        default=MIN_PLAYERS,
+        choices=range(MIN_PLAYERS, MAX_PLAYERS + 1),
+        help=(
+            "Number of coop client slots in the player flight "
+            f"(default: {MIN_PLAYERS}). The flight splits its loadout across "
+            "them, so slot 1 and slot 2 do not carry the same jet."
+        ),
     )
     args = parser.parse_args(argv)
 

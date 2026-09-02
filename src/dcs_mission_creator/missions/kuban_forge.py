@@ -49,7 +49,8 @@ Composition (difficulty: ace):
     radiates until the early-warning chain hands it a track, which is what
     makes the valley run worth flying.
   - USA support: E-3A `Magic` (251.000 AM) and KC-135 `Texaco` (253.000 AM,
-    TACAN 12X), both south of the watershed. No escort, no SEAD, no wingman.
+    TACAN 12X), both south of the watershed. No escort and no SEAD element —
+    the flight covers itself, which is what its second fit is for.
   - Weather: October first light, broken layer based at 4500 m — six hundred
     metres over the Klukhori crossing, and the egress climbs through it.
 """
@@ -77,6 +78,7 @@ from dcs_mission_creator.core import (
     dtc,
     kneeboard,
     laser,
+    loadout,
     sanctuary as sanc,
     triggers as mission_triggers,
     waypoints,
@@ -86,7 +88,7 @@ from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.iads import Listener, Site, arm_iads
 from dcs_mission_creator.core.jtac import CoordTarget, arm_jtac_coords
 from dcs_mission_creator.core.map_draw import PlanOverlay
-from dcs_mission_creator.core.mission_builder import MissionBuilder
+from dcs_mission_creator.core.mission_builder import MIN_PLAYERS, MissionBuilder
 from dcs_mission_creator.core.mission_kit import (
     offset,
     player_flight,
@@ -272,8 +274,7 @@ _NORTH_ZONE_R = 10_000
 #: egress has to survive, and the briefing says so in as many words.
 _ALERT_SECTION = (2, 4)
 
-#: Senaki's own air defence. `Colt` goes 181 km alone with no escort and no
-#: Weasel, and the one thing that makes turning for home a plan rather than a
+#: Senaki's own air defence. `Colt` goes 181 km with no escort and no Weasel, and the one thing that makes turning for home a plan rather than a
 #: slower loss is that it ends somewhere. Kutaisi is 37 km away and inside the
 #: same envelope, so a jet that cannot fly a normal approach has two runways.
 _SANCTUARY = "PALISADE"
@@ -332,12 +333,75 @@ class _Scene:
         return self.ingress[-1].position
 
 
+#: How `Colt` splits the frag across its slots (`core/loadout.py`).
+#:
+#: **Four bombs stay four bombs**, and that is the point of the split rather
+#: than an accident of it. Two casting halls, a shipment that rolls when the
+#: field hears the raid, and one magazine to spend across both is the decision
+#: this mission is built on — so the second jet does not carry a fifth bomb. It
+#: carries the air-to-air fit, because the other half of the sortie is a climb
+#: out of the Teberda inside the Buk's ring with a MiG-29S alert section
+#: launching off the halls going up, and the briefing has always said there is
+#: no escort coming.
+#:
+#: A four-slot flight puts a second bomber up and the decision softens; a pair
+#: flies the sortie as written, with somebody covering the egress.
+#:
+#: Both are ED payloads station for station, off
+#: `<DCS>/CoreMods/aircraft/F-16C/UnitPayloads/F-16C_50.lua`
+#: (`AIM-120C*2, AIM-9X*2, GBU-12*4, FUEL*2, ECM, TGP` and
+#: `AIM-120C*4, AIM-9X*2, FUEL*2, ECM, TGP`) with one deliberate substitution:
+#: the pod is the AN/AAQ-33 rather than the LITENING, on both jets, because the
+#: talk-on with `Ferret` happens at 600 m over a valley floor and this mission
+#: picked the better sensor for it.
+_FITS = (
+    loadout.Loadout(
+        role="GBU-12*4",
+        carries=(
+            f"four GBU-12 on TERs coded {_LASER_CODE}, AN/AAQ-33 pod, "
+            "two AIM-120C, two AIM-9X, ALQ-184, two 370 gal"
+        ),
+        stores=(
+            (1, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (2, "AIM_9X_Sidewinder_IR_AAM"),
+            (3, "TER_9A_with_2_x_GBU_12___500lb_Laser_Guided_Bomb"),
+            (4, "Fuel_tank_370_gal"),
+            (5, "ALQ_184_Long"),
+            (6, "Fuel_tank_370_gal"),
+            (7, "TER_9A_with_2_x_GBU_12___500lb_Laser_Guided_Bomb_"),
+            (8, "AIM_9X_Sidewinder_IR_AAM"),
+            (9, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (11, "AN_AAQ_33___Advanced_Targeting_Pod"),
+        ),
+    ),
+    loadout.Loadout(
+        role="AIM-120C*4",
+        carries=(
+            "four AIM-120C, two AIM-9X, AN/AAQ-33 pod, ALQ-184, two 370 gal — "
+            "the cover for the climb out of the valley"
+        ),
+        stores=(
+            (1, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (2, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (3, "AIM_9X_Sidewinder_IR_AAM"),
+            (4, "Fuel_tank_370_gal"),
+            (5, "ALQ_184_Long"),
+            (6, "Fuel_tank_370_gal"),
+            (7, "AIM_9X_Sidewinder_IR_AAM"),
+            (8, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (9, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (11, "AN_AAQ_33___Advanced_Targeting_Pod"),
+        ),
+    ),
+)
+
+
 class KubanForge(MissionBuilder):
     name = "kuban_forge"
     title = "Kuban Forge"
     difficulty = Difficulty.ACE
 
-    def __init__(self, *, players: int = 1) -> None:
+    def __init__(self, *, players: int = MIN_PLAYERS) -> None:
         super().__init__(players=players)
         self._terrain = Caucasus()
         self._voice = VoiceSynth()
@@ -404,11 +468,15 @@ MISSION (Colt — F-16C-50, Senaki, hot ramp)
   - Do NOT go north past the Kuban bend.
   - RTB Senaki. Divert: Kutaisi.
 
+LOADOUT (four bombs stay four bombs)
+{self.loadout_brief("Colt", _FITS)}
+  No HARM anywhere — there is no Weasel answer to this
+  one. Slot 2 carries no bomb either: it is the cover for
+  the climb out of the valley.
+
 PACKAGE
-  Colt 1 (you) : F-16C-50, Senaki, hot ramp.
-                 4x GBU-12, 2x AIM-120C, 2x AIM-9X,
-                 ATP, two bags. No HARM — there is
-                 no Weasel answer to this one.
+  Colt         : F-16C-50 pair, Senaki, hot ramp. Loadout
+                 above.
   Magic        : E-3A AWACS, {_FREQ_AWACS}.000 AM, over
                  western Georgia. He is also the
                  only receiver we have pointed at
@@ -417,7 +485,7 @@ PACKAGE
                  north of Kutaisi.
   Ferret       : recon team on the ridge above the
                  works, {_FREQ_RECON}.000. Six days in place.
-  No escort. No SEAD. No wingman.
+  No escort. No SEAD. The flight covers itself.
 
 INTELLIGENCE
   Ferret has had eyes on the works since the 12th,
@@ -571,13 +639,24 @@ valley floor, which is always a smaller number. Fly the card.
 | Texaco   | KC-135   | Kutaisi         | Tanker, {_FREQ_TANKER}.000 AM, TACAN {_TANKER_TACAN}          |
 | Ferret   | recon    | on the ridge    | Talk-on and laser, {_FREQ_RECON}.000, code {_LASER_CODE} |
 
-No escort, no SEAD element, no wingman. **And no HARM** — that is the shape of
-this sortie rather than an oversight. The belts here cannot be shot; they can
-only be avoided, so the terrain is the SEAD and the four GBU-12s are all for
-the target. They are coded `{_LASER_CODE}`, which is where your pod comes up and
-where `Ferret` lases, so his spot and your seekers need no arranging. `Colt`
-launches with two 370 gal bags, a targeting pod and a jammer, which is the
-ED-shipped fit for exactly this tasking.
+No escort and no SEAD element. **And no HARM** — that is the shape of this
+sortie rather than an oversight. The belts here cannot be shot; they can only be
+avoided, so the terrain is the SEAD and the GBU-12s are all for the target. They
+are coded `{_LASER_CODE}`, which is where the pod comes up and where `Ferret`
+lases, so his spot and the seekers need no arranging.
+
+### `Colt` loadout
+
+{self.loadout_table("Colt", _FITS)}
+
+**Four bombs stay four bombs**, and that is the point of the split rather than
+an accident of it. Two casting halls, a shipment that rolls the moment the field
+hears the raid, and one magazine to spend across both is the decision this
+mission is built on — so slot 2 does not carry a fifth bomb. It carries the
+air-to-air fit, because the other half of the sortie is a climb out of the
+Teberda inside the Buk's ring with an alert section launching off the halls
+going up, and nothing else is coming. Four slots put a second bomber up and the
+decision softens.
 
 ## Objectives
 
@@ -654,8 +733,8 @@ that cannot fly a normal approach has two runways under one battery.
 
 `{_SANCTUARY} MARSHAL` is a hold abeam Senaki inside the envelope, on the map and
 in the DED, for a damaged jet waiting on the pattern. It matters here because
-there is nobody else out there: no escort to trade with, no wingman to cover a
-straggler, and 190 km of egress with an alert section behind it. Crossing that
+there is nobody else out there: no escort to trade with, one other jet in the
+flight, and 190 km of egress with an alert section behind it. Crossing that
 ring is what ends the sortie.
 
 ## Navigation
@@ -762,6 +841,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self._add_intro_voice(m)
         self._add_support_checkins(m, home)
         self._add_recon_readout(m, shipment=shipment)
+        self._arm_recon_laser(m, ferret=ferret, shipment=shipment)
         self._add_valley_trigger(m, shipment=shipment)
         self._add_north_warning_trigger(m)
         self._add_recon_loss_trigger(m, ferret=ferret)
@@ -1147,8 +1227,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
         This is the system the whole low route runs into at the end of it. The
         player arrives at 250 m over the valley floor with no anti-radiation
-        weapon and no wingman, and a self-cueing gun/missile vehicle at 8 km is
-        the price of that plan. It gets a ring on the map like anything else
+        weapon and no support beyond the flight itself, and a self-cueing
+        gun/missile vehicle at 8 km is the price of that plan. It gets a ring on the map like anything else
         emplaced: it is parked at a fixed installation and it has no waypoints.
         """
         return ad.build_sa19_site(
@@ -1451,22 +1531,25 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
     ) -> tuple[list[FlyingGroup], list[Point]]:
         """Colt F-16C-50 out of Senaki, hot ramp: low up the valleys, high home.
 
-        The ED-shipped strike fit for this tasking, station for station: AMRAAM
-        on the wingtips (1/9, which is where an F-16C carries them — the AIM-9X
-        goes outboard to 2/8 when 3/7 are the weapon stations), four GBU-12 on
-        two TERs, two 370 gal bags, the ALQ-184 on the centreline that every
-        two-tank ED payload carries, and the targeting pod on 11.
+        The ED-shipped strike fit for this tasking on slot 1, station for
+                station: AMRAAM on the wingtips (1/9, which is where an F-16C carries
+                them — the AIM-9X goes outboard to 2/8 when 3/7 are the weapon
+                stations), four GBU-12 on two TERs, two 370 gal bags, the ALQ-184 on the
+                centreline that every two-tank ED payload carries, and the pod on 11.
+                Slot 2 flies the air-to-air fit (`_FITS`), which is what keeps the
+                magazine at four bombs however many people show up: the decision this
+                mission is built on is spending four across two halls and a shipment.
 
-        **No HARM and no HTS**, and that is the mission rather than an omission.
-        There is no anti-radiation answer to the layout here — the belts are
-        avoided or they are not dealt with — so every station that could have
-        carried a Weasel load carries a bomb instead, and the terrain does the
-        job the pod would have done.
+                **No HARM and no HTS**, and that is the mission rather than an omission.
+                There is no anti-radiation answer to the layout here — the belts are
+                avoided or they are not dealt with — so every station that could have
+                carried a Weasel load carries a bomb instead, and the terrain does the
+                job the pod would have done.
 
-        The gross weight is about three quarters of max, which is where a jet
-        with this radius should sit: an F-16 launched at eighty-plus per cent
-        rotates steeply and climbs in afterburner because the weight demands it,
-        and no waypoint speed fixes that.
+                The gross weight is about three quarters of max, which is where a jet
+                with this radius should sit: an F-16 launched at eighty-plus per cent
+                rotates steeply and climbs in afterburner because the weight demands it,
+                and no waypoint speed fixes that.
         """
         sections = player_flight(
             m,
@@ -1477,18 +1560,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             maintask=task.PinpointStrike,
             start_type=StartType.Warm,
             slots=self.players,
-            stores=[
-                (1, "AIM_120C_AMRAAM___Active_Radar_AAM"),
-                (2, "AIM_9X_Sidewinder_IR_AAM"),
-                (3, "TER_9A_with_2_x_GBU_12___500lb_Laser_Guided_Bomb"),
-                (4, "Fuel_tank_370_gal"),
-                (5, "ALQ_184_Long"),
-                (6, "Fuel_tank_370_gal"),
-                (7, "TER_9A_with_2_x_GBU_12___500lb_Laser_Guided_Bomb_"),
-                (8, "AIM_9X_Sidewinder_IR_AAM"),
-                (9, "AIM_120C_AMRAAM___Active_Radar_AAM"),
-                (11, "AN_AAQ_33___Advanced_Targeting_Pod"),
-            ],
+            loadouts=_FITS,
         )
         # Four GBU-12s and `Ferret`'s spot on one code. The Viper carries no
         # laser-code field, so this writes nothing into the .miz and instead
@@ -1865,6 +1937,40 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             f"Ferret 1-1 lases on {_LASER_CODE}; your four GBU-12s are coded the same.",
         )
         kneeboard.remark(m, "Shipment coordinates: F10 -> Other -> Ferret 1-1.")
+
+    def _arm_recon_laser(
+        self, m: Mission, *, ferret: VehicleGroup, shipment: VehicleGroup
+    ) -> None:
+        """Keep Ferret's spot on the transporters without Colt calling him.
+
+        `fac_attack_group` gives the talk-on, and as DCS ships it that same
+        conversation is the only thing holding the laser: the spot lives inside
+        a radio exchange the player has to be in range and in line of sight of.
+        This mission is built so he is neither for almost all of it — two
+        hundred kilometres of valley at 600 m with the massif between him and
+        everything — and what he comes out of the Teberda into is a yard
+        emptying onto a road. Checking in first would spend the pass.
+
+        So the team works the way six days on a ridge implies: the spot is on
+        the transporters whenever it can see them, and the talk-on confirms a
+        laser that is already burning. `lead_correction` because the column is
+        driving by then, and `core/laser.py`'s default reach because Ferret sits
+        about seven kilometres from the yard — the trucks are inside it in the
+        yard and they drive out of it up the Kuban, which is the same clock the
+        briefing already gives the player.
+        """
+        laser.arm_autolase(
+            m,
+            [
+                laser.LaserSpot(
+                    ferret,
+                    shipment,
+                    code=_LASER_CODE,
+                    label="Ferret 1-1",
+                    lead_correction=True,
+                )
+            ],
+        )
 
     def _add_valley_trigger(self, m: Mission, *, shipment: VehicleGroup) -> None:
         """The Teberda crossing: Ferret calls the yard emptying, and it does.

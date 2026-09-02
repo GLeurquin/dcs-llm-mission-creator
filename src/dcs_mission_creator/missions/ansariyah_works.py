@@ -31,9 +31,10 @@ list:
    is not negotiable. The second bomb is a choice the briefing lays out and does
    not make: the **motor store**, which is this month's production and only worth
    a bomb while it is still in the building, or the **oxidiser plant**, which is
-   next year's and cannot be replaced inside a year. A single-ship chooses; a
-   two-ship does not have to, which is the one place `--players` changes the
-   shape of the mission rather than its size.
+   next year's and cannot be replaced inside a year. A pair still chooses —
+   only one of its two jets carries bombs, the other is the flight's air cover
+   — and a four-ship does not have to, which is the one place `--players`
+   changes the shape of the mission rather than its size.
 2. **The load-out is a clock.** The transporters roll for a tunnel portal 13 km
    up the ridge the moment the coastal radar calls `Colt` feet dry, and past the
    portal they are out of reach. That is what makes the store worth less the
@@ -107,6 +108,7 @@ from dcs_mission_creator.core import (
     air_defense as ad,
     dtc,
     kneeboard,
+    loadout,
     routing,
     sanctuary as sanc,
     triggers as mission_triggers,
@@ -116,7 +118,7 @@ from dcs_mission_creator.core.cli import run_cli
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.iads import Listener, Site, arm_iads
 from dcs_mission_creator.core.map_draw import PlanOverlay
-from dcs_mission_creator.core.mission_builder import MissionBuilder
+from dcs_mission_creator.core.mission_builder import MIN_PLAYERS, MissionBuilder
 from dcs_mission_creator.core.mission_kit import (
     arm,
     offset,
@@ -335,12 +337,75 @@ class _RedGround:
     column: VehicleGroup
 
 
+#: How `Colt` splits the frag across its slots (`core/loadout.py`).
+#:
+#: The mission's own tension is **two bombs against three aimpoints**, spaced so
+#: that one pass cannot take all three, and that has to survive the flight
+#: growing. So the second jet is not a second bomber: it is the flight's air
+#: cover, and this is the one mission in the project where that is a briefing
+#: fact rather than a convenience. `Eagle` holds in a sixteen-kilometre band
+#: between our own Patriot and the Gammon's ring and **cannot follow the strike
+#: in** — from the letdown to feet wet the flight is the only friendly airborne
+#: thing east of that band, and the coastal EWR is briefed to call the crossing
+#: and scramble the alert pair.
+#:
+#: A four-slot flight puts a second bomber up and can take all three aimpoints;
+#: a pair chooses, which is the sortie as written.
+#:
+#: Both are ED payloads station for station, off
+#: `<DCS>/CoreMods/aircraft/F-16C/UnitPayloads/F-16C_50.lua`:
+#: `AIM-120C*2, AIM-9X*2, GBU-31-3B*2, FUEL*2, ECM, TGP` and
+#: `AIM-120C*4, AIM-9X*2, FUEL*2, ECM, TGP`. No laser anywhere in the flight —
+#: there is no altitude over this basin from which a jet could hold a spot and
+#: live, which is why the bombs are satellite-aided.
+_FITS = (
+    loadout.Loadout(
+        role="GBU-31(V)3/B",
+        carries=(
+            "two GBU-31(V)3/B 2,000 lb penetrators, LITENING pod, "
+            "two AIM-120C, two AIM-9X, ALQ-184, two 370 gal"
+        ),
+        stores=(
+            (1, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (2, "AIM_9X_Sidewinder_IR_AAM"),
+            (3, "GBU_31_V_3_B___JDAM__2000lb_GPS_Guided_Penetrator_Bomb"),
+            (4, "Fuel_tank_370_gal"),
+            (5, "ALQ_184_Long"),
+            (6, "Fuel_tank_370_gal"),
+            (7, "GBU_31_V_3_B___JDAM__2000lb_GPS_Guided_Penetrator_Bomb"),
+            (8, "AIM_9X_Sidewinder_IR_AAM"),
+            (9, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (11, "AN_AAQ_28_LITENING___Targeting_Pod_"),
+        ),
+    ),
+    loadout.Loadout(
+        role="AIM-120C*4",
+        carries=(
+            "four AIM-120C, two AIM-9X, LITENING pod, ALQ-184, two 370 gal — "
+            "the only cover east of the band"
+        ),
+        stores=(
+            (1, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (2, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (3, "AIM_9X_Sidewinder_IR_AAM"),
+            (4, "Fuel_tank_370_gal"),
+            (5, "ALQ_184_Long"),
+            (6, "Fuel_tank_370_gal"),
+            (7, "AIM_9X_Sidewinder_IR_AAM"),
+            (8, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (9, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (11, "AN_AAQ_28_LITENING___Targeting_Pod_"),
+        ),
+    ),
+)
+
+
 class AnsariyahWorks(MissionBuilder):
     name = "ansariyah_works"
     title = "Ansariyah Works"
     difficulty = Difficulty.VETERAN
 
-    def __init__(self, *, players: int = 1) -> None:
+    def __init__(self, *, players: int = MIN_PLAYERS) -> None:
         super().__init__(players=players)
         self._terrain = Syria()
         self._voice = VoiceSynth()
@@ -392,8 +457,13 @@ MISSION (Colt — F-16C-50, Akrotiri, hot ramp)
     the deck. Climb only when you are outside the ring.
   - RTB Akrotiri. Divert: Paphos.
 
+LOADOUT (one bomber, one escort)
+{self.loadout_brief("Colt", _FITS)}
+  Two bombs, three aimpoints. Slot 2 carries no bomb: it
+  is the only cover you have east of the band.
+
 PACKAGE
-  Colt 1 (you) : F-16C-50, 2x GBU-31(V)3/B, LITENING.
+  Colt         : F-16C-50 pair, Akrotiri. Loadout above.
   Magic        : E-3A AWACS, 251.000 AM, over Cyprus.
   Texaco       : KC-135, 270.000 AM, TACAN 10X, on the
                  line between our Patriot and their
@@ -553,8 +623,9 @@ here matters. The second bomb is yours:
 | **Motor store** | This month's finished motors | Only while they are still inside. The transporters roll as soon as you are called across the beach. |
 | **Oxidiser plant** | Next year's production — a year to replace | Always. It is the slower and larger loss, and it is the one that does not care how long your run took. |
 
-A two-ship does not have to choose. A single jet does, and it should choose from
-what it can actually see through the pod on the way in.
+A pair still has to choose: only slot 1 carries bombs, and slot 2 is the cover
+that lets it get to the basin. Four slots put a second bomber up and the choice
+goes away. Choose from what you can actually see through the pod on the way in.
 
 Egress **west** to the water — the short way, still on the deck — and climb only
 when you are outside the ring. RTB Akrotiri; divert Paphos.
@@ -563,7 +634,7 @@ when you are outside the ring. RTB Akrotiri; divert Paphos.
 
 | Callsign | Type     | Base     | Role                                        |
 |----------|----------|----------|---------------------------------------------|
-| Colt     | F-16C-50 | Akrotiri | Player strike, 2x GBU-31(V)3/B, LITENING     |
+| Colt     | F-16C-50 | Akrotiri | Player strike pair — one bomber, one escort  |
 | Magic    | E-3A     | Akrotiri | AWACS + ESM watch, 251.000 AM                |
 | Texaco   | KC-135   | Akrotiri | Tanker, 270.000 AM, TACAN 10X                |
 | Eagle    | F-15C x2 | Akrotiri | TARCAP over the tanker and the recovery      |
@@ -572,8 +643,22 @@ when you are outside the ring. RTB Akrotiri; divert Paphos.
 `Eagle` holds on the same band as the tanker and **cannot follow you in**. The
 sky he is holding in is about sixteen kilometres wide: inside `BULWARK`'s
 envelope and outside the Gammon's briefed ring. That is not a scripting
-convenience, it is the geometry of this coast, and it is why you are alone from
-the letdown to feet wet.
+convenience, it is the geometry of this coast, and it is why the flight is on
+its own from the letdown to feet wet.
+
+### `Colt` loadout
+
+{self.loadout_table("Colt", _FITS)}
+
+**Two bombs against three aimpoints** is the sortie, and it stays the sortie:
+the second jet is not a second bomber. It is the only friendly cover east of
+that sixteen-kilometre band — the coastal radar is briefed to call your crossing
+and the alert pair launches off that call, and `Eagle` cannot come. A four-slot
+flight puts a second bomber up and can take all three aimpoints; a pair chooses.
+
+No laser anywhere in the flight. There is no altitude over this basin from which
+a jet could hold a spot and live, which is why the bombs are satellite-aided and
+why the aimpoints have to be surveyed onto the cartridge before start.
 
 ## Intelligence
 
@@ -1249,18 +1334,21 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
     def _bandit_flights(self) -> tuple[int, ...]:
         """How many MiG-29A, as flights, derived from the player's magazine.
 
-        `Colt` launches with two AMRAAM and two Sidewinders per jet — six
-        stations, two of which take no missile at all, and the other four spent
-        on the fuel and the bombs this sortie cannot be flown without. At two
-        shots per kill against experienced crews that is **two kills a jet**, and
-        that is the whole air-to-air budget.
+        `Colt`'s bomber launches with two AMRAAM and two Sidewinders — six
+                stations, two of which take no missile at all, and the other four spent
+                on the fuel and the bombs this sortie cannot be flown without — and its
+                escort with six. At two shots per kill against experienced crews that is
+                two kills off the bomber and three off the escort, and that is the whole
+                air-to-air budget. The formula below stays deliberately behind it: a pair
+                of Fulcrums per two slots leaves the flight able to decline the merge,
+                which is the point.
 
-        So the opposition is a function of `--players` rather than a number
-        somebody liked, and even then no part of it is a required kill: the frag
-        is the plant, `Eagle` cannot cross the ring to help, and the honest
-        answer to a pair of Fulcrums on the egress is usually the water rather
-        than the merge. See the force-balance section of CLAUDE.md — this is the
-        arithmetic `abkhaz_sweep` was rebuilt around.
+                So the opposition is a function of `--players` rather than a number
+                somebody liked, and even then no part of it is a required kill: the frag
+                is the plant, `Eagle` cannot cross the ring to help, and the honest
+                answer to a pair of Fulcrums on the egress is usually the water rather
+                than the merge. See the force-balance section of CLAUDE.md — this is the
+                arithmetic `abkhaz_sweep` was rebuilt around.
         """
         pairs = 1 + (self.players - 1) // 2
         return tuple(2 for _ in range(pairs))
@@ -1632,11 +1720,13 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
     ) -> tuple[list[FlyingGroup], list[Point]]:
         """Colt: F-16C-50 out of Akrotiri, two JDAM, the deck, and 279 km.
 
-        The loadout is ED's own `AIM-120C*2, AIM-9X*2, GBU-31-3B*2, FUEL*2, ECM,
-        TGP` payload station for station, which matters twice. It is what makes
-        the wingtip rule right — the AMRAAM go on 1/9 and the Sidewinders on
-        2/8, not the other way round — and it is what fixes the air-to-air
-        magazine at four, which is the number `_bandit_flights` is derived from.
+        The bomber's fit is ED's own `AIM-120C*2, AIM-9X*2, GBU-31-3B*2, FUEL*2,
+        ECM, TGP` payload station for station, which is what makes the wingtip
+        rule right — the AMRAAM go on 1/9 and the Sidewinders on 2/8, not the
+        other way round. Slot 2 flies the pure air-to-air fit instead
+        (`_FITS`): it is the only friendly cover east of the band `Eagle` is
+        stuck in, and the sortie's second half is an alert pair the player's own
+        crossing scrambled.
 
         **Two 2,000 lb penetrators and no laser, on a target you could have
         lased.** That is the threat picture choosing the weapon rather than the
@@ -1660,18 +1750,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             maintask=task.PinpointStrike,
             start_type=StartType.Warm,
             slots=self.players,
-            stores=[
-                (1, "AIM_120C_AMRAAM___Active_Radar_AAM"),
-                (2, "AIM_9X_Sidewinder_IR_AAM"),
-                (3, "GBU_31_V_3_B___JDAM__2000lb_GPS_Guided_Penetrator_Bomb"),
-                (4, "Fuel_tank_370_gal"),
-                (5, "ALQ_184_Long"),
-                (6, "Fuel_tank_370_gal"),
-                (7, "GBU_31_V_3_B___JDAM__2000lb_GPS_Guided_Penetrator_Bomb"),
-                (8, "AIM_9X_Sidewinder_IR_AAM"),
-                (9, "AIM_120C_AMRAAM___Active_Radar_AAM"),
-                (11, "AN_AAQ_28_LITENING___Targeting_Pod_"),
-            ],
+            loadouts=_FITS,
         )
         # Both ends of the deck run are the *briefed* edge of the Gammon's ring,
         # not the real one — same estimate the F10 map paints and the cartridge
@@ -2376,8 +2455,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         """Four outcomes that compose, plus the one that ends it.
 
         Each aimpoint stands on its own rather than being combined into a score,
-        which is what lets a single-ship's two bombs read as a decision the pilot
-        made instead of as a percentage he failed to reach. The hall is the frag
+        which is what lets a pair's two bombs read as a decision the pilot made
+        instead of as a percentage he failed to reach. The hall is the frag
         and its call says so; the other two are what else went with it, and they
         are worded as consequences a pilot could recognise rather than as points.
 

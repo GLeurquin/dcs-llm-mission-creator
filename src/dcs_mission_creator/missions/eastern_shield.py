@@ -45,6 +45,7 @@ from dcs.unittype import VehicleType
 from dcs_mission_creator.core import (
     air_defense as ad,
     dtc,
+    loadout,
     routing,
     sanctuary as sanc,
     triggers as mission_triggers,
@@ -53,7 +54,7 @@ from dcs_mission_creator.core import (
 from dcs_mission_creator.core.cli import run_cli
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.map_draw import PlanOverlay
-from dcs_mission_creator.core.mission_builder import MissionBuilder
+from dcs_mission_creator.core.mission_builder import MIN_PLAYERS, MissionBuilder
 from dcs_mission_creator.core.mission_kit import (
     arm,
     offset,
@@ -104,12 +105,72 @@ _FORWARD_SANCTUARY = "PICKET"
 _FORWARD_BATTERY = sanc.NASAMS
 
 
+#: How `Springfield` splits the frag across its slots (`core/loadout.py`).
+#:
+#: This mission tasks three kills — the SA-6's search radar, the depot and the
+#: MiG-29S pair — and it hands the depot to `Hawg`. What is left for the player
+#: flight is a SEAD job and an air-to-air job, and those are not the same
+#: aeroplane: stations 3 and 7 hold the HARM rails or they hold nothing useful,
+#: so the Weasel jet flies with four missiles and the sweep jet with six.
+#:
+#: Slot 1 puts the ridge down so `Hawg` can be released. Slot 2 is the flight's
+#: own answer to the Fulcrums, which are a **required kill** in the full-success
+#: trigger and which `Eagle`'s TARCAP is 21 minutes from station away from
+#: covering (`core/join_up` measured that; it is why the CAP is not held).
+#:
+#: Both are ED payloads station for station, off
+#: `<DCS>/CoreMods/aircraft/F-16C/UnitPayloads/F-16C_50.lua`:
+#: `AIM-120C*4, AGM-88C*2, FUEL*2, ECM, TGP, HTS` — the four-AMRAAM Weasel fit,
+#: because the Fulcrums are tasked — and `AIM-120C*4, AIM-9X*2, FUEL*2, ECM,
+#: TGP`. The centreline ALQ-184 is new; station 5 used to go out empty.
+_FITS = (
+    loadout.Loadout(
+        role="HARM/HTS",
+        carries=(
+            "two AGM-88C, HTS pod, LITENING pod, four AIM-120C, ALQ-184, two 370 gal"
+        ),
+        stores=(
+            (1, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (2, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (3, "AGM_88C_HARM___High_Speed_Anti_Radiation_Missile_"),
+            (4, "Fuel_tank_370_gal"),
+            (5, "ALQ_184_Long"),
+            (6, "Fuel_tank_370_gal"),
+            (7, "AGM_88C_HARM___High_Speed_Anti_Radiation_Missile_"),
+            (8, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (9, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (10, "AN_ASQ_213_HTS___HARM_Targeting_System"),
+            (11, "AN_AAQ_28_LITENING___Targeting_Pod_"),
+        ),
+    ),
+    loadout.Loadout(
+        role="AIM-120C*4",
+        carries=(
+            "four AIM-120C, two AIM-9X, LITENING pod, ALQ-184, two 370 gal — "
+            "six shots, which is what the Fulcrum pair is priced at"
+        ),
+        stores=(
+            (1, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (2, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (3, "AIM_9X_Sidewinder_IR_AAM"),
+            (4, "Fuel_tank_370_gal"),
+            (5, "ALQ_184_Long"),
+            (6, "Fuel_tank_370_gal"),
+            (7, "AIM_9X_Sidewinder_IR_AAM"),
+            (8, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (9, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (11, "AN_AAQ_28_LITENING___Targeting_Pod_"),
+        ),
+    ),
+)
+
+
 class EasternShield(MissionBuilder):
     name = "eastern_shield"
     title = "Eastern Shield"
     difficulty = Difficulty.TRAINED
 
-    def __init__(self, *, players: int = 1) -> None:
+    def __init__(self, *, players: int = MIN_PLAYERS) -> None:
         super().__init__(players=players)
         self._terrain = Syria()
         self._voice = VoiceSynth()
@@ -141,10 +202,15 @@ MISSION (Springfield — F-16C-50, Incirlik)
   Phase 4: Disrupt the armored reserve if it comes west
            on the Aleppo road to retake the ground.
 
+LOADOUT (the flight splits the frag)
+{self.loadout_brief("Springfield", _FITS)}
+  Slot 1 puts the ridge down and releases Hawg. Slot 2 is
+  your own answer to the Fulcrums — Eagle is 21 minutes
+  from its station and cannot be it.
+
 PACKAGE
-  Springfield 1 (you): F-16C-50, Incirlik, hot ramp,
-        2x AGM-88C, HTS pod, AIM-120C / AIM-9X,
-        two wing tanks.
+  Springfield: F-16C-50 pair, Incirlik, hot ramp. Loadout
+        above.
   Hawg 1-2 : A-10C, Incirlik, strike on depot. Holds
         west of the AO until Springfield calls SAM safe.
   Eagle 1-2: F-15C TARCAP, Incirlik, race-track east
@@ -238,11 +304,24 @@ the Russian reserve can close the road.
 
 | Callsign    | Type    | Base     | Role                              |
 |-------------|---------|----------|-----------------------------------|
-| Springfield | F-16C-50| Incirlik | Player SEAD lead / escort / DCA   |
+| Springfield | F-16C-50| Incirlik | Player SEAD flight / escort / DCA |
 | Hawg 1-2    | A-10C   | Incirlik | Strike on depot (holds for SEAD)  |
 | Eagle 1-2   | F-15C   | Incirlik | TARCAP race-track east of the AO  |
 | Magic       | E-3A    | Incirlik | AWACS, 251.000 AM, Med track north|
 | Texaco      | KC-135  | Incirlik | Tanker, 270.000 AM, TACAN 10X     |
+
+### `Springfield` loadout
+
+{self.loadout_table("Springfield", _FITS)}
+
+Three kills are tasked here — the SA-6's search radar, the depot and the
+Fulcrum pair — and the depot belongs to `Hawg`. The other two are not the same
+aeroplane: a Viper carrying HARMs has spent stations 3 and 7 and flies with
+four air-to-air missiles, a Viper without them flies with six. So slot 1 puts
+the ridge down and releases `Hawg`, and slot 2 is the flight's own answer to
+the Fulcrums. `Eagle`'s TARCAP is twenty-one minutes from its station when you
+are over the target at nine, so it is cover for the egress rather than for the
+merge.
 
 ## Intelligence
 
@@ -868,7 +947,13 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         *,
         threats: tuple[Point, ...],
     ) -> list[Point]:
-        """Springfield F-16C-50 from Incirlik, terrain-masked SEAD ingress."""
+        """Springfield F-16C-50 from Incirlik, terrain-masked SEAD ingress.
+
+        The flight splits its frag (`_FITS`): the HARMs and the HTS on slot 1
+        for the ridge, six air-to-air missiles on slot 2 for the Fulcrum pair
+        that the full-success trigger actually asks for. Every section flies the
+        one corridor.
+        """
         sections = player_flight(
             m,
             country=usa,
@@ -878,17 +963,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             maintask=task.SEAD,
             start_type=StartType.Warm,
             slots=self.players,
-            stores=[
-                (1, "AIM_120C_AMRAAM___Active_Radar_AAM"),
-                (2, "AIM_9X_Sidewinder_IR_AAM"),
-                (3, "AGM_88C_HARM___High_Speed_Anti_Radiation_Missile_"),
-                (4, "Fuel_tank_370_gal"),
-                (6, "Fuel_tank_370_gal"),
-                (7, "AGM_88C_HARM___High_Speed_Anti_Radiation_Missile_"),
-                (8, "AIM_9X_Sidewinder_IR_AAM"),
-                (9, "AIM_120C_AMRAAM___Active_Radar_AAM"),
-                (10, "AN_ASQ_213_HTS___HARM_Targeting_System"),
-            ],
+            loadouts=_FITS,
         )
         push = offset(scene.incirlik.position, east_m=20_000, north_m=-25_000)
         corridor = scene.overlay.place_ingress_corridor(

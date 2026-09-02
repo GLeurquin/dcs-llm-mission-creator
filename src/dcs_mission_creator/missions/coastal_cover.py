@@ -10,10 +10,9 @@ of them:
 2. **Strike.** The column is the escort for what the march is actually for: a
    fuel and ammunition detachment a dozen kilometres back down the same road,
    in the rear of the march. `Hawg` is dry
-   on the column by the time it matters, so the two GBU-12s under `Dodge`'s
-   wings are the only thing in the package that can stop it — talked on and
-   lased by `Pinpoint 1-1`, a tactical air control party in the treeline above
-   the road.
+   on the column by the time it matters, so the GBU-12s under `Dodge`'s striker
+   are the only thing in the package that can stop it — talked on and lased by
+   `Pinpoint 1-1`, a tactical air control party in the treeline above the road.
 3. **Defending the man doing the lasing.** A Russian battalion works out where a
    laser is coming from, and the counter is not another SAM: it is a pair of
    Mi-24Ps sent low up the valley after `Pinpoint`. Losing that race costs the
@@ -84,6 +83,7 @@ from dcs_mission_creator.core import (
     dtc,
     kneeboard,
     laser,
+    loadout,
     routing,
     sanctuary as sanc,
     triggers as mission_triggers,
@@ -93,7 +93,7 @@ from dcs_mission_creator.core.cli import run_cli
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.jtac import CoordTarget, arm_jtac_coords
 from dcs_mission_creator.core.map_draw import PlanOverlay
-from dcs_mission_creator.core.mission_builder import MissionBuilder
+from dcs_mission_creator.core.mission_builder import MIN_PLAYERS, MissionBuilder
 from dcs_mission_creator.core.mission_kit import (
     arm,
     offset,
@@ -189,6 +189,62 @@ _TANKER_TACAN = "10X"
 #: refuses any other, so the briefings below cannot drift off what is emplaced.
 _LASER_CODE = laser.DEFAULT_CODE
 
+#: How `Dodge` splits the frag across its two jobs (`core/loadout.py`).
+#:
+#: The sortie is an escort that becomes a strike, and those are two aeroplanes.
+#: Stations 3 and 7 are the only ones that take a bomb once the bags are on 4/6,
+#: so the jet carrying the GBU-12s has four air-to-air missiles and the jet
+#: without them has six — and this mission needs both numbers at the same time.
+#: `Eagle` owns the air fight only because a single Viper could not hold the
+#: column, the detachment and the alert pair at once; a pair can, and the split
+#: is what makes the second half of the sortie survivable rather than a jet with
+#: two bombs left and two missiles hoping the Hinds are late.
+#:
+#: Both fits are ED's own, station for station, off
+#: `<DCS>/CoreMods/aircraft/F-16C/UnitPayloads/F-16C_50.lua`:
+#: `AIM-120C*2, AIM-9X*2, GBU-12*2, FUEL*2, ECM, TGP` and
+#: `AIM-120C*4, AIM-9X*2, FUEL*2, ECM, TGP`.
+_FITS = (
+    loadout.Loadout(
+        role="GBU-12/TGP",
+        carries=(
+            f"two GBU-12 coded {_LASER_CODE}, LITENING pod, two AIM-120C, "
+            "two AIM-9X, ALQ-184, two 370 gal"
+        ),
+        stores=(
+            (1, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (2, "AIM_9X_Sidewinder_IR_AAM"),
+            (3, "GBU_12___500lb_Laser_Guided_Bomb"),
+            (4, "Fuel_tank_370_gal"),
+            (5, "ALQ_184_Long"),
+            (6, "Fuel_tank_370_gal"),
+            (7, "GBU_12___500lb_Laser_Guided_Bomb"),
+            (8, "AIM_9X_Sidewinder_IR_AAM"),
+            (9, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (11, "AN_AAQ_28_LITENING___Targeting_Pod_"),
+        ),
+    ),
+    loadout.Loadout(
+        role="AIM-120C*4",
+        carries=(
+            "four AIM-120C, two AIM-9X, LITENING pod, ALQ-184, two 370 gal — "
+            "no bombs, so the cover stays cover"
+        ),
+        stores=(
+            (1, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (2, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (3, "AIM_9X_Sidewinder_IR_AAM"),
+            (4, "Fuel_tank_370_gal"),
+            (5, "ALQ_184_Long"),
+            (6, "Fuel_tank_370_gal"),
+            (7, "AIM_9X_Sidewinder_IR_AAM"),
+            (8, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (9, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (11, "AN_AAQ_28_LITENING___Targeting_Pod_"),
+        ),
+    ),
+)
+
 # The sortie's own clock, in mission seconds, and it is set against the route
 # rather than guessed: the kneeboard's own route card puts `Dodge` over the AO
 # about eight minutes after take-off (98 km at 800 km/h), and the detachment
@@ -258,7 +314,7 @@ class CoastalCover(MissionBuilder):
     title = "Coastal Cover"
     difficulty = Difficulty.TRAINED
 
-    def __init__(self, *, players: int = 1) -> None:
+    def __init__(self, *, players: int = MIN_PLAYERS) -> None:
         super().__init__(players=players)
         self._terrain = Caucasus()
         self._voice = VoiceSynth()
@@ -289,26 +345,34 @@ MISSION (Dodge — F-16C-50, Batumi)
   1. ESCORT. Push north along the terrain-masked
      corridor, station over the AO and keep the Russian
      alert pair off Hawg's run.
-  2. STRIKE. Two GBU-12 for the fuel detachment when it
-     comes down the valley road. Pinpoint 1-1 has eyes on
-     the road and will lase it for you. Bombs and spot are
-     both on code {_LASER_CODE}; your pod comes up there too.
+  2. STRIKE. GBU-12 for the fuel detachment when it comes
+     down the valley road. Pinpoint 1-1 has eyes on the
+     road and holds the spot from the moment the trucks
+     are in his sight line — no check-in, no talk-on to
+     sit through on the run-in. Bombs and spot are both
+     on code {_LASER_CODE}; the pod comes up there too.
+     The bombs are on slot 1 only — see LOADOUT.
   3. COVER PINPOINT. He is three vehicles in a treeline
      and he is the reason two bombs are enough.
 
+LOADOUT (the flight splits the frag)
+{self.loadout_brief("Dodge", _FITS)}
+  Slot 1 flies the strike; slot 2 carries no bomb and
+  two more missiles, and covers the run-in.
+
 PACKAGE
-  Dodge 1 (you): F-16C-50, Batumi, hot ramp.
-                 2x AIM-120C, 2x AIM-9X, 2x GBU-12 on
-                 code {_LASER_CODE}, targeting pod, two bags.
+  Dodge        : F-16C-50 pair, Batumi, hot ramp. Loadout
+                 above.
   Hawg 1-2     : A-10C, Kutaisi, strike on the column.
   Eagle 1-2    : F-15C CAP toward Sukhumi. Eagle owns
-                 the air-to-air fight — you have four
-                 missiles and a strike to fly.
+                 the air-to-air fight — one of you is
+                 carrying bombs and the other is one jet.
   Magic        : E-3A AWACS, {_FREQ_AWACS}.000 AM.
   Texaco       : KC-135, {_FREQ_TANKER}.000 AM, TACAN {_TANKER_TACAN},
                  west of Batumi over the water.
   Pinpoint 1-1 : TACP in the valley, {_FREQ_TACP}.000 AM,
-                 lases on code {_LASER_CODE}.
+                 lases on code {_LASER_CODE}, spot up
+                 whenever the trucks are in his sight.
 
 INTELLIGENCE
   Air : Sukhumi-Babushara holds a MiG-29S pair on alert,
@@ -438,11 +502,18 @@ Three tasks, in the order the sortie will hand them to you.
 
 1. **Escort.** Push north along the terrain-masked ingress corridor, take
    station over the AO, and keep the Russian alert pair off `Hawg`'s run.
-2. **Strike.** Two GBU-12 for the fuel detachment when it comes down the
-   valley road. `Pinpoint 1-1` — a tactical air control party in the treeline
-   above the road — has eyes on it and will lase on code `{_LASER_CODE}`. Your
-   two bombs are coded `{_LASER_CODE}` as well, and the pod comes up on it, so
-   nothing needs retuning to take his spot.
+2. **Strike.** GBU-12 for the fuel detachment when it comes down the valley
+   road. `Pinpoint 1-1` — a tactical air control party in the treeline above
+   the road — has eyes on it and will lase on code `{_LASER_CODE}`. The bombs
+   are coded `{_LASER_CODE}` as well, and the pod comes up on it, so nothing
+   needs retuning to take his spot. **He holds that spot whenever the trucks
+   are in his sight line, whether or not you have spoken to him** — you come
+   out of a masked corridor onto a moving target, and a check-in and a talk-on
+   would cost more of the window than the pass does. His net is there for the
+   talk-on and the coordinates if you want them, not as a precondition for the
+   laser. When the road bends behind the spur the spot goes out, and he says
+   so. **The bombs are on slot 1**; see the loadout table below for who is
+   carrying what.
 3. **Cover `Pinpoint`.** He is three vehicles in a treeline, he is the reason
    two bombs are enough for a moving detachment, and the Russians will work out
    where the laser is coming from.
@@ -456,14 +527,25 @@ Three tasks, in the order the sortie will hand them to you.
 | Eagle 1-2    | F-15C    | Batumi  | CAP — owns the air-to-air fight   |
 | Magic        | E-3A     | Batumi  | AWACS, {_FREQ_AWACS}.000 AM                 |
 | Texaco       | KC-135   | Batumi  | Tanker, {_FREQ_TANKER}.000 AM, TACAN {_TANKER_TACAN}      |
-| Pinpoint 1-1 | TACP     | ground  | Talk-on + laser, {_FREQ_TACP}.000 AM        |
+| Pinpoint 1-1 | TACP     | ground  | Laser + talk-on, {_FREQ_TACP}.000 AM        |
 
-`Dodge` carries two AIM-120C on the wingtips, two AIM-9X, two GBU-12 coded
-`{_LASER_CODE}`, a targeting pod, an ECM pod and two 370 gal bags. Four
-air-to-air missiles is two kills at the planning factor, which is why `Eagle`
-owns the air fight and why nothing airborne is a required kill in this frag.
-`Texaco` is on station because the jet launches heavy and then loiters — the
-fuel goes on waiting for the second echelon, not on the transit.
+### `Dodge` loadout
+
+{self.loadout_table("Dodge", _FITS)}
+
+The flight splits the frag rather than compromising on one jet. Stations 3 and
+7 are the only ones that take a bomb once the bags are on 4 and 6, so a Viper
+with the GBU-12s has four air-to-air missiles and a Viper without them has six
+— and this sortie needs both numbers at once. Slot 1 flies the strike and is the
+jet `Pinpoint` is talking to; slot 2 carries no ordnance for the ground at all
+and covers the run-in, which is the ten minutes the flight spends slow and low
+over a valley with a rotary threat in it.
+
+Two bombs against three trucks is still the tension: **one striker carries
+two**, and only a four-slot flight puts a second striker up. `Eagle` still owns
+the air-to-air fight, and nothing airborne is a required kill in this frag.
+`Texaco` is on station because the jets launch heavy and then loiter — the fuel
+goes on waiting for the second echelon, not on the transit.
 
 ## Intelligence
 
@@ -643,6 +725,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self._add_sanctuary_checkin(m, home)
         sanc.remark_all(m, home, sukhumi_ad)
         self._add_tacp_readout(m, target=red.pol)
+        self._arm_tacp_laser(m, tacp=tacp, target=red.pol)
         seen = self._add_echelon_sighting_trigger(m, pol=red.pol, osa=red.osa)
         self._add_sight_line_lost_trigger(m, pol=red.pol)
         self._add_shorad_reveal_trigger(m, zone=seen)
@@ -1403,7 +1486,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         """KC-135 Texaco on a coastal track west of Batumi, TACAN 10X.
 
         The escort-only version of this mission had no tanker and did not need
-        one: fifty minutes on internal fuel and two bags. `Dodge` now launches
+        one: fifty minutes on internal fuel and two bags. `Dodge`'s striker now launches
         with two GBU-12s and a pod on top of that and then *waits* — eight
         minutes to the AO, a MiG fight and somebody else's strike, and a target
         that is not in the party's sight line until about T+16 and may not be
@@ -1512,20 +1595,21 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
     ) -> list[Point]:
         """Dodge F-16C-50 from Batumi, hot ramp: escort out, strike back.
 
-        The loadout is the mission statement, and it is ED's own
-        `AIM-120C*2, AIM-9X*2, GBU-12*2, FUEL*2, ECM, TGP` fit read off
+        The loadout is the mission statement, and it is split across the flight
+        rather than compromised on one jet (`_FITS`): slot 1 carries the GBU-12s
+        and the pod for the detachment, slot 2 carries six air-to-air missiles
+        and no bomb at all. Both are ED payloads read off
         `<DCS>/CoreMods/aircraft/F-16C/UnitPayloads/F-16C_50.lua` rather than
-        assembled from memory — AMRAAM on the wingtips, Sidewinders on 2/8
-        because 3/7 are carrying the bombs, tanks on 4/6, ALQ-184 on the
-        centreline and the pod on 11 (see the loadout rule in CLAUDE.md, and note
-        that "legal in pydcs" and "a fit somebody flies" are different tests).
+        assembled from memory — AMRAAM on the wingtips, tanks on 4/6, ALQ-184 on
+        the centreline and the pod on 11 (see the loadout rule in CLAUDE.md, and
+        note that "legal in pydcs" and "a fit somebody flies" are different
+        tests).
 
-        What it costs is four air-to-air missiles instead of six, and that is the
-        number the whole force balance is priced against: two kills at the
-        planning factor, which is `Boris` and nothing else. Every other airborne
-        threat in the mission is explicitly somebody else's or explicitly
-        declinable (`_spawn_red_escalation`). What it buys is that the second
-        half of the sortie exists at all.
+        What the split buys is that neither half of the sortie is priced against
+        the other. Two bombs against three trucks stays the tension it always
+        was — one striker carries two, and only a four-slot flight has two
+        strikers — while the cover jet answers `Boris` with six missiles instead
+        of the four a bombed-up Viper has left.
 
         Two bags rather than one, unlike `idlib_gauntlet`'s Pontiac: this is a
         98 km radius with a hold over the AO through someone else's strike before
@@ -1542,18 +1626,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             maintask=task.CAP,
             start_type=StartType.Warm,
             slots=self.players,
-            stores=[
-                (1, "AIM_120C_AMRAAM___Active_Radar_AAM"),
-                (2, "AIM_9X_Sidewinder_IR_AAM"),
-                (3, "GBU_12___500lb_Laser_Guided_Bomb"),
-                (4, "Fuel_tank_370_gal"),
-                (5, "ALQ_184_Long"),
-                (6, "Fuel_tank_370_gal"),
-                (7, "GBU_12___500lb_Laser_Guided_Bomb"),
-                (8, "AIM_9X_Sidewinder_IR_AAM"),
-                (9, "AIM_120C_AMRAAM___Active_Radar_AAM"),
-                (11, "AN_AAQ_28_LITENING___Targeting_Pod_"),
-            ],
+            loadouts=_FITS,
         )
         # The bombs and the spot on one code. Nothing is written into the .miz
         # for a Viper — there is no laser-code field on the airframe — so this
@@ -2012,7 +2085,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         # it goes on the same line) and where the readout lives in the radio menu.
         kneeboard.remark(
             m,
-            f"Pinpoint 1-1 lases on {_LASER_CODE}; your GBU-12s are coded the same.",
+            f"Pinpoint 1-1 lases on {_LASER_CODE}; the GBU-12s are coded the same.",
         )
         # One line, under the card's column width, so it does not wrap: what a
         # remark is for is the fact the page cannot derive — where the readout
@@ -2022,6 +2095,45 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         kneeboard.remark(
             m,
             "Target coordinates in your cockpit's format: F10 -> Other -> Pinpoint 1-1.",
+        )
+
+    def _arm_tacp_laser(
+        self, m: Mission, *, tacp: VehicleGroup, target: VehicleGroup
+    ) -> None:
+        """Keep Pinpoint's spot on the trucks without the player calling him.
+
+        `fac_attack_group` above is the talk-on, and it is also — as DCS ships
+        it — the only thing holding the laser, which is the defect this fixes.
+        The stock spot comes up inside a radio conversation the player has to be
+        in range and in line of sight of, and this sortie is written so he is
+        neither: the ingress is a terrain-masked corridor, and he comes out of it
+        onto a detachment that is inside `Pinpoint`'s sight line for a window the
+        party itself calls. Spending the first minute of that window checking in
+        is spending the window.
+
+        So the party works the way a real one does — on the target well before
+        the aeroplane, with the talk-on confirming a spot that is already
+        burning. Nothing here reads the player at all.
+
+        `lead_correction` is on: the detachment is doing about 35 km/h, the
+        player has two bombs and one pass at it, and a DCS LGB trails a moving
+        spot far enough to matter at that speed. The default 10 km reach is what
+        this geometry wants — measured on the built mission, the march is inside
+        it from about a fifth of the way along to nine tenths, which is wider
+        than the sight line the terrain allows anyway (`_TACP_WATCH_FRACTIONS`),
+        so what gates the laser here is the spur and not the range.
+        """
+        laser.arm_autolase(
+            m,
+            [
+                laser.LaserSpot(
+                    tacp,
+                    target,
+                    code=_LASER_CODE,
+                    label="Pinpoint 1-1",
+                    lead_correction=True,
+                )
+            ],
         )
 
     def _add_echelon_sighting_trigger(
@@ -2339,8 +2451,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         m.set_description_bluetask_text(
             "Escort Hawg 1-2 onto the Russian column north of Senaki, then stop "
             "the fuel and ammunition detachment behind it before it reaches the "
-            "Senaki junction — two GBU-12 and Pinpoint 1-1 on the laser are what "
-            "you have for that, and Pinpoint has to survive to give it to you. "
+            "Senaki junction — the flight's GBU-12s and Pinpoint 1-1 on the laser are "
+            "what you have for that, and Pinpoint has to survive to give it to you. "
             "Eagle owns the air-to-air fight: the Sukhumi alert pair is a threat "
             "to beat and the Gudauta pair behind it is not your target list. "
             "The detachment travels with air defence nobody located, so keep the "

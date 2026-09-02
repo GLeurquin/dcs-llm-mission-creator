@@ -18,7 +18,7 @@ import hashlib
 import random
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Sequence
 
 from dcs.mission import Mission
 
@@ -28,11 +28,13 @@ from dcs_mission_creator.core import (
     dtc,
     join_up,
     kneeboard,
+    loadout,
     mission_kit,
     radio,
     waypoints,
 )
 from dcs_mission_creator.core.difficulty import Difficulty
+from dcs_mission_creator.core.loadout import Loadout
 from dcs_mission_creator.core.recon import publish as recon
 
 if TYPE_CHECKING:
@@ -40,6 +42,16 @@ if TYPE_CHECKING:
 
     from dcs_mission_creator.map_overlay.query import MapOverlay
 
+
+#: The fewest coop client slots a mission is built for, and it is two rather
+#: than one on purpose. An F-16C has six weapon stations once the bags, the ECM
+#: pod and the two sensor pods are on, and only three of them (3/7 and the
+#: 2/8 pair) take anything but a missile — so one jet can carry the HARMs or the
+#: bombs and never both, and a mission written for a single slot spends its
+#: whole design budget deciding which half of its own frag to throw away.
+#: Two slots is the smallest flight that can carry a tasking, and every mission
+#: here now splits its fit across the pair (`core/loadout.py`).
+MIN_PLAYERS = 2
 
 #: The most coop client slots a mission is built for. Above
 #: `mission_kit.MAX_FLIGHT_SIZE` the player flight is more than one group — a
@@ -60,9 +72,11 @@ class MissionBuilder(ABC):
     #: The theater, set by the subclass `__init__`.
     _terrain: Terrain
 
-    def __init__(self, *, players: int = 1) -> None:
-        if players < 1 or players > MAX_PLAYERS:
-            raise ValueError(f"players must be 1..{MAX_PLAYERS}, got {players}")
+    def __init__(self, *, players: int = MIN_PLAYERS) -> None:
+        if players < MIN_PLAYERS or players > MAX_PLAYERS:
+            raise ValueError(
+                f"players must be {MIN_PLAYERS}..{MAX_PLAYERS}, got {players}"
+            )
         self.players = players
         # Before any flight is built: pydcs caches its payload dirs on first use.
         dcs_install.configure()
@@ -93,6 +107,41 @@ class MissionBuilder(ABC):
         names = mission_kit.section_names(flight, len(sizes))
         parts = ", ".join(f"{n} ({s})" for n, s in zip(names, sizes))
         return f"{self.players} coop slot(s), flown as {len(sizes)} sections: {parts}"
+
+    def loadout_table(self, flight: str, loadouts: Sequence[Loadout]) -> str:
+        """The README's slot-by-slot loadout table for `flight`.
+
+        A mission declares its fits once, as a module constant, and hands the
+        same tuple to `_spawn_player` and to both briefing views — so the jet
+        that the briefing says is carrying the HARMs is the jet that has them on
+        3 and 7. `readme()` holds no `Mission`, which is why the slot names come
+        off `mission_kit.slot_names` rather than off the built groups.
+        """
+        return loadout.table(
+            mission_kit.slot_names(flight, self.players),
+            loadout.assign(loadouts, self.players),
+        )
+
+    def loadout_brief(
+        self, flight: str, loadouts: Sequence[Loadout], *, indent: str = "  "
+    ) -> str:
+        """The same table as plain text, for `set_description_text`."""
+        return loadout.block(
+            mission_kit.slot_names(flight, self.players),
+            loadout.assign(loadouts, self.players),
+            indent=indent,
+        )
+
+    def air_to_air_shots(self, loadouts: Sequence[Loadout]) -> int:
+        """The whole player flight's air-to-air magazine, off the actual fits.
+
+        The force-balance rule in CLAUDE.md — a mission may not task more kills
+        than the flight carries weapons for — divides this by two. Reading it
+        off the stores rather than off a per-mission constant is what keeps a
+        mission that scales its opposition with `--players` honest once the
+        slots stop carrying the same thing as each other.
+        """
+        return loadout.shots(loadout.assign(loadouts, self.players))
 
     @abstractmethod
     def readme(self) -> str:
@@ -150,6 +199,7 @@ class MissionBuilder(ABC):
         m = Mission(self._terrain)
         self._permit_crash_recovery(m)
         overlay = self._assemble(m)
+        self._remark_loadouts(m)
         join_up.hold_package_for_player(m)
         waypoints.snap_base_waypoints(m, overlay)
         waypoints.set_departure_speeds(m)
@@ -160,6 +210,21 @@ class MissionBuilder(ABC):
         dtc.write_cartridges(m, miz_path)
         kneeboard.publish(m, miz_path, overlay=overlay, title=self.title)
         recon.publish_stills(m, miz_path.parent)
+
+    @staticmethod
+    def _remark_loadouts(m: Mission) -> None:
+        """Put the flight's fit split on the kneeboard, once, for every mission.
+
+        What a pilot cannot get from his own cockpit is what the *other* jet is
+        carrying, and that is the whole point of a split flight — the SMS page
+        answers for his own stores and nothing anywhere answers for his
+        wingman's. It is written here rather than in each mission for the same
+        reason the waypoint snap is: a mission that forgot it would ship a pair
+        whose two halves each believe they are the strike.
+        """
+        for flight, assignment in loadout.assignments(m):
+            for line in loadout.remark_lines(flight, assignment):
+                kneeboard.remark(m, line)
 
     @staticmethod
     def _permit_crash_recovery(m: Mission) -> None:

@@ -84,6 +84,7 @@ from dcs_mission_creator.core import (
     dtc,
     kneeboard,
     laser,
+    loadout,
     routing,
     sanctuary as sanc,
     triggers as mission_triggers,
@@ -95,7 +96,7 @@ from dcs_mission_creator.core.frontline import Frontline, plan_frontline
 from dcs_mission_creator.core.iads import Listener, Site, arm_iads
 from dcs_mission_creator.core.jtac import CoordTarget, arm_jtac_coords
 from dcs_mission_creator.core.map_draw import PlanOverlay
-from dcs_mission_creator.core.mission_builder import MissionBuilder
+from dcs_mission_creator.core.mission_builder import MIN_PLAYERS, MissionBuilder
 from dcs_mission_creator.core.mission_kit import (
     arm,
     player_flight,
@@ -258,12 +259,74 @@ _REAR_SANCTUARY = "ANVIL"
 _REAR_BATTERY = sanc.HAWK
 
 
+#: How `Uzi` splits the frag across its slots (`core/loadout.py`).
+#:
+#: The frag is two jobs — put the belts down and wreck the column — and the old
+#: single fit tried to be both: two HARMs on 3/7, two CBU-97 on the tank
+#: stations, and one 300 gal bag because there was nowhere left to hang the
+#: wing pair. That jet was worse at each job than either of these, and it went
+#: into three SAM belts with an empty centreline.
+#:
+#: Slot 1 is the Weasel — four AMRAAM, because there is an alert pair at Bassel
+#: and `Eagle` is a barrier behind the seam rather than an escort. Slot 2
+#: carries four CBU-97 on TERs, which is twice the submunitions the briefing
+#: says the column needs, and the LITENING to find it with. Both get the wing
+#: bags back and the ALQ-184 the belts argue for.
+#:
+#: Both are ED payloads station for station, off
+#: `<DCS>/CoreMods/aircraft/F-16C/UnitPayloads/F-16C_50.lua`:
+#: `AIM-120C*4, AGM-88C*2, FUEL*2, ECM, TGP, HTS` and
+#: `AIM-120C*2, AIM-9X*2, CBU-97*4, FUEL*2, ECM, TGP`. Nothing in either rides a
+#: laser — the SFWs are self-guided and the pod is there to look — so `Hammer`'s
+#: spot is for `Pontiac` and the code is not the player's problem.
+_FITS = (
+    loadout.Loadout(
+        role="HARM/HTS",
+        carries=(
+            "two AGM-88C, HTS pod, LITENING pod, four AIM-120C, ALQ-184, two 370 gal"
+        ),
+        stores=(
+            (1, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (2, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (3, "AGM_88C_HARM___High_Speed_Anti_Radiation_Missile_"),
+            (4, "Fuel_tank_370_gal"),
+            (5, "ALQ_184_Long"),
+            (6, "Fuel_tank_370_gal"),
+            (7, "AGM_88C_HARM___High_Speed_Anti_Radiation_Missile_"),
+            (8, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (9, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (10, "AN_ASQ_213_HTS___HARM_Targeting_System"),
+            (11, "AN_AAQ_28_LITENING___Targeting_Pod_"),
+        ),
+    ),
+    loadout.Loadout(
+        role="CBU-97*4",
+        carries=(
+            "four CBU-97 SFW on TERs, LITENING pod, two AIM-120C, "
+            "two AIM-9X, ALQ-184, two 370 gal"
+        ),
+        stores=(
+            (1, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (2, "AIM_9X_Sidewinder_IR_AAM"),
+            (3, "TER_9A_with_2_x_CBU_97___10_x_SFW_Cluster_Bomb"),
+            (4, "Fuel_tank_370_gal"),
+            (5, "ALQ_184_Long"),
+            (6, "Fuel_tank_370_gal"),
+            (7, "TER_9A_with_2_x_CBU_97___10_x_SFW_Cluster_Bomb_"),
+            (8, "AIM_9X_Sidewinder_IR_AAM"),
+            (9, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (11, "AN_AAQ_28_LITENING___Targeting_Pod_"),
+        ),
+    ),
+)
+
+
 class IdlibGauntlet(MissionBuilder):
     name = "idlib_gauntlet"
     title = "Idlib Gauntlet"
     difficulty = Difficulty.TRAINED
 
-    def __init__(self, *, players: int = 1) -> None:
+    def __init__(self, *, players: int = MIN_PLAYERS) -> None:
         super().__init__(players=players)
         self._terrain = Syria()
         self._voice = VoiceSynth()
@@ -304,10 +367,15 @@ MISSION (Uzi — F-16C-50, Hatay)
   combat-ineffective and the ammunition never reaches
   the pocket; the whole column is better.
 
+LOADOUT (Weasel and bomber)
+{self.loadout_brief("Uzi", _FITS)}
+  Slot 1 works the belts; slot 2 works the column. Nothing
+  either of you carries rides a laser — Hammer's spot is
+  for Pontiac.
+
 PACKAGE
-  Uzi 1 (you): F-16C-50, Hatay, hot ramp. 2x AGM-88C,
-        2x CBU-97 SFW, 2x AIM-120C, 2x AIM-9X, HTS pod,
-        LITENING, 300 gal centerline.
+  Uzi        : F-16C-50 pair, Hatay, hot ramp. Loadout
+        above.
   Pontiac 1-2: F/A-18C, 4x GBU-12 coded {_LASER_CODE} + ATFLIR,
         Hatay. Held in reserve, pushing onto the column
         once the SAM threat over the route is suppressed.
@@ -522,7 +590,8 @@ must, suppress the rest, and get weapons onto the trucks.
    SA-6 on the ridge is what owns the convoy route — put it down or keep it
    down.
 3. **Interdict.** Work the column with the CBU-97s — SFW submunitions are what
-   kill a dispersed column in two passes. `Hammer` (MQ-9) is overhead on
+   kill a dispersed column in two passes, and they are on slot 2 rather than
+   spread over both jets. `Hammer` (MQ-9) is overhead on
    {_FREQ_FAC}.000 AM for the talk-on, lasing code {_LASER_CODE}
    for `Pontiac`'s GBU-12s.
 4. **Strike release.** `Pontiac` (2x F/A-18C) is held in reserve at Hatay and
@@ -565,20 +634,27 @@ IR-guided.
 
 | Callsign    | Type     | Base     | Role                                  |
 |-------------|----------|----------|---------------------------------------|
-| Uzi 1       | F-16C-50 | Hatay    | Player SEAD / interdiction            |
+| Uzi         | F-16C-50 | Hatay    | Player SEAD + interdiction pair       |
 | Pontiac 1-2 | F/A-18C  | Hatay    | Strike on the column (held until release) |
 | Eagle 1-2   | F-15C    | Incirlik | Barrier CAP behind the seam           |
 | Hammer      | MQ-9     | on station | FAC(A), lases the column, code {_LASER_CODE}  |
 | Magic       | E-3A     | Incirlik | AWACS, {_FREQ_AWACS}.000 AM                    |
 | Texaco      | KC-135   | Incirlik | Tanker, {_FREQ_TANKER}.000 AM, TACAN 10X        |
 
-Loadouts are spelled out in the mission rather than left to the DCS payload
-defaults: `Uzi` carries 2x AGM-88C, 2x CBU-97 (SFW), 2x AIM-120C, 2x AIM-9X,
-the AN/ASQ-213 HTS pod, a LITENING pod and a 300 gal centerline; `Pontiac`
-carries 4x GBU-12 with ATFLIR — buddy-lase off `Hammer` or self-lase. Those
-bombs are coded `{_LASER_CODE}`, the code `Hammer` lases on, so the two need no
-arranging. Nothing `Uzi` carries rides a laser: the SFWs are self-guided
-submunitions and the pod is there to look, not to designate for yourself.
+### `Uzi` loadout
+
+{self.loadout_table("Uzi", _FITS)}
+
+The frag is two jobs and the flight carries one each. Slot 1 is the Weasel and
+flies with four AMRAAM, because there is an alert pair at Bassel Al-Assad and
+`Eagle` is a barrier behind the seam rather than an escort. Slot 2 carries four
+CBU-97 on TERs — twice the submunitions a dispersed column needs — and the
+LITENING to find it with.
+
+Nothing `Uzi` carries rides a laser: the SFWs are self-guided and the pod is
+there to look, not to designate for yourself. `Pontiac` carries 4x GBU-12 with
+ATFLIR, coded `{_LASER_CODE}` — the code `Hammer` lases on, so the two need no
+arranging.
 
 ## Intelligence
 
@@ -1712,10 +1788,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         had taxied. Above four coop slots the flight is more than one group, so
         it is a list — every section flies the one corridor.
         """
-        # Wild Weasel + interdiction: two HARMs for the belts, two CBU-97 SFW
-        # for the column, HTS to find the emitters, LITENING to find the trucks.
-        harm = "AGM_88C_HARM___High_Speed_Anti_Radiation_Missile_"
-        sfw = "CBU_97___10_x_SFW_Cluster_Bomb"
         sections = player_flight(
             m,
             country=usa,
@@ -1725,19 +1797,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             maintask=task.SEAD,
             start_type=StartType.Warm,
             slots=self.players,
-            stores=[
-                (1, "AIM_120C_AMRAAM___Active_Radar_AAM"),
-                (2, "AIM_9X_Sidewinder_IR_AAM"),
-                (3, harm),
-                (4, sfw),
-                (5, "Fuel_tank_300_gal"),
-                (6, sfw),
-                (7, harm),
-                (8, "AIM_9X_Sidewinder_IR_AAM"),
-                (9, "AIM_120C_AMRAAM___Active_Radar_AAM"),
-                (10, "AN_ASQ_213_HTS___HARM_Targeting_System"),
-                (11, "AN_AAQ_28_LITENING___Targeting_Pod_"),
-            ],
+            loadouts=_FITS,
         )
         push = scene.hatay.position.point_from_heading(
             scene.hatay.position.heading_between_point(scene.route_mid), 25_000.0

@@ -45,6 +45,7 @@ from dcs.unitgroup import FlyingGroup
 from dcs_mission_creator.core import (
     air_defense as ad,
     dtc,
+    loadout,
     sanctuary as sanc,
     triggers as mission_triggers,
     waypoints,
@@ -52,7 +53,7 @@ from dcs_mission_creator.core import (
 from dcs_mission_creator.core.cli import run_cli
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.map_draw import PlanOverlay
-from dcs_mission_creator.core.mission_builder import MissionBuilder
+from dcs_mission_creator.core.mission_builder import MIN_PLAYERS, MissionBuilder
 from dcs_mission_creator.core.mission_kit import (
     offset,
     player_flight,
@@ -191,12 +192,75 @@ _SANCTUARY = "RAMPART"
 _SANCTUARY_BATTERY = sanc.HAWK
 
 
+#: How `Dodge` splits the frag across its slots (`core/loadout.py`).
+#:
+#: Shooter and killer, which is what a Weasel pair has always been. Slot 1
+#: carries the HARMs and the HTS and kills the emitters; slot 2 carries four
+#: CBU-105 and kills what stops emitting, because a battery that goes dark under
+#: an anti-radiation shot is still a battery and the Flap Lid is a vehicle on a
+#: hill rather than a signal. The frag is still the two radars — the briefing
+#: says launchers are a bonus — but the flight now has an answer to a radar that
+#: shuts down in time, which one jet with two HARMs did not.
+#:
+#: The tension is deliberate and it is the ace part: **two HARMs for two
+#: radars**, and a two-slot flight has no third shot. If the first pass does not
+#: take them, the answer is a submunition run over an S-300 site with a Tor
+#: beside it.
+#:
+#: Both are ED payloads station for station, off
+#: `<DCS>/CoreMods/aircraft/F-16C/UnitPayloads/F-16C_50.lua`:
+#: `AIM-120C*2, AIM-9X*2, AGM-88C*2, FUEL*2, ECM, TGP, HTS` and
+#: `AIM-120C*2, AIM-9X*2, CBU-105*4, FUEL*2, ECM, TGP`. The centreline ALQ-184
+#: is new: this flight used to leave station 5 empty going into S-300 country.
+_FITS = (
+    loadout.Loadout(
+        role="HARM/HTS",
+        carries=(
+            "two AGM-88C, HTS pod, LITENING pod, two AIM-120C, two AIM-9X, "
+            "ALQ-184, two 370 gal"
+        ),
+        stores=(
+            (1, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (2, "AIM_9X_Sidewinder_IR_AAM"),
+            (3, "AGM_88C_HARM___High_Speed_Anti_Radiation_Missile_"),
+            (4, "Fuel_tank_370_gal"),
+            (5, "ALQ_184_Long"),
+            (6, "Fuel_tank_370_gal"),
+            (7, "AGM_88C_HARM___High_Speed_Anti_Radiation_Missile_"),
+            (8, "AIM_9X_Sidewinder_IR_AAM"),
+            (9, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (10, "AN_ASQ_213_HTS___HARM_Targeting_System"),
+            (11, "AN_AAQ_28_LITENING___Targeting_Pod_"),
+        ),
+    ),
+    loadout.Loadout(
+        role="CBU-105*4",
+        carries=(
+            "four CBU-105 wind-corrected SFW on BRU-57, LITENING pod, "
+            "two AIM-120C, two AIM-9X, ALQ-184, two 370 gal"
+        ),
+        stores=(
+            (1, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (2, "AIM_9X_Sidewinder_IR_AAM"),
+            (3, "BRU_57_with_2_x_CBU_105___10_x_SFW__CBU_with_WCMD"),
+            (4, "Fuel_tank_370_gal"),
+            (5, "ALQ_184_Long"),
+            (6, "Fuel_tank_370_gal"),
+            (7, "BRU_57_with_2_x_CBU_105___10_x_SFW__CBU_with_WCMD"),
+            (8, "AIM_9X_Sidewinder_IR_AAM"),
+            (9, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (11, "AN_AAQ_28_LITENING___Targeting_Pod_"),
+        ),
+    ),
+)
+
+
 class DaryalRun(MissionBuilder):
     name = "daryal_run"
     title = "Daryal Run"
     difficulty = Difficulty.ACE
 
-    def __init__(self, *, players: int = 1) -> None:
+    def __init__(self, *, players: int = MIN_PLAYERS) -> None:
         super().__init__(players=players)
         self._terrain = Caucasus()
         self._voice = VoiceSynth()
@@ -232,7 +296,9 @@ MISSION (Dodge — F-16C-50, Vaziani, hot ramp)
     on the deck by Stepantsminda and stay there.
   - Run the gorge. Pop at the mouth north of Balta, HARM
     the Big Bird, re-attack the Flap Lid and the 54K6 CP.
-    Launchers are bonus; the radars are the kill.
+    Launchers are bonus; the radars are the kill. Two
+    HARMs in the flight for two radars — the killer jet is
+    what you have if a radar shuts down in time.
   - Egress WEST across the plain, then south up the Ardon
     and over the Roki Pass. Do NOT re-cross Daryal — the
     MiG-29S will be in by then. The climb out of the Ardon
@@ -240,11 +306,17 @@ MISSION (Dodge — F-16C-50, Vaziani, hot ramp)
     west of Vladikavkaz, not before.
   - RTB Vaziani. Divert: Soganlug.
 
+LOADOUT (shooter and killer)
+{self.loadout_brief("Dodge", _FITS)}
+  Slot 1 kills the emitters. Slot 2 kills what stops
+  emitting.
+
 PACKAGE
-  Dodge 1 (you) : F-16C-50, Vaziani, hot ramp, SEAD frag.
+  Dodge         : F-16C-50 pair, Vaziani, hot ramp, SEAD
+                  frag. Loadout above.
   Magic         : E-3A AWACS, 251.000 AM, race-track over
-                  Georgia. No tanker, no escort, no Weasel
-                  wingman. You are alone tonight.
+                  Georgia. No tanker, no escort, nothing
+                  else airborne. The pair is the package.
 
 INTELLIGENCE
   No overhead of the site — cloud for two days. What we
@@ -353,6 +425,10 @@ and the 54K6 CP. Egress west across the plain, then south up the Ardon and
 over the Roki Pass. Do **not** re-cross Daryal on egress — the MiG-29S CAP
 will be airborne by then.
 
+The flight is a shooter and a killer, and the second half of that is the part
+worth planning: the radars are the frag, and a crew that hears the launch and
+shuts down in time leaves you a target that is no longer a signal.
+
 The climb out of the Ardon mouth is the one deliberately exposed minute of
 the sortie: the plain west of Vladikavkaz is still inside the battery's reach
 and there is no terrain to use until you are into the Ardon. Take it west of
@@ -363,11 +439,26 @@ already down — which is what you were sent to do.
 
 | Callsign | Type     | Base    | Role                           |
 |----------|----------|---------|--------------------------------|
-| Dodge    | F-16C-50 | Vaziani | Player SEAD strike (frag SA-10)|
+| Dodge    | F-16C-50 | Vaziani | Player SEAD flight (frag SA-10)|
 | Magic    | E-3A     | Vaziani | AWACS, 251.000 AM, south of mtns|
 
-No tanker, no escort, no Weasel wingman — denied support is part of the
-ace composition. Carry externals.
+No tanker, no escort, nothing else airborne — denied support is part of the
+ace composition, and the flight is the whole package. Carry externals.
+
+### `Dodge` loadout
+
+{self.loadout_table("Dodge", _FITS)}
+
+Shooter and killer, which is what a Weasel pair has always been. Slot 1 kills
+the emitters; slot 2 kills what stops emitting, because a battery that goes
+dark under an anti-radiation shot is still a battery and a Flap Lid is a
+vehicle on a hill rather than a signal.
+
+**Two HARMs for two radars**, and a two-slot flight has no third shot. If the
+first pass does not take them, what is left is a submunition run over an S-300
+site with a Tor beside it — which is the ace part of this sortie, and the
+reason the pop-up geometry at the gorge mouth is worth flying properly the
+first time.
 
 ## Intelligence
 
@@ -412,8 +503,9 @@ Vaziani is covered by a `{_SANCTUARY}` {_SANCTUARY_BATTERY.name} battery reachin
 the overhead. Soganlug is 8 km away and **inside the same envelope**, so a jet
 that cannot fly a normal approach has two runways under one battery.
 
-That matters more on this sortie than on any other. You go 168 km alone against
-the best crew on the map, with four HARMs, no tanker, no escort and no wingman —
+That matters more on this sortie than on any other. You go 168 km against
+the best crew on the map as a pair, with two HARMs between you and no tanker,
+no escort and nothing else airborne —
 and the one thing that makes "abort and run" a plan rather than a slower loss is
 that it ends somewhere. If the run has gone wrong, turn south, take the Ardon and
 the Roki as briefed, and cross that ring. `{_SANCTUARY} MARSHAL` is a hold abeam
@@ -730,7 +822,14 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
     def _spawn_player(
         self, m: Mission, usa: Country, scene: _Scene, *, plan: PlanOverlay
     ):
-        """Dodge F-16C-50 from Vaziani, hot ramp; gorge ingress, Ardon egress."""
+        """Dodge F-16C-50 from Vaziani, hot ramp; gorge ingress, Ardon egress.
+
+        Shooter and killer across the pair (`_FITS`): the HARMs and the HTS on
+        slot 1, four CBU-105 on slot 2 for whatever stops radiating. Every
+        section flies the same corridor — the masking in `_CORRIDOR` was
+        measured once against the battery's search radar and it is the route,
+        not the jet, that is hidden.
+        """
         sections = player_flight(
             m,
             country=usa,
@@ -740,17 +839,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             maintask=task.SEAD,
             start_type=StartType.Warm,
             slots=self.players,
-            stores=[
-                (1, "AIM_120C_AMRAAM___Active_Radar_AAM"),
-                (2, "AIM_9X_Sidewinder_IR_AAM"),
-                (3, "AGM_88C_HARM___High_Speed_Anti_Radiation_Missile_"),
-                (4, "Fuel_tank_370_gal"),
-                (6, "Fuel_tank_370_gal"),
-                (7, "AGM_88C_HARM___High_Speed_Anti_Radiation_Missile_"),
-                (8, "AIM_9X_Sidewinder_IR_AAM"),
-                (9, "AIM_120C_AMRAAM___Active_Radar_AAM"),
-                (10, "AN_ASQ_213_HTS___HARM_Targeting_System"),
-            ],
+            loadouts=_FITS,
         )
 
         overlay = scene.overlay.overlay
@@ -867,8 +956,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         """A covered field at each end: Vaziani under Hawk, Mozdok under S-125.
 
         The blue half matters more here than in any other mission in the project.
-        `Dodge` flies 168 km alone into an S-300 with four HARMs and no support
-        beyond an AWACS track behind the border; the only reason "abort and run"
+        `Dodge` flies 168 km into an S-300 as a pair, with two HARMs between them and
+        no support beyond an AWACS track behind the border; the only reason "abort and run"
         is a real option rather than a slower loss is that there is somewhere for
         it to end. Soganlug is 8 km from Vaziani, so it comes free inside the
         same envelope and a jet that cannot fly a normal approach has two

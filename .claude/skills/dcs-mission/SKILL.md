@@ -135,8 +135,10 @@ A "realistic" mission is more than spawning aircraft. Hit these before done:
   Russian-coalition field — call `set_blue()` / `set_red()` explicitly.
 - **Package composition makes sense.** A strike needs escort + SEAD + tanker
   + AWACS, not a lone F-16 with bombs. Even small missions get AWACS or GCI.
-- **Loadouts match the task.** No Mavericks on SA-10 (use HARM); no F-15Cs
-  with bombs.
+- **Loadouts match the task, and the flight splits them.** No Mavericks on
+  SA-10 (use HARM); no F-15Cs with bombs. And no jet carrying both halves of a
+  two-part frag badly: **the minimum is two coop slots and they carry different
+  fits** — see *The flight splits its loadout*.
 - **Threats layered, not stacked.** One SA-6 + a few Shilkas reads harder
   than five SA-10s on one hill.
 - **The objective cannot be reached from any bearing.** Contested ground gets a
@@ -344,7 +346,10 @@ texture beats a fingerprint.
   count the air-to-air stations the player's loadout actually leaves free
   (an F-16C with two wing tanks has six, and stations 4/6 take no missile at
   all), allow **two shots per kill** against `Skill.Excellent` crews, and that
-  is the whole kill budget — ~3 per jet. Over it the mission is not ace, it is
+  is the whole kill budget — ~3 per jet, and **fewer on the jets carrying the
+  frag**, since a HARM or a bomb on 3/7 costs two of the six. Sum it with
+  `MissionBuilder.air_to_air_shots(_FITS)` rather than multiplying a constant by
+  the slot count. Over it the mission is not ace, it is
   arithmetically unwinnable, which `abkhaz_sweep` was: six Excellent bandits
   and a kill-them-all frag against one jet's six missiles, at every slot count.
   Three legitimate fixes — derive the enemy count from the player count, add
@@ -940,11 +945,16 @@ each unit's `skill = Skill.Client` (PYDCS_REFERENCE.md covers the API).
 
 Rules:
 
-- `group_size` on the player flight = requested player count (1–4).
+- `group_size` on the player flight = requested player count, **minimum two**
+  (`MissionBuilder.MIN_PLAYERS`), and above four it is more than one group —
+  always `mission_kit.player_flight`, never a raw `group_size`.
 - **The opposition scales with it, and so does what is tasked.** A fixed
   enemy count means the mission is balanced for at most one value of
   `--players`; derive both from `self.players` and check the result against
   the flight's magazine (see *Difficulty → Guidelines*).
+- **The slots carry different loadouts.** Declare the flight's fit table as a
+  module constant and pass it as `loadouts=`; see *The flight splits its
+  loadout* below.
 - **All** units in the flight get `Skill.Client`. Empty Client slots appear
   as unoccupied seats in MP UI; DCS leaves them parked if nobody joins.
 - Default `start_type=StartType.Warm` (hot ramp). Cold only when the user
@@ -956,6 +966,64 @@ Rules:
 - Two-seat modules (F-14B, AH-64D): pydcs still spawns one unit per
   `group_size`. The second seat is occupied via a separate MP slot in-game,
   not via pydcs.
+
+## The flight splits its loadout
+
+**Two coop slots is the floor, and the two jets do not carry the same thing.**
+The mechanics are in CLAUDE.md (`core/loadout.py`, `loadout.Loadout`,
+`loadouts=` on `player_flight`, `self.loadout_table` / `self.loadout_brief`);
+what belongs here is how to *choose* the split.
+
+Start from the arithmetic, because it is what makes the split necessary rather
+than decorative. An F-16C-50 with two bags, a jammer and two pods has six
+stations left, and only **three of them** — 3, 7 and the 2/8 pair — take
+anything but an air-to-air missile. So a jet that hangs HARMs on 3/7 has no
+bomb, a jet that hangs bombs there has no HARM, and both fly with four missiles
+instead of six. One jet cannot hold a two-part frag; a pair can, and each half
+is then flown properly instead of compromised.
+
+**Ask what the mission already contains, and give the second jet the half the
+first one had to drop.** Four patterns cover everything in this project:
+
+| pattern | when | example |
+|---|---|---|
+| **shooter + killer** | the frag is a radar site | HARM + HTS on one, CBU-105 on the other — a battery that goes dark is still a battery |
+| **two weapons, one target set** | the target is not homogeneous | submunitions for a scattered platoon, laser bombs for the armour in it |
+| **strike + escort** | the mission's other half is air | one bomber, one jet with six air-to-air missiles and no ordnance for the ground |
+| **one magazine, split** | both jets are on the same job | a pure sweep: every shot a radar shot on one, two given up for AIM-9X on the other |
+
+Rules that decide which one:
+
+- **Measure the claim that the CAP will cover it.** "Escort" is only the right
+  second fit if the friendly CAP genuinely cannot be there. Fly the routes and
+  look: `eastern_shield`'s Eagle needs 21 minutes to reach its station against a
+  player over the target at 9, so the flight is its own cover and the second fit
+  is air-to-air. If a TARCAP is on station before the push, spend the second jet
+  on the ground instead.
+- **Never re-price a scarcity the mission was designed around.** If the sortie's
+  tension is "two bombs, three aimpoints" or "four bombs across two halls and a
+  shipment", the wingman carries **no bomb at all** — otherwise a second pilot
+  showing up deletes the decision the mission is about. Then say in the briefing
+  what a pair still has to choose and what four slots change.
+- **Both fits should be ED payloads, station for station.** Grep
+  `<DCS>/CoreMods/aircraft/<module>/UnitPayloads/*.lua` for the weapon and read
+  the stations off the payload that carries it, exactly as for a single fit.
+  "Legal in pydcs" and "a fit somebody flies" are still different tests.
+- **Name the role after the weapon**, not the doctrine word: `HARM/HTS`,
+  `GBU-12*4`, `AIM-120C*6`. It is a dozen characters on a kneeboard card, and it
+  has to tell a pilot what his wingman can do.
+- **Count the whole flight's magazine** before setting the bandit count.
+  `MissionBuilder.air_to_air_shots(_FITS)` reads it off the loaded rails, and a
+  split flight is *not* six shots a jet — the jet with the bombs has four.
+- **More slots repeat the pair.** The table cycles, so four slots are two
+  elements each carrying the same split. Declare a third fit only when the
+  mission has a genuine third job at that size.
+
+Then put the table in all three views — README (`loadout_table`), in-game
+briefing (`loadout_brief`) and the kneeboard, which the base class writes for
+you. The briefing must say **which slot** carries the frag-critical stores,
+because a player picking a jet on the slot-selection screen is choosing a role
+without knowing it otherwise.
 
 ## After generating
 
@@ -969,4 +1037,5 @@ Rules:
    For sanity, re-load via `Mission().load_file(path)` if the user wants it.
 4. List the knobs the user can tweak (theater, airframe, players, difficulty,
    length, time, package, threats) and show the exact CLI re-invocation,
-   e.g. `--players 2 --difficulty veteran --airframe FA_18C_hornet --length-minutes 60`.
+   e.g. `--players 4 --difficulty veteran --airframe FA_18C_hornet --length-minutes 60`
+   (`--players` starts at 2).

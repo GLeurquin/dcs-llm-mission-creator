@@ -15,12 +15,24 @@ from dcs.task import CAP
 from dcs.terrain import Caucasus
 from dcs.unit import Skill
 
+from dcs_mission_creator.core.loadout import Loadout
 from dcs_mission_creator.core.mission_kit import (
     MAX_FLIGHT_SIZE,
     player_flight,
     section_names,
     section_sizes,
     sections_of,
+    slot_names,
+)
+
+_AMRAAM = "AIM_120C_AMRAAM___Active_Radar_AAM"
+_SIDEWINDER = "AIM_9X_Sidewinder_IR_AAM"
+
+#: A two-fit table, which is what every mission here now declares: the slots of
+#: one flight do not carry the same jet.
+_FITS = (
+    Loadout(role="AMRAAM", carries="one AIM-120C", stores=((1, _AMRAAM),)),
+    Loadout(role="9X", carries="one AIM-9X", stores=((1, _SIDEWINDER),)),
 )
 
 
@@ -61,7 +73,7 @@ def _build(m: Mission, slots: int):
         maintask=CAP,
         start_type=StartType.Warm,
         slots=slots,
-        stores=[(1, "AIM_120C_AMRAAM___Active_Radar_AAM")],
+        loadouts=_FITS,
     )
 
 
@@ -82,12 +94,34 @@ def test_every_slot_is_a_client(mission: Mission):
         assert all(u.skill == Skill.Client for u in group.units)
 
 
-def test_every_section_carries_the_same_loadout(mission: Mission):
-    loadouts = {
-        tuple(sorted((p, w["CLSID"]) for p, w in g.units[0].pylons.items()))
-        for g in _build(mission, 6)
-    }
-    assert len(loadouts) == 1
+def _clsids(group, index: int) -> tuple[str, ...]:
+    return tuple(w["CLSID"] for _, w in sorted(group.units[index].pylons.items()))
+
+
+def test_slots_alternate_the_declared_fits(mission: Mission):
+    """The fit table cycles in order, slot 1 first — the briefing says so."""
+    group = _build(mission, 4)[0]
+    roles = [_clsids(group, i) for i in range(4)]
+    assert roles[0] == roles[2] and roles[1] == roles[3]
+    assert roles[0] != roles[1]
+
+
+def test_the_cycle_runs_across_sections_not_per_section(mission: Mission):
+    """Slot 5 continues the table; it does not restart at the first fit.
+
+    Six slots are `(4, 2)`, so restarting per section would hand slot 5 the same
+    fit as slot 1 and leave the flight two jets short of the second one.
+    """
+    lead, second = _build(mission, 6)
+    assert _clsids(second, 0) == _clsids(lead, 0)  # slot 5 -> fit 1 (even cycle)
+    assert _clsids(second, 1) == _clsids(lead, 1)
+    assert _clsids(lead, 0) != _clsids(lead, 1)
+
+
+def test_slot_names_match_the_dcs_slot_list(mission: Mission):
+    """The briefing's slot column has to be the string the player clicks."""
+    built = [u.name for g in _build(mission, 6) for u in g.units]
+    assert slot_names("Dodge", 6) == tuple(built)
 
 
 def test_sections_know_each_other(mission: Mission):

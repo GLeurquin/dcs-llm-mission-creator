@@ -24,8 +24,11 @@ a target on a plate. The reply is text only — the numbers are computed in the
 mission, and `VoiceSynth` renders its audio ahead of time.
 
 This does not replace `tasking.fac_attack_group`: that is what makes the
-controller acquire, lase and talk. Arm both — the laser spot and the 9-line
-stay stock, this only adds the coordinates in a form the cockpit can take.
+controller acquire and talk. Arm both — the 9-line stays stock, this only adds
+the coordinates in a form the cockpit can take. Note that the menu here needs
+no radio at all, which the stock controller's own calls do: pair it with
+`laser.arm_autolase` on any mission where the player takes the controller's
+spot, or the coordinates arrive in the right units and the laser still does not.
 
 A `CoordTarget.laser_code` is checked against `laser.AI_JTAC_CODE` and refused
 if it differs, because the ME's FAC task carries no code field: whatever a

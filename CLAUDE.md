@@ -30,7 +30,9 @@ This is a pydcs-based DCS mission generator. Three docs, one job each:
     into `m` and returns the overlay its positions came from. Use
     `self.players` (1–6, validated by the base class) for client-slot counts —
     build the player flight with `mission_kit.player_flight`, never with a raw
-    `group_size=self.players` (see below);
+    `group_size=self.players` (see below). **The floor is two**
+    (`MissionBuilder.MIN_PLAYERS`), and the flight splits its loadout across the
+    slots — see *Loadouts are split across the flight*;
   - `def readme(self) -> str` — returns the README.md content (markdown,
     the mission briefing).
 - The base class owns everything around that, and **a mission overrides none
@@ -1690,6 +1692,92 @@ coded the same"), `kuban_forge` and `idlib_gauntlet`, where the flight with the
 bombs is `Pontiac` rather than the player and the briefing says that too — `Uzi`
 carries self-guided SFW and nothing on a laser at all.
 
+### The spot has to be up before the jet is there
+
+The code is only half the claim. The other half is whether anything is lasing
+when the player rolls in, and as DCS ships it the answer is **no unless he has
+had a radio conversation first**: the AI controller's spot lives inside the
+check-in and the talk-on, over a set the player has to be tuned to, in range of
+and — because a ground JTAC is a ground unit — in line of sight of. Every low
+route in this project is built to deny exactly that. `kuban_forge` spends two
+hundred kilometres of valley masked from everything, `coastal_cover` comes out
+of a terrain-masked corridor onto a detachment doing 35 km/h, and in both the
+player arrives with a pass to fly and no minute to spend raising anybody. The
+laser comes up after the pass, or not at all, and from the cockpit that is
+indistinguishable from a wrong code — with the cruel detail that the player's
+own recourse, retuning the pod, cannot help, because the pod was never the half
+that was wrong.
+
+`laser.arm_autolase` puts the spot where the briefing already said it was: on
+the target from mission start, held on the nearest vehicle the designator can
+**see** (`land.isVisible`, measured) inside its own reach, moved as the target
+drives, and gone when the team is dead. It reads nothing about the player — no
+check-in, no range, no slot — because a spot that waits for the jet is the same
+defect one step further down the road. The stock task stays: `fac_attack_group`
+is still what talks, what reads a 9-line to a grid cockpit, and what makes the
+controller acquire.
+
+```python
+laser.arm_autolase(m, [laser.LaserSpot(
+    tacp, detachment, code=_LASER_CODE, label="Pinpoint 1-1",
+    lead_correction=True,          # the target is driving and there is one pass
+)])
+```
+
+**The method is Ciribob's** — [DCS-CTLD](https://github.com/ciribob/DCS-CTLD)'s
+`ctld.JTACAutoLase` is the reference implementation — reimplemented in
+`core/lua/autolase.lua` rather than vendored, for two reasons written up in
+`core/lua/vendor/README.md`: CTLD needs 26 distinct `mist.*` functions
+(databases and dynamic spawning, not the thin conversion slice `mist_shim.lua`
+covers for Skynet) and its repository carries no licence file. Five of its
+decisions were worth taking exactly as they are, and the last is the one that is
+invisible when you get it wrong:
+
+- the beam leaves the designating vehicle 2 m up, and the aim point is the
+  target's own origin lifted 2 m — not the ground under it;
+- line of sight is tested with **both** ends lifted 2 m, because two points on
+  the deck fail across the gentlest rise;
+- 10 km of reach (CTLD's `JTAC_maxDistance`), which is a vehicle-mounted
+  designator rather than a man-portable one;
+- the nearest visible vehicle gets the spot, and the one already lased keeps it
+  while it still qualifies — a spot that hops to a closer truck mid-fall throws
+  the weapon off the vehicle the pilot was talked onto;
+- **the spot is moved often enough that the target never travels more than a few
+  metres between updates** (`max_drift_m`, bounded by `min_update_s` /
+  `max_update_s`), while target *selection* runs on its own slower `verify_s`
+  clock because it costs a terrain query per vehicle. A fixed one-second update
+  leaves a 35 km/h truck ten metres ahead of the spot, which for a GBU-12 is the
+  difference between the hit and the dust behind it.
+
+An IR pointer goes up on the same point by default, which is what makes the
+target findable through goggles or an IR pod at night. `lead_correction` is
+CTLD's `laseSpotCorrections` — a second of the vehicle's travel and 1.05 s
+upwind — off by default because it is not something the crew is really
+computing: it is a correction for the way a DCS LGB trails a moving spot, and it
+belongs on a mission whose target is at road speed and whose player has one
+pass. Both missions where the player takes an AI spot (`coastal_cover`,
+`kuban_forge`) carry it.
+
+`idlib_gauntlet` deliberately does **not** arm one, and the reason is the test
+for whether a mission needs it: there the laser is for `Pontiac`, an AI Hornet,
+and an AI flight needs no radio conversation to use a spot. Arm this where a
+*player* takes the controller's laser.
+
+It says nothing on the radio, on purpose — every call here goes through
+`core/triggers.py` so the screen text and the TTS render cannot drift, and a
+Lua-side call would be text-only. When the laser comes and goes with the
+terrain, the mission says so with its own triggers on the geometry that decides
+it: `coastal_cover`'s party calls the sight line opening and closing off zones
+on the road it is actually watching. `trace=True` writes each decision to
+`dcs.log` under `LASER/<label>` (`grep 'LASER/' dcs.log`) and nothing to the
+screen, like `core/iads.py`'s trace.
+
+And the briefing has to say the spot is already up, or the feature is invisible
+in the same way `core/jtac.py`'s readout was: a player who has been taught that
+a JTAC needs a check-in will spend the window doing one. Both briefing views of
+both missions now say it, and say that the net is there for the talk-on and the
+coordinates rather than as a precondition for the laser.
+
 ## Kneeboard helper (project-owned)
 
 [`kneeboard`](src/dcs_mission_creator/core/kneeboard/) writes the cards the
@@ -2010,14 +2098,15 @@ of them holds policy: force composition, timings and text stay in the mission.
   six coop slots in one group silently shipped four and the CLI's own
   `--players 6` was a lie. `player_flight` splits the slots
   (`section_sizes`: 5 is `(3, 2)`, 6 is `(4, 2)`, never a four-ship trailed by a
-  lone jet), builds each section from the same field with the same `stores`,
+  lone jet), builds each section from the same field, arms each **slot** from
+  the flight's own fit table (`loadouts=`, see the loadout-split section below),
   marks the slots and records the groups as **one flight**. The mission then
   gives each section the same route, which is why every `_spawn_player` here now
   ends in a `_route_<callsign>` helper: the corridor is a search against the
   terrain, and two sections searching separately would fly two plans under one
   briefing.
 
-  Three things read that record rather than counting groups, and each was a way
+  Four things read that record rather than counting groups, and each was a way
   a split flight would otherwise be quietly wrong:
 
   - `core/datalink.py` teams the **sections together**, so a six-slot flight sees
@@ -2029,6 +2118,11 @@ of them holds policy: force composition, timings and text stay in the mission.
     so a briefing that says `Dodge` while the slot list offers `Dodge` and
     `Dodge 2` cannot happen. `readme()` holds no `Mission`, so the naming comes
     off `mission_kit.section_names` — the same table the groups were built from.
+  - `mission_kit.slot_names(flight, slots)` is the same trick one level down: it
+    is the `"<group> Pilot #<n>"` string DCS puts on the slot-selection screen,
+    which is what the loadout table's Slot column prints. A five- or six-slot
+    flight restarts its pilot numbers at the second section, so "slot 5" and
+    "Pilot #1" are both true of the same jet and only one of them is clickable.
 
   A trigger gated on "the player" needs every section: `GroupDead` ANDed
   (`daryal_run`, `abkhaz_sweep` — the loss call must not fire with jets still up)
@@ -2226,7 +2320,12 @@ hands the player the whole aimpoint choice before he starts engines.
   worked example of a placement whose constraints were unsatisfiable where the
   briefing pointed, and of the two ways a coast breaks a placement filter (no
   roads inland of the highway; `min_relative_height_m` reading a beach as high
-  ground because the sea drags the local mean below zero).
+  ground because the sea drags the local mean below zero). It is also the
+  worked example of the *other* audit in the force-balance section: it flew a
+  **pure air-to-air fit** against a win condition of "the FOB is wrecked", so
+  its player carried nothing that could complete it. It now splits CBU-105 and
+  GBU-12 across the pair — submunitions for the scattered platoon, laser bombs
+  for the armour and the Shilka.
 - [daryal_run.py](src/dcs_mission_creator/missions/daryal_run.py) — Caucasus
   ace: F-16C SEAD out of Vaziani against an S-300PS south of Beslan, up the
   Georgian Military Road and the Daryal Gorge. The reference for a **route
@@ -2401,8 +2500,8 @@ caught, both legal in pydcs:
   `abkhaz_sweep` flies the second; the four F-16 missions with a HARM or a bomb
   on 3/7 fly the first. Note also that **every** ED two-tank F-16C payload
   carries an ALQ-184 on the centreline (station 5), and this project left that
-  station empty in all six missions — `abkhaz_sweep` is the only one fixed so
-  far.
+  station empty in all six missions. Every player fit in the project now
+  carries it.
 - **The F-15C never flies a single wing tank.** Its fuel stations are 2 (left
   wing), 6 (centerline) and 10 (right wing); all eleven ED payloads that carry
   fuel use 6, and the wing pair only ever comes as 2 + 10. A lone `(10, tank)`
@@ -2413,6 +2512,105 @@ CAS or LGB tasking wants a targeting pod on the jet that needs one — except th
 A-10C, whose TGP is integrated (no ED payload lists an AAQ-28, so don't add
 one).
 
+## Loadouts are split across the flight (project-owned)
+
+**Every mission is built for at least two coop slots** (`MissionBuilder.MIN_PLAYERS`,
+and both CLIs default to it), and the two slots do not carry the same jet.
+[`loadout`](src/dcs_mission_creator/core/loadout.py) is the table that says who
+carries what.
+
+The reason is arithmetic rather than taste. An F-16C-50 has eleven stations, and
+by the time the bags are on 4/6, the ALQ-184 on 5 and the pods on 10/11, what is
+left is 1/2/3/7/8/9 — of which **1/2 and 8/9 take a missile and nothing else**.
+So *three* stations decide the sortie, and a jet that spends 3/7 on HARM has no
+bomb while one that spends them on bombs has no HARM. A single-slot mission
+therefore spent its whole design budget deciding which half of its own frag to
+throw away, and every mission here had a fit that was worse at both jobs than
+either of the two it has now. `kodori_strike` is the case that makes it plain:
+it flew a **pure air-to-air fit** against a win condition of "the FOB is
+wrecked", so its player could not complete it.
+
+```python
+from dcs_mission_creator.core import loadout
+
+_FITS = (
+    loadout.Loadout(
+        role="HARM/HTS",                       # short — the kneeboard prints it
+        carries="two AGM-88C, HTS pod, four AIM-120C, ALQ-184, two 370 gal",
+        stores=((1, _AMRAAM), ..., (10, _HTS), (11, _TGP)),
+    ),
+    loadout.Loadout(
+        role="CBU-97*4",
+        carries="four CBU-97 SFW on TERs, LITENING pod, ...",
+        stores=(...),
+    ),
+)
+
+sections = player_flight(..., slots=self.players, loadouts=_FITS)
+```
+
+`player_flight` **cycles the table over the slots in order**, across sections
+rather than restarting per section. That is the whole scaling rule: two slots
+are the complementary pair the mission was written for, four are two elements
+each carrying the same split — so an element that loses its partner is still
+half a package rather than a jet that cannot do the job — and a mission that
+wants a third capability at four slots declares a third fit. Slot 1 always gets
+the first fit, so the briefing can name who is carrying what without holding the
+built mission.
+
+**The fits are written per unit.** `FlyingGroup.load_pylon` writes the same
+store to every airframe in the group, so arming a flight through it can only
+ever produce a uniform one; `loadout.arm_unit` is the per-slot half, and it
+clears the stations first for the same reason `mission_kit.arm` does.
+`mission_kit.arm` is still the right call for an **AI** flight, which is
+uniform by nature.
+
+**Three views, one table.** The fits are a module constant so `readme()` — which
+holds no `Mission` — can render them too:
+
+- `self.loadout_table(flight, _FITS)` — the README's markdown table, one row per
+  slot, with the slot column holding the `"<group> Pilot #<n>"` string DCS puts
+  on the slot-selection screen. A pilot picking a jet reads the same string in
+  the briefing and in the game.
+- `self.loadout_brief(flight, _FITS)` — the same table as plain text for
+  `set_description_text`, wrapped narrow to match the rest of that panel.
+- the **kneeboard remark**, written by `MissionBuilder._remark_loadouts` for
+  every mission so none can forget it: `Dodge fits: #1/#3 HARM/HTS; #2/#4
+  CBU-105*4`. Slots are grouped by fit rather than listed one per slot, because
+  a six-slot flight listed individually runs past the card's 98 columns. It
+  passes the remark test in the kneeboard section — a pilot's own stores are on
+  the SMS page, and **his wingman's are nowhere in the cockpit at all**.
+
+Name a `role` after the weapon that decides the job (`HARM/HTS`, `GBU-12*4`,
+`AIM-120C*6`), not after the doctrine word: it is a dozen characters on a card,
+and "Weasel" tells a pilot less than "HARM/HTS" does.
+
+**What the second fit should be is a question about the mission, not a
+template.** Across the eight it came out three ways, and each is the honest
+answer to what that sortie already contained:
+
+| pattern | missions | the second jet exists because |
+|---|---|---|
+| shooter + killer | daryal_run, idlib_gauntlet | a battery that goes dark under a HARM is still a battery, and a Flap Lid is a vehicle on a hill rather than a signal |
+| two weapons, one target set | kodori_strike | nine scattered vehicles with armour in them are not one target: submunitions for the platoon, laser bombs for the T-72s |
+| strike + escort | coastal_cover, eastern_shield, ansariyah_works, kuban_forge | the mission's other half is air, and the CAP cannot be there — measured, not assumed (`eastern_shield`'s Eagle is 21 minutes from station against a player over the target at 9) |
+| one magazine, split | abkhaz_sweep | a pure sweep is the one tasking where both jets have the same job, so what differs is the weapon: six radar shots on one, two of them given up for AIM-9X on the other |
+
+**The split must not quietly re-price the mission.** Three of these were
+designed around a scarcity, and the second fit was chosen to keep it:
+`ansariyah_works` is two bombs against three aimpoints, `kuban_forge` is four
+bombs across two halls and a shipment, `coastal_cover` is two bombs against
+three trucks. In all three the wingman carries **no bomb at all**, so the
+decision the mission is built on survives a second pilot showing up, and only a
+four-slot flight — which puts a second bomber up — softens it. Say so in the
+briefing: those three READMEs each state what a pair still has to choose and
+what four slots change.
+
+`loadout.air_to_air_shots` counts the missiles off the loaded stores, and
+`MissionBuilder.air_to_air_shots(_FITS)` sums them over the assignment — which is
+what the force-balance rule below now divides by two, so a mission scaling its
+opposition off `--players` cannot drift away from what the jets are carrying.
+
 ## Force balance: the magazine is the budget
 
 **A mission may not task more kills than the player flight is carrying weapons
@@ -2422,8 +2620,8 @@ example of getting it wrong: a fixed six bandits — four Su-27 and a MiG-29S
 pair, all `Skill.Excellent` — against a win condition of "both flights dead",
 whatever `--players` said. A single-slot `Dodge` therefore launched with **six
 air-to-air missiles against six of the best crews in the game** and a frag that
-required all six to die, with no tanker, no rearm and no wingman. Four slots
-faced the same six.
+required all six to die, with no tanker and no rearm. Four slots faced the same
+six.
 
 The arithmetic that fixes it is short, and the first two terms are facts about
 the airframe rather than judgement calls:
@@ -2435,14 +2633,21 @@ the airframe rather than judgement calls:
   that buys a seventh shot without giving up the fuel a 55-minute unsupported
   sortie needs.
 - **Two shots per kill** is the planning factor against `Skill.Excellent`
-  fighters. So one player jet is worth ~3 kills, and that is the whole budget.
+  fighters. So one player jet is worth ~3 kills, and the flight's budget is the
+  sum over its slots — which is **not** three times the slot count once the
+  fits differ: a Viper carrying HARMs or bombs on 3/7 is worth two kills, not
+  three. Count it with `MissionBuilder.air_to_air_shots(_FITS)`, which reads the
+  rails rather than a constant, and let the opposition follow it
+  (`abkhaz_sweep._plan_bandits` takes the magazine, not the player count).
 - **Then pick one of three levers** — all three are legitimate, and
   `abkhaz_sweep` now uses the first and the third:
   1. **Scale the opposition off the player count** (`_plan_bandits`), so the
      number of bandits is derived from the magazine rather than chosen.
   2. **Add friendly AI** — but note this trades away mission character: "no
-     tanker, no escort, no wingman" *is* the ace composition here, so adding a
-     flight was the wrong lever for this mission.
+     tanker, no escort, nothing else airborne" *is* the ace composition here,
+     so adding a flight was the wrong lever for this mission. The player's own
+     wingman is not that lever either: he is already priced in, because the
+     opposition is sized off the flight's whole magazine.
   3. **Task less than the airspace.** Not every enemy has to be a required
      kill. Make the objective the element that gates the campaign effect (the
      Sochi CAP that pins the AWACS track) and let the rest be a threat to
@@ -2458,8 +2663,10 @@ Gudauta section is a threat to beat, not a target list" — or a player who
 disengages correctly cannot tell a designed off-ramp from a broken trigger.
 
 The same audit is worth running on any mission whose objective is "destroy the
-X": count what the package carries, divide by two, and compare. Nothing but
-`abkhaz_sweep` has been checked this way yet.
+X": count what the package carries, divide by two, and compare. The air-to-air
+half is now mechanical (`air_to_air_shots`); the air-to-ground half still has to
+be counted by hand, and it is what caught `kodori_strike` flying a pure
+air-to-air fit against a win condition of "the FOB is wrecked".
 
 ## Running
 
@@ -2467,11 +2674,11 @@ X": count what the package carries, divide by two, and compare. Nothing but
 available)
 
 ```bash
-uv run python -m dcs_mission_creator.missions.coastal_cover --players 1
+uv run python -m dcs_mission_creator.missions.coastal_cover --players 2
 
 # or via the unified CLI (auto-discovers every mission module):
 uv run dcs-mission-creator list
-uv run dcs-mission-creator generate coastal_cover --players 1
+uv run dcs-mission-creator generate coastal_cover --players 2
 ```
 
 ## Lint and type-check

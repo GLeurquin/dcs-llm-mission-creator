@@ -256,6 +256,12 @@ grp.load_pylon(f16.Pylon10.AN_ASQ_213_HTS___HARM_Targeting_System)
 - `FlyingGroup.load_pylon(store, pylon=None)` applies to every unit in the
   group; the pylon number comes from the tuple. Discover options with
   `[a for a in dir(planes.F_16C_50.Pylon3) if not a.startswith("_")]`.
+- **Pylons are per unit, and the group method hides that.** `FlyingUnit` carries
+  its own `pylons` dict and its own `load_pylon`, so two slots of one flight can
+  fly different fits — which every player flight in this project does. Reaching
+  for the *group* method is what makes a flight uniform, so it is right for an
+  AI flight and wrong for a coop one; `core/loadout.py` writes the per-slot
+  version (`mission_kit.arm` is still the group-wide one).
 - Raw CLSIDs live in `dcs.weapons_data.Weapons` if you need a name→id lookup.
 
 ---

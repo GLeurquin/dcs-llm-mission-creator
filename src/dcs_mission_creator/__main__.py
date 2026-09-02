@@ -37,7 +37,11 @@ import structlog
 
 from dcs_mission_creator import missions
 from dcs_mission_creator.core.log import configure as configure_logging
-from dcs_mission_creator.core.mission_builder import MAX_PLAYERS, MissionBuilder
+from dcs_mission_creator.core.mission_builder import (
+    MAX_PLAYERS,
+    MIN_PLAYERS,
+    MissionBuilder,
+)
 from dcs_mission_creator.map_overlay.layers import BuildLayer, QueryLayer, RenderLayer
 
 _MISSIONS_ENV = "DCS_MISSIONS_FOLDER"
@@ -301,9 +305,13 @@ def main(argv: list[str] | None = None) -> int:
     gen.add_argument(
         "--players",
         type=int,
-        default=1,
-        choices=range(1, MAX_PLAYERS + 1),
-        help="Number of coop client slots in the player flight (default: 1).",
+        default=MIN_PLAYERS,
+        choices=range(MIN_PLAYERS, MAX_PLAYERS + 1),
+        help=(
+            "Number of coop client slots in the player flight "
+            f"(default: {MIN_PLAYERS}). The flight splits its loadout across "
+            "them, so slot 1 and slot 2 do not carry the same jet."
+        ),
     )
 
     _add_overlay_subcommand(sub)

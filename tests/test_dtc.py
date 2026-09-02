@@ -24,8 +24,16 @@ from dcs.terrain import Caucasus
 
 from dcs_mission_creator.core import dtc, mission_kit, waypoints
 from dcs_mission_creator.core.kneeboard.flightplan import flight_plan
+from dcs_mission_creator.core.loadout import Loadout
 from dcs_mission_creator.core.map_draw import PlanOverlay
 from dcs_mission_creator.core.mission_kit import mark_clients
+
+#: A clean two-fit table. These tests are about how the flight is *built*, not
+#: what it carries, so the fits differ only enough to be two of them.
+_BARE_FITS = (
+    Loadout(role="clean", carries="nothing", stores=()),
+    Loadout(role="clean 2", carries="nothing", stores=()),
+)
 
 
 @pytest.fixture
@@ -578,7 +586,7 @@ def test_two_sections_of_one_flight_do_not_raise(mission: Mission, tmp_path: Pat
         maintask=CAP,
         start_type=StartType.Warm,
         slots=6,
-        stores=[],
+        loadouts=_BARE_FITS,
     )
     for flight in sections:
         flight.add_runway_waypoint(batumi)

@@ -33,14 +33,14 @@ class FakeBuilder(MissionBuilder):
         return f"# {self.title}\nplayers={self.players}\n"
 
 
-@pytest.mark.parametrize("n", [1, 2, 3, 4, 5, 6])
+@pytest.mark.parametrize("n", [2, 3, 4, 5, 6])
 def test_players_in_range_ok(n: int):
     assert FakeBuilder(players=n).players == n
 
 
-@pytest.mark.parametrize("n", [0, -1, 7, 100])
+@pytest.mark.parametrize("n", [0, 1, -1, 7, 100])
 def test_players_out_of_range_raises(n: int):
-    with pytest.raises(ValueError, match="players must be 1..6"):
+    with pytest.raises(ValueError, match="players must be 2..6"):
         FakeBuilder(players=n)
 
 
@@ -66,7 +66,7 @@ def test_generate_creates_dir_and_writes_files(tmp_path: Path):
     assert miz == out / "fake.miz"
     assert readme == out / "README.md"
     assert miz.exists() and miz.stat().st_size > 0
-    assert readme.read_text() == "# Fake Mission\nplayers=1\n"
+    assert readme.read_text() == "# Fake Mission\nplayers=2\n"
 
 
 def test_generate_uses_name_for_miz_filename(tmp_path: Path):

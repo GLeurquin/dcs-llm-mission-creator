@@ -128,7 +128,15 @@ def test_split_player_flight_is_one_team(mission: Mission):
     from dcs.mission import StartType
     from dcs.task import CAP
 
+    from dcs_mission_creator.core.loadout import Loadout
     from dcs_mission_creator.core.mission_kit import player_flight
+
+    # Two fits, because every player flight in this project declares two;
+    # this test is about the datalink team, so they differ in name only.
+    _BARE_FITS = (
+        Loadout(role="clean", carries="nothing", stores=()),
+        Loadout(role="clean 2", carries="nothing", stores=()),
+    )
 
     sections = player_flight(
         mission,
@@ -139,7 +147,7 @@ def test_split_player_flight_is_one_team(mission: Mission):
         maintask=CAP,
         start_type=StartType.Warm,
         slots=6,
-        stores=[],
+        loadouts=_BARE_FITS,
     )
     assign_datalink_identities(mission)
 

@@ -17,10 +17,13 @@ from typing import TYPE_CHECKING, Sequence
 from dcs.unit import Skill
 from dcs.unittype import UnitType
 
+from dcs_mission_creator.core import loadout
+
 # Re-exported: `set_skill` has lived in air_defense.py since the site builders
 # needed it, and it applies to any group, so missions should not have to know
 # that. Importing it here keeps that detail out of the mission files.
 from dcs_mission_creator.core.air_defense import set_skill
+from dcs_mission_creator.core.loadout import Loadout, arm_group
 
 if TYPE_CHECKING:
     from dcs.country import Country
@@ -44,6 +47,7 @@ __all__ = [
     "section_sizes",
     "sections_of",
     "set_skill",
+    "slot_names",
     "unit_of_type",
 ]
 
@@ -86,11 +90,12 @@ def arm(
     The `PylonN` classes on each `PlaneType` enumerate what a station legally
     accepts, so these pairs are checked against pydcs rather than guessed —
     a wrong name is an `AttributeError` at build time, not a silent empty rail.
+
+    This is the uniform case, which is what an AI flight wants. A player flight
+    splits its fit slot by slot instead (`core/loadout.py`, via
+    `player_flight`), because a two-ship carries the whole frag between it.
     """
-    for unit in group.units:
-        unit.pylons.clear()
-    for pylon, weapon in stores:
-        group.load_pylon(getattr(getattr(plane_type, f"Pylon{pylon}"), weapon))
+    arm_group(group, plane_type, stores)
 
 
 def unit_of_type(group: Group, vehicle_type: type[UnitType]) -> Unit:
@@ -185,22 +190,32 @@ def player_flight(
     maintask: type[MainTask],
     start_type: StartType,
     slots: int,
-    stores: Sequence[tuple[int, str]],
+    loadouts: Sequence[Loadout],
 ) -> list[FlyingGroup]:
     """Build the player flight as however many DCS-legal sections it takes.
 
     Above `MAX_FLIGHT_SIZE` coop slots the flight is two groups — `Dodge` and
     `Dodge 2` — because a plane group holds four aircraft and pydcs clamps
     rather than raises. They are one flight in every sense the player cares
-    about: same field, same loadout, and the caller gives each the same route.
-    What differs is what DCS makes differ — parking, callsign, track-number
-    block — so each section still reads as itself on the net and on its card.
+    about: same field, one route the caller gives each of them, and one
+    loadout plan running across the whole flight rather than restarting per
+    section. What differs is what DCS makes differ — parking, callsign,
+    track-number block — so each section still reads as itself on the net and
+    on its card.
+
+    `loadouts` is the flight's fit table (`core/loadout.py`), cycled slot by
+    slot: two slots are the complementary pair the mission was written for, and
+    a bigger flight is that pair repeated. It is written **per unit**, because
+    `FlyingGroup.load_pylon` writes to the whole group and could only ever
+    produce a uniform flight.
 
     Returns the sections in slot order, lead first; a mission that needs "the
     player flight" for a trigger wants all of them (`sections_of`).
     """
     sections: list[FlyingGroup] = []
     sizes = section_sizes(slots)
+    assignment = loadout.assign(loadouts, slots)
+    slot = 0
     for section_name, size in zip(section_names(name, len(sizes)), sizes):
         group = m.flight_group_from_airport(
             country=country,
@@ -212,9 +227,12 @@ def player_flight(
             group_size=size,
         )
         mark_clients(group)
-        arm(group, aircraft_type, stores)
+        for unit in group.units:
+            loadout.arm_unit(unit, aircraft_type, assignment[slot].stores)
+            slot += 1
         sections.append(group)
     _sections(m).append(tuple(sections))
+    loadout.record(m, name, assignment)
     return sections
 
 
@@ -238,6 +256,22 @@ def section_names(name: str, sections: int) -> tuple[str, ...]:
     `player_flight`, and both read it from the same place.
     """
     return tuple(name if i == 1 else f"{name} {i}" for i in range(1, sections + 1))
+
+
+def slot_names(flight: str, slots: int) -> tuple[str, ...]:
+    """The unit names DCS lists on the slot-selection screen, in slot order.
+
+    pydcs names a flight's airframes `"<group> Pilot #<n>"`, and that string is
+    what a player actually clicks. The briefing's loadout table prints it so
+    that "the jet with the HARMs" is identified by something visible from
+    outside the mission file — and so that a five- or six-slot flight, whose
+    pilot numbers restart at the second section, is still unambiguous.
+    """
+    names: list[str] = []
+    sizes = section_sizes(slots)
+    for section, size in zip(section_names(flight, len(sizes)), sizes):
+        names.extend(f"{section} Pilot #{i}" for i in range(1, size + 1))
+    return tuple(names)
 
 
 def _sections(m: Mission) -> list[tuple[FlyingGroup, ...]]:

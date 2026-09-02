@@ -12,7 +12,7 @@ import pytest
 from dcs import planes, task
 from dcs.mission import Mission
 from dcs.terrain import Caucasus
-from dcs.unit import Skill
+from dcs.unit import Skill, Vehicle
 from dcs.unitgroup import FlyingGroup, VehicleGroup
 
 from dcs_mission_creator.core import laser
@@ -143,3 +143,51 @@ def test_skill_is_untouched_by_a_code_write(mission: Mission) -> None:
     harrier.units[0].skill = Skill.Client
     laser.set_code(harrier, laser.DEFAULT_CODE)
     assert harrier.units[0].skill == Skill.Client
+
+
+def _vehicles(gid: int, name: str, count: int) -> VehicleGroup:
+    vg = VehicleGroup(gid, name)
+    for i in range(1, count + 1):
+        vg.add_unit(Vehicle(Caucasus(), gid * 100 + i, f"{name} Unit #{i}", "Ural-375"))
+    return vg
+
+
+def test_the_scripted_spot_carries_the_mission_state_into_the_lua(
+    mission: Mission,
+) -> None:
+    tacp, column = _vehicles(1, "Pinpoint", 2), _vehicles(2, "Column", 3)
+    rule = laser.arm_autolase(
+        mission,
+        [laser.LaserSpot(tacp, column, label="Pinpoint 1-1", start_at_s=900.0)],
+    )
+    assert rule in mission.triggerrules.triggers
+    script = rule.actions[0].script
+    assert 'observer="Pinpoint"' in script
+    assert 'target="Column"' in script
+    assert f"code={laser.DEFAULT_CODE}" in script
+    assert "startAt=900.0" in script
+    assert f"range={laser.DESIGNATOR_RANGE_M:.1f}" in script
+    assert "los=true" in script
+    # `lua.render` refuses a surviving placeholder, so this is belt and braces:
+    # one left behind is a Lua syntax error at mission start, i.e. no laser at
+    # all, and it would be invisible until somebody flew the mission.
+    assert "__SPOTS__" not in script
+
+
+def test_a_spot_needs_something_to_lase_from_and_at(mission: Mission) -> None:
+    empty, column = VehicleGroup(1, "Pinpoint"), _vehicles(2, "Column", 1)
+    with pytest.raises(ValueError, match="no units to lase from"):
+        laser.arm_autolase(mission, [laser.LaserSpot(empty, column)])
+    with pytest.raises(ValueError, match="no units to lase"):
+        laser.arm_autolase(
+            mission,
+            [laser.LaserSpot(_vehicles(3, "Party", 1), VehicleGroup(4, "Gone"))],
+        )
+    with pytest.raises(ValueError, match="at least one spot"):
+        laser.arm_autolase(mission, [])
+
+
+def test_a_spot_on_an_illegal_code_is_refused(mission: Mission) -> None:
+    tacp, column = _vehicles(1, "Pinpoint", 1), _vehicles(2, "Column", 1)
+    with pytest.raises(ValueError, match="not a DCS laser code"):
+        laser.arm_autolase(mission, [laser.LaserSpot(tacp, column, code=1234)])

@@ -8,8 +8,9 @@ Russian SA-6 site on a coastal ridge between the two bases denies low
 transit through the AO, forcing the player to fight high where the
 bandits' R-27ER / R-77 have the reach.
 
-No tanker, no escort, no Weasel — `Dodge` is alone tonight. F-16C internal
-fuel with two wing tanks just covers the sortie; manage bingo aggressively.
+No tanker, no escort, no Weasel — `Dodge` is a pair and nothing else.
+F-16C internal fuel with two wing tanks just covers the sortie; manage bingo
+aggressively.
 
 The bandit count scales with the number of player slots, and it is scaled off
 the **magazine** rather than off taste — see `_plan_bandits`. What is tasked
@@ -58,13 +59,18 @@ from dcs.unitgroup import FlyingGroup, VehicleGroup
 from dcs_mission_creator.core import (
     air_defense as ad,
     dtc,
+    loadout,
     sanctuary as sanc,
     triggers as mission_triggers,
 )
 from dcs_mission_creator.core.cli import run_cli
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.map_draw import PlanOverlay
-from dcs_mission_creator.core.mission_builder import MAX_PLAYERS, MissionBuilder
+from dcs_mission_creator.core.mission_builder import (
+    MAX_PLAYERS,
+    MIN_PLAYERS,
+    MissionBuilder,
+)
 from dcs_mission_creator.core.mission_kit import (
     offset,
     player_flight,
@@ -95,17 +101,20 @@ from dcs_mission_creator.map_overlay.scene import TacticalScene
 # *tasked*: the Sochi CAP element. The third pays for the Gudauta
 # reinforcement, which the frag treats as a threat to survive rather than as a
 # target list — which is why `_add_end_triggers` wins on the CAP element alone.
+#: The ceiling, not the fit: six is what an F-16C-50 with two bags *can* carry,
+#: and both of `_FITS` do. What the opposition is actually priced against is
+#: `MissionBuilder.air_to_air_shots(_FITS)`, read off the loaded rails, so a
+#: change to the fits moves the bandits with it. This constant survives only to
+#: size the spoken-number table below against `MAX_PLAYERS`.
 _MISSILES_PER_JET = 6
 _SHOTS_PER_KILL = 2
-_KILLS_PER_JET = _MISSILES_PER_JET // _SHOTS_PER_KILL
-_TASKED_KILLS_PER_JET = 2
 
 #: Bandit counts as the briefing says them out loud rather than as digits. The
 #: table is derived rather than typed because it has to keep up with the slot
-#: cap: the Sochi element is `_TASKED_KILLS_PER_JET` Su-27 per player jet, so a
-#: six-slot Dodge faces twelve, and the eight this stopped at was sized for a
-#: four-slot ceiling. Raising `MAX_PLAYERS` past the words below now fails at
-#: import, not two thirds of the way through a build.
+#: cap: at the ceiling every slot buys three kills, so a six-slot Dodge can face
+#: eighteen, and the eight this stopped at was sized for a four-slot ceiling.
+#: Raising `MAX_PLAYERS` past the words below now fails at import, not two
+#: thirds of the way through a build.
 _NUMBER_WORDS = (
     "zero",
     "one",
@@ -120,9 +129,16 @@ _NUMBER_WORDS = (
     "ten",
     "eleven",
     "twelve",
+    "thirteen",
+    "fourteen",
+    "fifteen",
+    "sixteen",
+    "seventeen",
+    "eighteen",
 )
 _SPOKEN = {
-    n: _NUMBER_WORDS[n] for n in range(1, MAX_PLAYERS * _TASKED_KILLS_PER_JET + 1)
+    n: _NUMBER_WORDS[n]
+    for n in range(1, MAX_PLAYERS * _MISSILES_PER_JET // _SHOTS_PER_KILL + 1)
 }
 
 
@@ -146,20 +162,25 @@ class _BanditPlan:
         return self.su27_total + self.mig29_total
 
 
-def _plan_bandits(players: int) -> _BanditPlan:
-    """Size both bandit elements off the player flight's missile count.
+def _plan_bandits(shots: int) -> _BanditPlan:
+    """Size both bandit elements off what the player flight is actually carrying.
 
-    Tasked kills are `_TASKED_KILLS_PER_JET` per jet (four missiles of the six);
-    whatever the magazine still buys goes to the reinforcement, floored at a
-    pair because Gudauta putting up a single ship is not a section. For one
-    slot that is two Su-27 tasked and a MiG-29S pair behind them; for four it
-    is eight tasked and four behind.
+    `shots` is the flight's whole air-to-air magazine, counted off the loaded
+    stores (`MissionBuilder.air_to_air_shots`) rather than off a per-jet
+    constant — the flight splits its fit now, and the number that prices the
+    opposition has to follow the rails rather than a comment. At two shots per
+    kill against Excellent crews that is the kill budget; **two thirds of it is
+    tasked** and the rest pays for the reinforcement, floored at a pair because
+    Gudauta putting up a single ship is not a section.
+
+    For a two-slot `Dodge` that is four Su-27 tasked and a MiG-29S pair behind
+    them; for four slots it is eight tasked and four behind.
     """
-    tasked = players * _TASKED_KILLS_PER_JET
-    spare_kills = players * _KILLS_PER_JET - tasked
+    kills = shots // _SHOTS_PER_KILL
+    tasked = kills - kills // 3
     return _BanditPlan(
         su27=section_sizes(tasked),
-        mig29=section_sizes(max(2, spare_kills)),
+        mig29=section_sizes(max(2, kills - tasked)),
     )
 
 
@@ -197,7 +218,7 @@ class _Scene:
 
 # Batumi's own air defence, and why it does not break the ace composition.
 #
-# "No tanker, no escort, no wingman" *is* this mission's difficulty statement —
+# "No tanker, no escort, nothing but the flight" *is* this mission's statement —
 # see the force-balance note in CLAUDE.md — so nothing here may be a friendly
 # asset in the fight. `BASTION` is not: it is 149 km behind the sweep stations,
 # it cannot reach anything, and it does not fire a shot unless a bandit follows
@@ -208,16 +229,71 @@ _SANCTUARY = "BASTION"
 _SANCTUARY_BATTERY = sanc.HAWK
 
 
+#: How `Dodge` splits its magazine across the flight (`core/loadout.py`).
+#:
+#: A pure air-to-air sweep is the one tasking where both jets are on the same
+#: job, so the split here is about *weapons* rather than about roles. Slot 1
+#: takes six AMRAAM: everything it can lock, it can shoot, which is what a sweep
+#: pushed into a GCI-fed CAP wants on the first pass. Slot 2 gives up two of
+#: those for AIM-9X, because a Su-27 carrying R-27ER will not be beaten at range
+#: every time and the flight cannot afford to arrive at a merge with nothing but
+#: an AMRAAM minimum range. Six shots either way — the ceiling, since stations 4
+#: and 6 are the bags and take no missile — which is what `_plan_bandits` prices
+#: the opposition against.
+#:
+#: Both are ED payloads station for station, off
+#: `<DCS>/CoreMods/aircraft/F-16C/UnitPayloads/F-16C_50.lua`:
+#: `AIM-120C*6, FUEL*2, ECM` and `AIM-120C*4, AIM-9X*2, FUEL*2, ECM`. Note the
+#: outboard-in ordering of a pure A/A fit — AMRAAM on 1/2/8/9 and the Sidewinders
+#: on 3/7 — which is the reverse of the SEAD fits elsewhere in this project,
+#: where 3/7 are the HARM rails and the AIM-9X move out to 2/8.
+_FITS = (
+    loadout.Loadout(
+        role="AIM-120C*6",
+        carries="six AIM-120C, ALQ-184, two 370 gal — every shot is a radar shot",
+        stores=(
+            (1, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (2, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (3, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (4, "Fuel_tank_370_gal"),
+            (5, "ALQ_184_Long"),
+            (6, "Fuel_tank_370_gal"),
+            (7, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (8, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (9, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+        ),
+    ),
+    loadout.Loadout(
+        role="AIM-120C*4 + 9X",
+        carries=(
+            "four AIM-120C, two AIM-9X, ALQ-184, two 370 gal — the flight's "
+            "answer to a merge"
+        ),
+        stores=(
+            (1, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (2, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (3, "AIM_9X_Sidewinder_IR_AAM"),
+            (4, "Fuel_tank_370_gal"),
+            (5, "ALQ_184_Long"),
+            (6, "Fuel_tank_370_gal"),
+            (7, "AIM_9X_Sidewinder_IR_AAM"),
+            (8, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (9, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+        ),
+    ),
+)
+
+
 class AbkhazSweep(MissionBuilder):
     name = "abkhaz_sweep"
     title = "Abkhaz Sweep"
     difficulty = Difficulty.ACE
 
-    def __init__(self, *, players: int = 1) -> None:
+    def __init__(self, *, players: int = MIN_PLAYERS) -> None:
         super().__init__(players=players)
         self._terrain = Caucasus()
         self._voice = VoiceSynth()
-        self._bandits = _plan_bandits(self.players)
+        self._bandits = _plan_bandits(self.air_to_air_shots(_FITS))
 
     # -- in-game and README briefings ---------------------------------------
 
@@ -225,7 +301,7 @@ class AbkhazSweep(MissionBuilder):
         bx, by = self._terrain.bullseye_blue["x"], self._terrain.bullseye_blue["y"]
         su = _SPOKEN[self._bandits.su27_total]
         mig = _SPOKEN[self._bandits.mig29_total]
-        shots = _MISSILES_PER_JET * self.players
+        shots = self.air_to_air_shots(_FITS)
         return f"""ABKHAZ SWEEP — Caucasus, 18 Jul 2026, 05:30 local (dawn)
 ========================================================
 SITUATION
@@ -258,13 +334,17 @@ WEAPONS
   section out of Gudauta. Come home on a dry magazine,
   there is nobody to hand the fight to.
 
+LOADOUT (one magazine, split two ways)
+{self.loadout_brief("Dodge", _FITS)}
+  Six shots either way. Slot 1 can shoot everything it
+  locks; slot 2 has the answer to a merge.
+
 PACKAGE
-  Dodge 1 (you) : F-16C-50, Batumi, hot ramp, CAP frag.
-                  Two wing tanks, AIM-120C / AIM-9X,
-                  ALQ-184.
+  Dodge         : F-16C-50 pair, Batumi, hot ramp, CAP
+                  frag. Loadout above.
   Magic         : E-3A AWACS, 251.000 AM, Black Sea
                   race-track. No tanker, no escort, no
-                  Weasel wingman. You are alone tonight.
+                  Weasel. The flight is the package.
 
 INTELLIGENCE
   The picture is thin. No overhead since yesterday
@@ -343,7 +423,7 @@ NOTES
         bx, by = self._terrain.bullseye_blue["x"], self._terrain.bullseye_blue["y"]
         su_total = self._bandits.su27_total
         mig_total = self._bandits.mig29_total
-        shots = _MISSILES_PER_JET * self.players
+        shots = self.air_to_air_shots(_FITS)
         slot_s = "" if self.players == 1 else "s"
         return f"""# Abkhaz Sweep
 
@@ -380,10 +460,23 @@ Sukhumi denies the low block.
 | Dodge    | F-16C-50 | Batumi  | Player air-superiority sweep      |
 | Magic    | E-3A     | Batumi  | AWACS, 251.000 AM, Black Sea track|
 
-No tanker, no escort, no Weasel wingman — denied support is part of the ace
-composition. Two wing tanks, four AIM-120C, two AIM-9X and an ALQ-184 —
-{shots} shots for the flight, and no way to rearm. That magazine is what the
-frag is sized against; see *Difficulty composition* below.
+No tanker, no escort, no Weasel — denied support is part of the ace
+composition, and the flight is the whole package. **{shots} shots between you**,
+and no way to rearm. That magazine is what the frag is sized against; see
+*Difficulty composition* below.
+
+### `Dodge` loadout
+
+{self.loadout_table("Dodge", _FITS)}
+
+A pure sweep is the one tasking where both jets are on the same job, so the
+split is about weapons rather than roles. Slot 1 can shoot everything it locks,
+which is what a sweep pushed into a GCI-fed CAP wants on the first pass. Slot 2
+gives two of those up for AIM-9X, because a Su-27 carrying R-27ER will not be
+beaten at range every time and the flight cannot afford to arrive at a merge
+holding nothing but an AMRAAM minimum range. Six shots either way — stations 4
+and 6 are the bags and take no missile, so six is the ceiling and not a
+choice.
 
 ## Intelligence
 
@@ -436,8 +529,8 @@ the overhead. Kobuleti is 42 km up the coast and **inside the same envelope** �
 take whichever runway is closer to where you break off.
 
 This is the counterpart to the magazine arithmetic above. You launch with six
-air-to-air missiles against crews flown at their best, with no tanker, no escort
-and no wingman, and the frag is deliberately smaller than the airspace: the
+air-to-air missiles each against crews flown at their best, with no tanker and
+no escort, and the frag is deliberately smaller than the airspace: the
 Gudauta section is a threat to beat, not a target list. Disengaging is therefore
 a legitimate line rather than a failure — and it only means anything because the
 ring is there for it to end at. `{_SANCTUARY} MARSHAL` is a hold abeam Batumi
@@ -475,12 +568,13 @@ on both bandit elements, SA-6 terminal denial over the AO forcing the fight
 high, AWACS-only support (no tanker, no escort, no Weasel), low sun on commit.
 One mistake ends the sortie.
 
-The opposition is sized off the magazine rather than off taste. An F-16C-50
-with two wing tanks has six air-to-air stations — 4 and 6 are the fuel and
-take no missile — and against Excellent crews the planning factor is two
-shots per kill: three kills per jet, of which two are tasked. At
-{self.players} slot{slot_s} that is **{su_total} Su-27** out of Sochi-Adler as
-the tasked kill, plus **{mig_total} MiG-29S** out of Gudauta as a
+The opposition is sized off the magazine rather than off taste, and off the
+missiles actually loaded rather than off a number in a comment. An F-16C-50
+with two wing tanks has six air-to-air stations — 4 and 6 are the fuel and take
+no missile — so this flight launches with {shots} shots, and against Excellent
+crews the planning factor is two shots per kill. Two thirds of that budget is
+tasked. At {self.players} slot{slot_s} that is **{su_total} Su-27** out of
+Sochi-Adler as the tasked kill, plus **{mig_total} MiG-29S** out of Gudauta as a
 reinforcement you are never required to shoot down.
 
 ## Win / loss conditions
@@ -825,15 +919,13 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         *,
         threats: tuple[ThreatRing, ...],
     ):
-        """Dodge F-16C-50 from Batumi, hot ramp; sweep stations offshore."""
-        # ED's own "AIM-120C*4, AIM-9X*2, FUEL*2, ECM" load, station for station:
-        # in a pure air-to-air fit the AMRAAM go outboard-in on 1/2/8/9 and the
-        # Sidewinders sit on 3/7 — the reverse of the SEAD fit, where 3/7 are the
-        # HARM rails and the AIM-9X move out to 2/8. Six shots is the ceiling
-        # here (4 and 6 are fuel and take no missile), which is what
-        # `_plan_bandits` sizes the opposition against. The centreline was empty;
-        # every ED two-tank A/A payload has an ALQ-184 there, and a jet going
-        # into R-27ER and Snow Drum country wants it.
+        """Dodge F-16C-50 from Batumi, hot ramp; sweep stations offshore.
+
+        The magazine is the mission here, and `_FITS` splits it: everything a
+        radar shot on slot 1, two of those given up for AIM-9X on slot 2. Six
+        shots either way, which is the ceiling and what `_plan_bandits` sizes the
+        opposition against.
+        """
         sections = player_flight(
             m,
             country=usa,
@@ -843,17 +935,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             maintask=task.CAP,
             start_type=StartType.Warm,
             slots=self.players,
-            stores=[
-                (1, "AIM_120C_AMRAAM___Active_Radar_AAM"),
-                (2, "AIM_120C_AMRAAM___Active_Radar_AAM"),
-                (3, "AIM_9X_Sidewinder_IR_AAM"),
-                (4, "Fuel_tank_370_gal"),
-                (5, "ALQ_184_Long"),
-                (6, "Fuel_tank_370_gal"),
-                (7, "AIM_9X_Sidewinder_IR_AAM"),
-                (8, "AIM_120C_AMRAAM___Active_Radar_AAM"),
-                (9, "AIM_120C_AMRAAM___Active_Radar_AAM"),
-            ],
+            loadouts=_FITS,
         )
 
         # Every section flies the one plan: `_route_sweep` is pure geometry

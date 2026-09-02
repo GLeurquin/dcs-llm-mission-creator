@@ -50,7 +50,7 @@ def test_missions_were_discovered() -> None:
 def test_mission_generates(
     slug: str, cls: type[MissionBuilder], tmp_path: Path
 ) -> None:
-    miz, readme = cls(players=1).generate(tmp_path)
+    miz, readme = cls(players=2).generate(tmp_path)
 
     assert miz.is_file(), f"{slug}: no .miz written"
     assert miz.name == f"{slug}.miz"
@@ -102,8 +102,8 @@ def test_generation_is_reproducible(tmp_path: Path) -> None:
     they still catch every drift the test was written for.
     """
     slug, cls = _MISSIONS[0]
-    first = cls(players=1).generate(tmp_path / "a")[0]
-    second = cls(players=1).generate(tmp_path / "b")[0]
+    first = cls(players=2).generate(tmp_path / "a")[0]
+    second = cls(players=2).generate(tmp_path / "b")[0]
     with zipfile.ZipFile(first) as a, zipfile.ZipFile(second) as b:
         assert a.namelist() == b.namelist(), f"{slug}: different entries"
         for name in a.namelist():

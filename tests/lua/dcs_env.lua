@@ -171,6 +171,11 @@ do
   function UnitMT:isActive() return self.alive end
   function UnitMT:getLife() return self.alive and 100 or 0 end
   function UnitMT:getPoint() return {x = self.x, y = self.y or 0, z = self.z} end
+  -- Ground speed, in the shape a laser spot's update rate is computed from:
+  -- `vx`/`vz` on the spec, zero for anything parked.
+  function UnitMT:getVelocity()
+    return {x = self.vx or 0, y = 0, z = self.vz or 0}
+  end
   function UnitMT:getPosition()
     return {p = self:getPoint(), x = {x = 1, y = 0, z = 0}}
   end
@@ -349,5 +354,44 @@ do
       return land.SurfaceType.LAND
     end,
     SurfaceType = {LAND = 1, SHALLOW_WATER = 2, WATER = 3, ROAD = 4, RUNWAY = 5},
+  }
+  -- --------------------------------------------------------------- designation
+  -- Laser and IR spots. DCS binds a spot to the *source unit* and hands back an
+  -- object, so the stub records the link: a test asserts what is being lased,
+  -- from which vehicle and on what code. Destroyed spots are kept in the list
+  -- with `alive = false`, because "the spot went out" is the assertion half the
+  -- autolase tests are about.
+  local spotMT = {}
+  spotMT.__index = spotMT
+  function spotMT:setPoint(p) self.point = p end
+  function spotMT:getPoint() return self.point end
+  function spotMT:getCode() return self.code end
+  function spotMT:setCode(c) self.code = c end
+  function spotMT:destroy() self.alive = false end
+
+  local madeSpots = {}
+  _G.TESTSPOTS = madeSpots
+
+  local function makeSpot(kind, source, ref, point, code)
+    local spot = setmetatable({kind = kind, source = source:getName(), ref = ref,
+                               point = point, code = code, alive = true}, spotMT)
+    madeSpots[#madeSpots + 1] = spot
+    return spot
+  end
+
+  Spot = {
+    createLaser = function(source, ref, point, code)
+      return makeSpot("laser", source, ref, point, code)
+    end,
+    createInfraRed = function(source, ref, point)
+      return makeSpot("ir", source, ref, point, nil)
+    end,
+    destroy = function(spot) spot:destroy() end,
+  }
+
+  -- Still air unless a test says otherwise; `TESTWIND` is a Vec3.
+  atmosphere = {
+    getWind = function() return TESTWIND or {x = 0, y = 0, z = 0} end,
+    getWindWithTurbulence = function() return TESTWIND or {x = 0, y = 0, z = 0} end,
   }
 end

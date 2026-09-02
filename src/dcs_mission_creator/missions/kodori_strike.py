@@ -47,6 +47,7 @@ from dcs.unittype import VehicleType
 from dcs_mission_creator.core import (
     air_defense as ad,
     dtc,
+    loadout,
     routing,
     sanctuary as sanc,
     triggers as mission_triggers,
@@ -55,7 +56,7 @@ from dcs_mission_creator.core import (
 from dcs_mission_creator.core.cli import run_cli
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.map_draw import PlanOverlay
-from dcs_mission_creator.core.mission_builder import MissionBuilder
+from dcs_mission_creator.core.mission_builder import MIN_PLAYERS, MissionBuilder
 from dcs_mission_creator.core.mission_kit import (
     arm,
     offset,
@@ -119,12 +120,74 @@ _SANCTUARY = "CASTLE"
 _SANCTUARY_BATTERY = sanc.HAWK
 
 
+#: How `Dodge` splits the frag across its slots (`core/loadout.py`).
+#:
+#: The frag is a forward operating base — nine vehicles scattered over a
+#: clearing, two of them main battle tanks and one of them a Shilka — and the
+#: two halves of that are not the same weapon. Slot 1 carries four CBU-105 on
+#: BRU-57: wind-corrected submunitions, which is what kills a dispersed platoon
+#: in one pass from above the IR launchers the briefing tells the flight to stay
+#: over. Slot 2 carries four GBU-12 on TERs and finds the armour and the gun with
+#: the pod, because a submunition pattern is the wrong answer to a T-72 in a
+#: revetment and a 500 lb laser bomb is the right one.
+#:
+#: This flight used to fly a **pure air-to-air fit** against a win condition of
+#: "the FOB is wrecked", which is a mission whose player could not complete it.
+#: `Eagle` owns the Su-27 pair (the briefing says so), so the four missiles each
+#: of these fits carries are for getting home rather than for the frag.
+#:
+#: Both are ED payloads station for station, off
+#: `<DCS>/CoreMods/aircraft/F-16C/UnitPayloads/F-16C_50.lua`:
+#: `AIM-120C*2, AIM-9X*2, CBU-105*4, FUEL*2, ECM, TGP` and
+#: `AIM-120C*2, AIM-9X*2, GBU-12*4, FUEL*2, ECM, TGP`.
+_FITS = (
+    loadout.Loadout(
+        role="CBU-105*4",
+        carries=(
+            "four CBU-105 wind-corrected SFW on BRU-57, LITENING pod, "
+            "two AIM-120C, two AIM-9X, ALQ-184, two 370 gal"
+        ),
+        stores=(
+            (1, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (2, "AIM_9X_Sidewinder_IR_AAM"),
+            (3, "BRU_57_with_2_x_CBU_105___10_x_SFW__CBU_with_WCMD"),
+            (4, "Fuel_tank_370_gal"),
+            (5, "ALQ_184_Long"),
+            (6, "Fuel_tank_370_gal"),
+            (7, "BRU_57_with_2_x_CBU_105___10_x_SFW__CBU_with_WCMD"),
+            (8, "AIM_9X_Sidewinder_IR_AAM"),
+            (9, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (11, "AN_AAQ_28_LITENING___Targeting_Pod_"),
+        ),
+    ),
+    loadout.Loadout(
+        role="GBU-12*4",
+        carries=(
+            "four GBU-12 on TERs, LITENING pod, two AIM-120C, two AIM-9X, "
+            "ALQ-184, two 370 gal"
+        ),
+        stores=(
+            (1, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (2, "AIM_9X_Sidewinder_IR_AAM"),
+            (3, "TER_9A_with_2_x_GBU_12___500lb_Laser_Guided_Bomb"),
+            (4, "Fuel_tank_370_gal"),
+            (5, "ALQ_184_Long"),
+            (6, "Fuel_tank_370_gal"),
+            (7, "TER_9A_with_2_x_GBU_12___500lb_Laser_Guided_Bomb_"),
+            (8, "AIM_9X_Sidewinder_IR_AAM"),
+            (9, "AIM_120C_AMRAAM___Active_Radar_AAM"),
+            (11, "AN_AAQ_28_LITENING___Targeting_Pod_"),
+        ),
+    ),
+)
+
+
 class KodoriStrike(MissionBuilder):
     name = "kodori_strike"
     title = "Kodori Strike"
     difficulty = Difficulty.TRAINED
 
-    def __init__(self, *, players: int = 1) -> None:
+    def __init__(self, *, players: int = MIN_PLAYERS) -> None:
         super().__init__(players=players)
         self._terrain = Caucasus()
         self._voice = VoiceSynth()
@@ -159,8 +222,14 @@ MISSION (Dodge — F-16C-50, Kutaisi)
   the terrain-masked ingress corridor, tank pre-strike if
   needed, work the target box, RTB Kutaisi.
 
+LOADOUT (the flight splits the target)
+{self.loadout_brief("Dodge", _FITS)}
+  Slot 1's submunitions are for the platoon in the open;
+  slot 2's laser bombs are for the tanks and the Shilka.
+
 PACKAGE
-  Dodge 1 (you): F-16C-50, Kutaisi, hot ramp, strike.
+  Dodge        : F-16C-50 pair, Kutaisi, hot ramp, strike.
+                 Loadout above.
   Weasel 1-2   : F-16C-50 SEAD, Kutaisi, hunting SA-6.
   Eagle 1-2    : F-15C high cover, overlay CAP station.
   Magic        : E-3A AWACS, 251.000 AM, overlay track.
@@ -265,15 +334,31 @@ and handles the Russian Su-27 intercept. Push along the terrain-masked
 ingress corridor, tank pre-strike if needed, work the target box, RTB
 Kutaisi.
 
+The base is a scattered platoon with armour in it, and the flight carries two
+answers to that rather than one compromise — see the loadout table below.
+
 ## Package
 
 | Callsign  | Type     | Base    | Role                   |
 |-----------|----------|---------|------------------------|
-| Dodge     | F-16C-50 | Kutaisi | Player strike lead     |
+| Dodge     | F-16C-50 | Kutaisi | Player strike flight   |
 | Weasel 1-2| F-16C-50 | Kutaisi | SEAD on SA-6           |
 | Eagle 1-2 | F-15C    | Kutaisi | High cover CAP         |
 | Magic     | E-3A     | Kutaisi | AWACS, 251.000 AM      |
 | Texaco    | KC-135   | Kutaisi | Tanker, 252.000 AM 10Y |
+
+### `Dodge` loadout
+
+{self.loadout_table("Dodge", _FITS)}
+
+Nine vehicles scattered over a clearing, two of them main battle tanks and one
+a Shilka, is not one target — so the flight does not carry one weapon. Slot 1
+has four CBU-105: wind-corrected submunitions, which is what kills a dispersed
+platoon in a single pass from above the IR launchers you have been told to stay
+over. Slot 2 has four GBU-12 on TERs and the pod to find the armour and the
+gun with, because a submunition pattern is the wrong answer to a T-72 in a
+revetment. Four air-to-air missiles a jet, and they are for getting home:
+`Eagle` owns the Su-27 fight.
 
 75-minute sortie is well past F-16C internal endurance, so the tanker is
 mandatory — top off pre-strike on the way in, again post-strike if needed.
@@ -1003,6 +1088,12 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
         Route: Kutaisi → PUSH → corridor (terrain-masked legs avoiding LOS to
         SA-6 / EWR / Gudauta / SA-13s) → TGT → EGRESS → Kutaisi.
+
+        The flight splits its ordnance across the target rather than carrying one
+        compromise (`_FITS`): area submunitions on slot 1 for the dispersed
+        platoon, laser bombs on slot 2 for the armour and the Shilka. Before the
+        split this flight launched with no air-to-ground stores at all under a
+        win condition of "the FOB is wrecked".
         """
         sections = player_flight(
             m,
@@ -1013,16 +1104,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             maintask=task.CAS,
             start_type=StartType.Warm,
             slots=self.players,
-            stores=[
-                (1, "AIM_120C_AMRAAM___Active_Radar_AAM"),
-                (2, "AIM_9X_Sidewinder_IR_AAM"),
-                (3, "AIM_120C_AMRAAM___Active_Radar_AAM"),
-                (4, "Fuel_tank_370_gal"),
-                (6, "Fuel_tank_370_gal"),
-                (7, "AIM_120C_AMRAAM___Active_Radar_AAM"),
-                (8, "AIM_9X_Sidewinder_IR_AAM"),
-                (9, "AIM_120C_AMRAAM___Active_Radar_AAM"),
-            ],
+            loadouts=_FITS,
         )
         push = offset(scene.kutaisi.position, east_m=-15_000, north_m=12_000)
         corridor = scene.overlay.place_ingress_corridor(
