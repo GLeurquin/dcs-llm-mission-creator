@@ -101,6 +101,7 @@ from dcs_mission_creator.core.mission_kit import (
     arm,
     player_flight,
     race_track,
+    set_skill,
 )
 from dcs_mission_creator.core.placement import (
     convoy_spawn,
@@ -1411,7 +1412,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                 (7, "R_73__AA_11_Archer____Infra_Red"),
             ],
         )
-        ad.set_skill(migs, Skill.High)
+        set_skill(migs, Skill.High)
         apply_ai_difficulty(migs, self.difficulty)
         return migs
 
@@ -1533,7 +1534,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                 (11, "AIM_9M_Sidewinder_IR_AAM"),
             ],
         )
-        ad.set_skill(eagle, Skill.High)
+        set_skill(eagle, Skill.High)
+        apply_threat_reaction(eagle)
         return p1, p2
 
     def _spawn_fac(
@@ -1565,7 +1567,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             group_size=1,
         )
         self._task_fac_orbit(hammer, p1, p2)
-        ad.set_skill(hammer, Skill.High)
+        set_skill(hammer, Skill.High)
         fac_attack_group(
             hammer,
             convoy,
@@ -1670,7 +1672,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                 (9, "AIM_9X_Sidewinder_IR_AAM"),
             ],
         )
-        ad.set_skill(pontiac, Skill.High)
+        set_skill(pontiac, Skill.High)
         # The GBU-12s and `Hammer`'s spot on one code. The Hornet carries no
         # laser-code field either, so this is the check that the number the
         # briefing hands the player is the one the reserve strike drops on.
@@ -2316,15 +2318,19 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             name="Syrian air defence",
             down_call="Magic: {label} has ceased emissions, site is dark.",
             up_call="Magic: {label} is radiating again, expect it hot.",
-            # Debug build. This net has the most dials in the project and they
-            # are only tunable against what it actually did, so both logs are
-            # on: Skynet's own (which site it cued, off which radar, and every
-            # go-live) and ours (who saw the launch, what the reaction rolled,
-            # how long each site stayed off the air, where the SA-8 drove).
-            # Ours is `dcs.log` only — `grep 'IADS/Syrian' dcs.log`; Skynet's
-            # also prints on screen, which is the reason to turn this off again
-            # before flying the mission for real.
-            debug=True,
+            # This net has the most dials in the project and they are only
+            # tunable against what it actually did, so our own decisions are
+            # logged: who saw each launch, what the reaction rolled, how long
+            # each site stayed off the air, where the SA-8 drove. That half is
+            # `dcs.log` only — `grep 'IADS/Syrian' dcs.log`.
+            #
+            # Skynet's own half is off. It prints on the *player's screen* as
+            # well as to the log, so a mission that ships with it has a
+            # framework narrating every go-live over the top of `Magic`. This
+            # flew that way for a while; a debug build is not a difficulty
+            # setting, and the log is where the tuning evidence belongs.
+            trace=True,
+            debug=False,
         )
 
     def _add_fac_coord_readout(self, m: Mission, *, convoy: VehicleGroup) -> None:

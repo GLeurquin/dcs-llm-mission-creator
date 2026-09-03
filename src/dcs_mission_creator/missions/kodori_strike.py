@@ -47,6 +47,7 @@ from dcs.unittype import VehicleType
 from dcs_mission_creator.core import (
     air_defense as ad,
     dtc,
+    laser,
     loadout,
     routing,
     sanctuary as sanc,
@@ -125,11 +126,21 @@ _SANCTUARY_BATTERY = sanc.HAWK
 #: The frag is a forward operating base — nine vehicles scattered over a
 #: clearing, two of them main battle tanks and one of them a Shilka — and the
 #: two halves of that are not the same weapon. Slot 1 carries four CBU-105 on
+#: The one code the flight's bombs and any spot are on. `laser.set_code` writes
+#: nothing on an F-16C — the airframe carries no laser-code property, the pilot
+#: dials it on the TGP — so this is a build-time assertion that the number the
+#: briefing quotes is the number the jet comes up on. It is what caught
+#: `kuban_forge` briefing 1511 at four separate places against a spot on 1688.
+_LASER_CODE = laser.DEFAULT_CODE
+
 #: BRU-57: wind-corrected submunitions, which is what kills a dispersed platoon
 #: in one pass from above the IR launchers the briefing tells the flight to stay
 #: over. Slot 2 carries four GBU-12 on TERs and finds the armour and the gun with
 #: the pod, because a submunition pattern is the wrong answer to a T-72 in a
 #: revetment and a 500 lb laser bomb is the right one.
+#:
+#: Those bombs ride a spot, so the flight states its code (`_LASER_CODE`) like
+#: every other laser mission here — see `_spawn_player`.
 #:
 #: This flight used to fly a **pure air-to-air fit** against a win condition of
 #: "the FOB is wrecked", which is a mission whose player could not complete it.
@@ -226,6 +237,9 @@ LOADOUT (the flight splits the target)
 {self.loadout_brief("Dodge", _FITS)}
   Slot 1's submunitions are for the platoon in the open;
   slot 2's laser bombs are for the tanks and the Shilka.
+  There is no controller on this target: slot 2 lases its
+  own, pod and bombs both on {_LASER_CODE}, which is where
+  they come up. Nothing to arrange.
 
 PACKAGE
   Dodge        : F-16C-50 pair, Kutaisi, hot ramp, strike.
@@ -359,6 +373,10 @@ over. Slot 2 has four GBU-12 on TERs and the pod to find the armour and the
 gun with, because a submunition pattern is the wrong answer to a T-72 in a
 revetment. Four air-to-air missiles a jet, and they are for getting home:
 `Eagle` owns the Su-27 fight.
+
+There is no ground controller on this target. Slot 2 self-designates: the pod
+and the GBU-12s are both on **{_LASER_CODE}**, which is the code they come up
+on, so there is nothing to set and nobody to raise before the first pass.
 
 75-minute sortie is well past F-16C internal endurance, so the tanker is
 mandatory — top off pre-strike on the way in, again post-strike if needed.
@@ -1106,6 +1124,11 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             slots=self.players,
             loadouts=_FITS,
         )
+        # Slot 2's GBU-12s ride a spot, so the code is stated rather than
+        # assumed. Nothing lands in the .miz for a Viper; what this buys is that
+        # the briefing and the jet cannot say different numbers.
+        for section in sections:
+            laser.set_code(section, _LASER_CODE)
         push = offset(scene.kutaisi.position, east_m=-15_000, north_m=12_000)
         corridor = scene.overlay.place_ingress_corridor(
             ip=push,

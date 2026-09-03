@@ -719,6 +719,12 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         are armed; depot destruction trigger then flips them to active and
         adds the AITaskPush. (pydcs `intercept_flight` builds the AITaskPush
         on the zone trigger automatically; activation is what gates them.)
+
+        The launch is called on the same zone crossing that arms them. This was
+        the only intercept in the project that came up silent, and a MiG pair
+        arriving unannounced is not fog of war here — the mission has an AWACS
+        on station whose whole job is that call, so its absence read as `Magic`
+        having missed a launch off a field 90 km away.
         """
         intrusion_zone = m.triggers.add_triggerzone(
             position=scene.depot_anchor,
@@ -741,6 +747,16 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         )
         set_skill(migs, Skill.High)
         apply_ai_difficulty(migs, self.difficulty)
+        mission_triggers.message_to_coalition(
+            m,
+            comment="MiG-29S launch announcement",
+            voice=self._voice,
+            conditions=(condition.PartOfCoalitionInZone("blue", intrusion_zone.id),),
+            text=(
+                "Magic: Russian MiG-29 pair airborne from Bassel Al-Assad, "
+                "vectoring on the package."
+            ),
+        )
         return migs
 
     # -- blue side ----------------------------------------------------------

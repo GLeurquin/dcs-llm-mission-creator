@@ -35,7 +35,14 @@ import structlog
 from dcs.mission import Mission
 from dcs.unit import Skill
 
-from dcs_mission_creator.core import dcs_install, dtc, loadout, loadout_check, waypoints
+from dcs_mission_creator.core import (
+    dcs_install,
+    dtc,
+    laser,
+    loadout,
+    loadout_check,
+    waypoints,
+)
 
 if TYPE_CHECKING:
     from dcs.unitgroup import FlyingGroup
@@ -107,6 +114,7 @@ def audit_mission(m: Mission, overlay: MapOverlay) -> list[Finding]:
         _check_cartridge,
         _check_concealment,
         _check_armament,
+        _check_laser_code,
         _check_stations,
         _check_magazine,
     ):
@@ -376,6 +384,34 @@ def _check_armament(m: Mission, overlay: MapOverlay) -> Iterable[Finding]:
         if not group.units[0].unit_type.pylons:
             continue  # an E-3A or a tanker has nowhere to hang anything
         yield Finding("armament", "warn", "every pylon is empty", group.name)
+
+
+def _check_laser_code(m: Mission, overlay: MapOverlay) -> Iterable[Finding]:
+    """A flight carrying a laser-guided weapon whose code nobody stated.
+
+    Not a question the `.miz` can answer, which is why it is asked here. The
+    F-16C carries no laser-code property, so `laser.set_code` writes nothing and
+    a mission that never called it looks identical to one that did — right up to
+    the cockpit, where a bomb tracking a spot on another code is
+    indistinguishable from a bomb that failed to guide, and where the pilot's
+    one recourse (retune the pod) is the half that was never wrong.
+
+    `kodori_strike` flew four GBU-12 and briefed them for months with no call.
+    It was harmless, because the default is what both ends come up on anyway —
+    but that is luck rather than a check, and it is exactly the claim
+    `core/laser.py` exists to make hold.
+    """
+    for _side, group in _flying_groups(m):
+        stores = laser.laser_guided_stores(group)
+        if not stores or laser.stated_code(group) is not None:
+            continue
+        yield Finding(
+            "laser",
+            "warn",
+            f"carries {', '.join(stores)} and no laser.set_code call — "
+            f"the briefed code is whatever the cockpit comes up on",
+            group.name,
+        )
 
 
 def _check_stations(m: Mission, overlay: MapOverlay) -> Iterable[Finding]:

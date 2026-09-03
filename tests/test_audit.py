@@ -217,6 +217,48 @@ def test_an_armed_flight_is_silent():
     assert not only(audit_mission(m, _Overlay()), "armament")
 
 
+# -- the laser code ----------------------------------------------------------
+
+_GBU_12 = "TER_9A_with_2_x_GBU_12___500lb_Laser_Guided_Bomb"
+
+
+def test_a_laser_weapon_with_no_stated_code_is_a_warning():
+    """The one thing the `.miz` cannot answer, so the audit has to.
+
+    An F-16C carries no laser-code property, so a mission that never called
+    `laser.set_code` writes a file identical to one that did — and from the
+    cockpit a bomb tracking a spot on the wrong code looks exactly like a bomb
+    that failed to guide.
+    """
+    from dcs_mission_creator.core.mission_kit import arm
+
+    m = mission()
+    colt = flight(m, "Colt", client=True)
+    arm(colt, F_16C_50, [(3, _GBU_12)])
+    findings = only(audit_mission(m, _Overlay()), "laser")
+    assert findings and findings[0].severity == "warn"
+
+
+def test_a_stated_laser_code_is_silent():
+    from dcs_mission_creator.core import laser
+    from dcs_mission_creator.core.mission_kit import arm
+
+    m = mission()
+    colt = flight(m, "Colt", client=True)
+    arm(colt, F_16C_50, [(3, _GBU_12)])
+    laser.set_code(colt, laser.DEFAULT_CODE)
+    assert not only(audit_mission(m, _Overlay()), "laser")
+
+
+def test_a_flight_with_no_laser_weapon_needs_no_code():
+    from dcs_mission_creator.core.mission_kit import arm
+
+    m = mission()
+    colt = flight(m, "Colt", client=True)
+    arm(colt, F_16C_50, [(1, "AIM_120C_AMRAAM___Active_Radar_AAM")])
+    assert not only(audit_mission(m, _Overlay()), "laser")
+
+
 # -- the cartridge -----------------------------------------------------------
 
 

@@ -165,6 +165,20 @@ def is_settable(group: "FlyingGroup") -> bool:
     return _properties(group.units[0].unit_type.id, DEFAULT_CODE) is not None
 
 
+#: Set on a group by `set_code`. `core/audit.py` reads it back to tell a flight
+#: whose code was stated from one that was never asked — a distinction nothing
+#: in the `.miz` can carry, because on the F-16C (every player flight here)
+#: `set_code` writes no property at all. `kodori_strike` flew four GBU-12 for
+#: months without it, which is the whole reason the check exists.
+_STATED = "_dcs_mission_creator_laser_code"
+
+
+def stated_code(group: "FlyingGroup") -> Optional[int]:
+    """The code `set_code` put `group` on, or `None` if nobody ever said."""
+    code = getattr(group, _STATED, None)
+    return code if isinstance(code, int) else None
+
+
 def set_code(group: "FlyingGroup", code: int = DEFAULT_CODE) -> int:
     """Put every unit of `group` on `code`, or refuse a code it cannot hold.
 
@@ -176,6 +190,7 @@ def set_code(group: "FlyingGroup", code: int = DEFAULT_CODE) -> int:
     the jet will never come up on.
     """
     validate_code(code)
+    setattr(group, _STATED, code)
     aircraft = group.units[0].unit_type.id
     props = _properties(aircraft, code)
     if props is None:
