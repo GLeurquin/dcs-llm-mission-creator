@@ -39,7 +39,8 @@ it in one line** — ask for tweaks afterwards.
    Germany, …), never by `red` / `blue`. Default: USA. See *Faction naming*.
 4. **Player airframe** — default `dcs.planes.F_16C_50` (flexible across CAP /
    CAS / SEAD / strike). See *Player airframe*.
-5. **Coop player count** — 1–4 client slots. Default: 1. See *Coop slots*.
+5. **Coop player count** — 2–6 client slots (`MissionBuilder.MIN_PLAYERS` to
+   `MAX_PLAYERS`). Default: 2. See *Coop slots*.
 6. **Difficulty** — recruit / trained / veteran / ace. Default: trained. See
    *Difficulty*.
 7. **Time + weather** — default mid-morning, clear, light wind. Difficulty,
@@ -920,11 +921,15 @@ justify new intel.
 Default `dcs.planes.F_16C_50` — most flexible (CAP, CAS, SEAD, strike). Safe
 when mission type is also unspecified.
 
-| Module          | pydcs attr                  | Good for                   | Coop slots |
-|-----------------|-----------------------------|----------------------------|------------|
-| F-16C Block 50  | `planes.F_16C_50`           | CAP, CAS, SEAD, strike     | up to 4    |
-| F/A-18C Hornet  | `planes.FA_18C_hornet`      | CAP, CAS, anti-ship, strike| up to 4    |
-| AH-64D Apache   | `helicopters.AH_64D_BLK_II` | CAS, anti-armor            | up to 4    |
+| Module          | pydcs attr                  | Good for                   | Max per group |
+|-----------------|-----------------------------|----------------------------|---------------|
+| F-16C Block 50  | `planes.F_16C_50`           | CAP, CAS, SEAD, strike     | 4             |
+| F/A-18C Hornet  | `planes.FA_18C_hornet`      | CAP, CAS, anti-ship, strike| 4             |
+| AH-64D Apache   | `helicopters.AH_64D_BLK_II` | CAS, anti-armor            | 4             |
+
+Four is pydcs's `group_size_max`, not the slot ceiling: more than four slots is
+more than one group, so always build the player flight with
+`mission_kit.player_flight`, which splits the sections for you.
 
 Role-compatibility:
 
@@ -1035,7 +1040,7 @@ without knowing it otherwise.
    the only way to tell whether it reads as a sensor product.
 3. **Don't** "validate" by opening the file — no DCS install on this box.
    For sanity, re-load via `Mission().load_file(path)` if the user wants it.
-4. List the knobs the user can tweak (theater, airframe, players, difficulty,
-   length, time, package, threats) and show the exact CLI re-invocation,
-   e.g. `--players 4 --difficulty veteran --airframe FA_18C_hornet --length-minutes 60`
-   (`--players` starts at 2).
+4. List the knobs the user can tweak. Only the slot count is a flag —
+   `uv run dcs-mission-creator generate <slug> --players 4` (2–6). Theater,
+   airframe, difficulty, length, time, package and threats are edited in the
+   mission module itself, so say which constant or class attribute to change.

@@ -107,6 +107,16 @@ def _generate_one(
     log.info("wrote", mission=slug, path=str(readme))
 
 
+def _unknown_mission(missions_map: dict[str, type[MissionBuilder]], name: str) -> int:
+    """Log a slug that resolves to nothing, and return the exit code for it."""
+    log.error(
+        "unknown mission",
+        name=name,
+        available=", ".join(sorted(missions_map)) or "(none)",
+    )
+    return 2
+
+
 def _cmd_generate(
     missions_map: dict[str, type[MissionBuilder]],
     name: str | None,
@@ -117,9 +127,7 @@ def _cmd_generate(
     if name is not None:
         cls = missions_map.get(name)
         if cls is None:
-            available = ", ".join(sorted(missions_map)) or "(none)"
-            log.error("unknown mission", name=name, available=available)
-            return 2
+            return _unknown_mission(missions_map, name)
         _generate_one(name, cls, output_dir or _default_output_dir(name), players)
         return 0
 
@@ -142,18 +150,6 @@ def _cmd_generate(
     return 0
 
 
-def route_plan_defaults() -> tuple[float, float]:
-    """The planner's grid step and shortest leg, for the parser's help text.
-
-    Imported lazily like the other heavy commands: `core/route_plan` pulls in
-    numpy and the overlay stack, and `dcs-mission-creator list` should not pay
-    for that.
-    """
-    from dcs_mission_creator.core import route_plan
-
-    return route_plan.SEARCH_CELL_M, route_plan.MIN_LEG_M
-
-
 def _cmd_audit(
     missions_map: dict[str, type[MissionBuilder]],
     name: str | None,
@@ -174,9 +170,7 @@ def _cmd_audit(
     for slug in slugs:
         cls = missions_map.get(slug)
         if cls is None:
-            available = ", ".join(sorted(missions_map)) or "(none)"
-            log.error("unknown mission", name=slug, available=available)
-            return 2
+            return _unknown_mission(missions_map, slug)
         findings = audit(cls(players=players))
         errors += sum(1 for f in findings if f.severity == "error")
         print(f"\n=== {slug} ({len(findings)} finding(s))")
@@ -191,6 +185,7 @@ def _cmd_survey(
     defends: list[str],
     agl_m: float,
     difficulty: str,
+    near: list[str],
 ) -> int:
     """Check a layout before anything is written around it.
 
@@ -207,15 +202,42 @@ def _cmd_survey(
     the whole sortie is flown inside — and those stay on the table but off the
     findings list, because being in them is the mission. Nothing else is
     excused, a ring over the target least of all.
+
+    `--near` answers the module's other question — *find me somewhere to put
+    this* — and is independent of the rest: it ranks candidate positions and
+    prints them as pasteable degrees with the terrain facts and the settlement
+    to name them after. The filter it applies is the common one (walkable
+    slope, dry ground, out of a town); anything more particular is a
+    `survey.spots` call in Python, which is where the full `Placement` lives.
     """
     from dcs_mission_creator.core import survey
+    from dcs_mission_creator.map_overlay.placement import Placement, Vegetation
     from dcs_mission_creator.map_overlay.query import MapOverlay
     from dcs_mission_creator.map_overlay.terrains import terrain_for
 
     terrain = terrain_for(theater)
     overlay = MapOverlay.load(theater)
+
+    for spec in near:
+        head, _, radius = spec.rpartition(":")
+        anchor, label = _labelled(terrain, head or spec)
+        print(f"\n=== near {label} (within {float(radius or 20_000.0) / 1000:.0f} km)")
+        for spot in survey.spots(
+            overlay,
+            anchor,
+            float(radius or 20_000.0),
+            Placement(
+                max_slope_deg=10.0,
+                not_in=(Vegetation.WATER, Vegetation.DENSE_FOREST),
+                not_in_built_up=True,
+            ),
+        ):
+            print(spot.row())
+
     if not points:
-        log.error("survey needs at least one --point")
+        if near:
+            return 0
+        log.error("survey needs at least one --point or --near")
         return 2
 
     named: dict[str, Point] = {}
@@ -270,8 +292,8 @@ def _cmd_route(
     threats: list[str],
     names: str | None,
     speed: float,
-    cell_m: float,
-    min_leg_m: float,
+    cell_m: float | None,
+    min_leg_m: float | None,
 ) -> int:
     """Plan a low corridor through `via`, and say what it costs.
 
@@ -295,8 +317,8 @@ def _cmd_route(
         overlay,
         anchors,
         agl_for=route_plan.agl_bands(_agl_bands(agl)),
-        cell_m=cell_m,
-        min_leg_m=min_leg_m,
+        cell_m=route_plan.SEARCH_CELL_M if cell_m is None else cell_m,
+        min_leg_m=route_plan.MIN_LEG_M if min_leg_m is None else min_leg_m,
     )
     labels = [n.strip() for n in names.split(",")] if names else []
     print(route.table(labels, speed_kph=speed))
@@ -427,6 +449,7 @@ def _add_overlay_subcommand(sub: argparse._SubParsersAction) -> None:
         default=[BuildLayer.ALL],
         help=f"Comma-separated subset of {build_choices} (default: all).",
     )
+    build.set_defaults(run=lambda args: _cmd_overlay_build(args.theater, args.layers))
 
     render_choices = ",".join(m.value for m in RenderLayer)
     inspect = osub.add_parser(
@@ -446,6 +469,9 @@ def _add_overlay_subcommand(sub: argparse._SubParsersAction) -> None:
         default=Path("/tmp/overlay.png"),
         help="Output PNG path (default: %(default)s).",
     )
+    inspect.set_defaults(
+        run=lambda args: _cmd_overlay_inspect(args.theater, args.layers, args.out)
+    )
 
     query = osub.add_parser(
         "query",
@@ -464,12 +490,52 @@ def _add_overlay_subcommand(sub: argparse._SubParsersAction) -> None:
         choices=list(QueryLayer),
         help="Which layer to query at the given point.",
     )
+    query.set_defaults(
+        run=lambda args: _cmd_overlay_query(args.theater, args.point, args.layer)
+    )
 
 
-def main(argv: list[str] | None = None) -> int:
-    configure_logging()
-    missions_map = _discover()
+def _add_players(parser: argparse.ArgumentParser, help_text: str) -> None:
+    """The coop-slot count, declared once for the three parsers that take it.
 
+    The range is `MissionBuilder`'s own, so a doc or a shell completion cannot
+    advertise a slot the base class will reject.
+    """
+    parser.add_argument(
+        "--players",
+        type=int,
+        default=MIN_PLAYERS,
+        choices=range(MIN_PLAYERS, MAX_PLAYERS + 1),
+        help=help_text,
+    )
+
+
+def _add_mission_slug(
+    parser: argparse.ArgumentParser,
+    missions_map: dict[str, type[MissionBuilder]],
+    help_text: str,
+) -> None:
+    """The optional mission slug, with the discovered set as its choices."""
+    parser.add_argument(
+        "name",
+        nargs="?",
+        default=None,
+        choices=sorted(missions_map) or None,
+        help=help_text,
+    )
+
+
+def build_parser(
+    missions_map: dict[str, type[MissionBuilder]],
+) -> argparse.ArgumentParser:
+    """The whole CLI, as a parser, with each subcommand carrying its own handler.
+
+    Split out of `main` so it can be built without running anything — which is
+    what lets `tests/test_docs.py` check that every flag a document quotes is a
+    flag that parses. Nothing here may import the heavy stack: the theater list
+    is the one lookup the parser needs, and every command body imports its own
+    dependencies when it runs.
+    """
     from dcs_mission_creator.map_overlay.terrains import known_theaters
 
     parser = argparse.ArgumentParser(
@@ -478,18 +544,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("list", help="List available missions.")
+    lst = sub.add_parser("list", help="List available missions.")
+    lst.set_defaults(run=lambda args: _cmd_list(missions_map))
 
     gen = sub.add_parser(
         "generate",
         help="Generate a mission by name (all missions if no name is given).",
     )
-    gen.add_argument(
-        "name",
-        nargs="?",
-        default=None,
-        choices=sorted(missions_map) or None,
-        help="Mission slug (e.g. coastal_cover). Omit to generate every mission.",
+    _add_mission_slug(
+        gen,
+        missions_map,
+        "Mission slug (e.g. coastal_cover). Omit to generate every mission.",
     )
     out_arg = gen.add_argument(
         "--output-dir",
@@ -503,16 +568,16 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     out_arg.completer = argcomplete.completers.DirectoriesCompleter()  # ty: ignore[unresolved-attribute]
-    gen.add_argument(
-        "--players",
-        type=int,
-        default=MIN_PLAYERS,
-        choices=range(MIN_PLAYERS, MAX_PLAYERS + 1),
-        help=(
-            "Number of coop client slots in the player flight "
-            f"(default: {MIN_PLAYERS}). The flight splits its loadout across "
-            "them, so slot 1 and slot 2 do not carry the same jet."
-        ),
+    _add_players(
+        gen,
+        "Number of coop client slots in the player flight "
+        f"(default: {MIN_PLAYERS}). The flight splits its loadout across "
+        "them, so slot 1 and slot 2 do not carry the same jet.",
+    )
+    gen.set_defaults(
+        run=lambda args: _cmd_generate(
+            missions_map, args.name, args.output_dir, args.players
+        )
     )
 
     aud = sub.add_parser(
@@ -522,20 +587,9 @@ def main(argv: list[str] | None = None) -> int:
             "(all missions if no name is given)."
         ),
     )
-    aud.add_argument(
-        "name",
-        nargs="?",
-        default=None,
-        choices=sorted(missions_map) or None,
-        help="Mission slug. Omit to audit every mission.",
-    )
-    aud.add_argument(
-        "--players",
-        type=int,
-        default=MIN_PLAYERS,
-        choices=range(MIN_PLAYERS, MAX_PLAYERS + 1),
-        help=f"Coop client slots to build for (default: {MIN_PLAYERS}).",
-    )
+    _add_mission_slug(aud, missions_map, "Mission slug. Omit to audit every mission.")
+    _add_players(aud, f"Coop client slots to build for (default: {MIN_PLAYERS}).")
+    aud.set_defaults(run=lambda args: _cmd_audit(missions_map, args.name, args.players))
 
     srv = sub.add_parser(
         "survey",
@@ -583,6 +637,28 @@ def main(argv: list[str] | None = None) -> int:
         default="trained",
         choices=[d.value for d in Difficulty],
         help="Whose reveal to report the drawn margin for (default: %(default)s).",
+    )
+    srv.add_argument(
+        "--near",
+        action="append",
+        default=[],
+        metavar="LABEL@LAT,LNG:RADIUS_M",
+        help=(
+            "Rank candidate positions near a point and print them as pasteable "
+            "degrees with the terrain facts and the settlement to name them "
+            "after. Repeatable."
+        ),
+    )
+    srv.set_defaults(
+        run=lambda args: _cmd_survey(
+            args.theater,
+            args.point,
+            args.site,
+            args.defends,
+            args.agl,
+            args.difficulty,
+            args.near,
+        )
     )
 
     rte = sub.add_parser(
@@ -634,46 +710,29 @@ def main(argv: list[str] | None = None) -> int:
         metavar="KPH",
         help="Add a commanded true airspeed column to the emitted table.",
     )
+    # `default=None` and resolved inside `_cmd_route`, not read off
+    # `core/route_plan` here: that module pulls in numpy and the overlay stack,
+    # and a default in the help text is not worth making `list` and `--help`
+    # pay for it. The planner's own constants stay the single source.
     rte.add_argument(
         "--cell",
         type=float,
-        default=route_plan_defaults()[0],
+        default=None,
         metavar="M",
-        help="Valley-search grid step in metres (default: %(default)s).",
+        help="Valley-search grid step in metres (default: the planner's own).",
     )
     rte.add_argument(
         "--min-leg",
         type=float,
-        default=route_plan_defaults()[1],
+        default=None,
         metavar="M",
         help=(
-            "Shortest leg the planner may create (default: %(default)s). "
+            "Shortest leg the planner may create (default: the planner's own). "
             "Larger trades terrain clearance for fewer waypoints."
         ),
     )
-
-    _add_overlay_subcommand(sub)
-
-    argcomplete.autocomplete(parser)
-    args = parser.parse_args(argv)
-
-    if args.command == "list":
-        return _cmd_list(missions_map)
-    if args.command == "generate":
-        return _cmd_generate(missions_map, args.name, args.output_dir, args.players)
-    if args.command == "audit":
-        return _cmd_audit(missions_map, args.name, args.players)
-    if args.command == "survey":
-        return _cmd_survey(
-            args.theater,
-            args.point,
-            args.site,
-            args.defends,
-            args.agl,
-            args.difficulty,
-        )
-    if args.command == "route":
-        return _cmd_route(
+    rte.set_defaults(
+        run=lambda args: _cmd_route(
             args.theater,
             args.via,
             args.agl,
@@ -683,15 +742,18 @@ def main(argv: list[str] | None = None) -> int:
             args.cell,
             args.min_leg,
         )
-    if args.command == "map-overlay":
-        if args.overlay_command == "build":
-            return _cmd_overlay_build(args.theater, args.layers)
-        if args.overlay_command == "inspect":
-            return _cmd_overlay_inspect(args.theater, args.layers, args.out)
-        if args.overlay_command == "query":
-            return _cmd_overlay_query(args.theater, args.point, args.layer)
-    parser.error(f"unknown command: {args.command}")
-    return 2
+    )
+
+    _add_overlay_subcommand(sub)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    configure_logging()
+    parser = build_parser(_discover())
+    argcomplete.autocomplete(parser)
+    args = parser.parse_args(argv)
+    return args.run(args)
 
 
 if __name__ == "__main__":

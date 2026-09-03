@@ -8,9 +8,8 @@ This is a pydcs-based DCS mission generator. Three docs, one job each:
 - [.claude/skills/dcs-mission/PYDCS_REFERENCE.md](.claude/skills/dcs-mission/PYDCS_REFERENCE.md)
   — **the pydcs API**: terrain, flight / ground helpers, tasks, triggers,
   weather, F10 drawings, coordinates, save, and every gotcha — signatures
-  verified against the installed source under
-  [.venv/lib/python3.14/site-packages/dcs/](.venv/lib/python3.14/site-packages/dcs/).
-  Consult it before guessing any API shape.
+  verified against the `dcs` package installed in `.venv/` (that file carries
+  the recipe for locating it). Consult it before guessing any API shape.
 - **This file** — **project conventions**: package layout, the
   `MissionBuilder` contract, the project-owned `VoiceSynth` / `PlanOverlay`
   helpers, script structure, faction naming, running, and lint / type-check.
@@ -28,11 +27,11 @@ This is a pydcs-based DCS mission generator. Three docs, one job each:
     a string) — it drives both the F10 reveal and the enemy ROE;
   - `def _assemble(self, m: Mission) -> MapOverlay` — builds the whole mission
     into `m` and returns the overlay its positions came from. Use
-    `self.players` (1–6, validated by the base class) for client-slot counts —
-    build the player flight with `mission_kit.player_flight`, never with a raw
-    `group_size=self.players` (see below). **The floor is two**
-    (`MissionBuilder.MIN_PLAYERS`), and the flight splits its loadout across the
-    slots — see *Loadouts are split across the flight*;
+    `self.players` for client-slot counts — `MissionBuilder.MIN_PLAYERS` to
+    `MAX_PLAYERS`, i.e. 2–6, validated by the base class. Build the player
+    flight with `mission_kit.player_flight`, never with a raw
+    `group_size=self.players` (see below), and the flight splits its loadout
+    across the slots — see *Loadouts are split across the flight*;
   - `def readme(self) -> str` — returns the README.md content (markdown,
     the mission briefing).
 - The base class owns everything around that, and **a mission overrides none
@@ -53,7 +52,7 @@ This is a pydcs-based DCS mission generator. Three docs, one job each:
     hundred kilometres down the route before he rotated (`core/join_up.py`).
     They are in the base precisely so they cannot be forgotten. Two steps run
     *after* the save for the mirror-image reason: any data cartridge a mission
-    armed (`core/dtc.py`) and the kneeboard cards (`core/kneeboard.py`) are
+    armed (`core/dtc.py`) and the kneeboard cards (`core/kneeboard`) are
     files inside the `.miz`, and `Mission.save` writes a fixed set of zip
     entries with no hook for another one. The kneeboard has to come last for a
     second reason as well — its route card prints the take-off and landing
@@ -254,7 +253,7 @@ PYDCS_REFERENCE.md §5.
 
 [`sanctuary`](src/dcs_mission_creator/core/sanctuary.py) gives each side a
 **defended** place to run to. Every mission here used to have none: measured
-across all six, not one friendly SAM, not one AAA piece, not one blue
+across all of them, not one friendly SAM, not one AAA piece, not one blue
 air-defence group anywhere. The recovery field was bare ground with a runway on
 it, so a MiG that chased a bingo-fuel, out-of-missiles jet home followed it to
 the flare and shot it in the overhead — and nothing on the F10 map, in the DED or
@@ -323,13 +322,13 @@ rather than red because every red circle on the map means "do not go here" and
 this one means the opposite.
 
 **`keep_clear` is the invariant, and `build_sanctuary` raises on it.** An area SAM
-is a mission-warping object — a Patriot reaches 100 km, further than four of the
-six missions' entire ingress — and an umbrella that touches the AO does not give
+is a mission-warping object — a Patriot reaches 100 km, which on the shortest
+sorties here is the whole ingress — and an umbrella that touches the AO does not give
 anybody a refuge, it deletes the mission: the belts the player was briefed to
 work around get shot from the other side of the map by an asset nobody planned
 the sortie against. The reach comes off the F-16C's own `THREAT_PTS` table in
 `core/dtc.py`, the same rows the cartridge is written from, so nobody re-types a
-range. Four things learned from wiring it into all six:
+range. Four things learned from wiring it into every mission:
 
 - **The two lists are not the same list, and the helper cannot tell them apart
   for you.** Out of *our* umbrella goes whatever the enemy needs left standing
@@ -341,8 +340,9 @@ range. Four things learned from wiring it into all six:
   system fits: `eastern_shield`'s depot is the Kuweires apron, `idlib_gauntlet`'s
   convoy off-loads 4 km from Taftanaz, `daryal_run`'s S-300 is 12 km from Beslan,
   `kodori_strike`'s FOB 9 km from Sukhumi. Put the sanctuary on the field the
-  **fighters recover to** instead — that is the one it is for. All four missions
-  do, and `build_sanctuary` refuses the other choice rather than shipping it.
+  **fighters recover to** instead — that is the one it is for. Every mission
+  with that problem does, and `build_sanctuary` refuses the other choice rather
+  than shipping it.
 - **The front line can be the binding constraint.** `idlib_gauntlet`'s Hatay is
   52 km from the Syrian forward line — closer to the player's own field than to
   his target — so a Hawk there stops 2.5 km short of it and is refused. It gets
@@ -504,7 +504,7 @@ outermost sits at `radius_m`, then jittered), so the radar stays out in front of
 its fan and — what missions depend on — **unit order is untouched**, keeping
 `units[0]` the radar for every `unit_of_type` objective. Call it *after* any
 extra units the mission adds to the group, or those stay where the mission put
-them. All five missions that use a pydcs template now do (SA-6 → 300 m, SA-11 →
+them. Every mission that uses a pydcs template now does (SA-6 → 300 m, SA-11 →
 400 m, SA-10 → 500 m).
 
 Two bounds hold it honest. The footprint stays well inside the 2 km offset
@@ -650,7 +650,7 @@ in its signature and none of them validates the number, so a knots-shaped
 value is accepted in silence and commands roughly **54 % of the intended
 speed**.
 
-All six missions shipped that way. Every `patrol_flight` / `awacs_flight` /
+Every mission shipped that way. Every `patrol_flight` / `awacs_flight` /
 `refuel_flight` / `intercept_flight` call held a knots-shaped number (380–490)
 while the hand-built `add_waypoint` routes in the same files held km/h-shaped
 ones (750–850) — so the repo disagreed with itself, and the AI package was
@@ -714,12 +714,12 @@ of it: the same km/h is a different fraction of a different jet's ceiling, and
 the fast jets are not interchangeable. `idlib_gauntlet`'s Pontiac kept the 800 /
 850 km/h that read as a sane cruise for Uzi's F-16C next to it (0.38 / 0.40 of
 2120) and flew its whole sortie in burner, because on an F/A-18C — the slowest
-fast jet in the fleet at 1950 — the same numbers are **0.41 / 0.44**, and it is
-carrying the heaviest configuration any flight here launches with: two 330 gal
-tanks, four GBU-12 on BRU-33 racks, ATFLIR and three AAMs. It now flies
-680–750 (0.35–0.38, Mach 0.59–0.67, ~280 KIAS). Weigh the loadout as well as the
-airframe — a bombed-up jet sits at the bottom of the band, a clean CAP at the
-top.
+fast jet in the fleet at 1950 — the same numbers are **0.41 / 0.44**, and it was
+carrying the heaviest configuration any flight here launches with (the wing-tank
+pair the paragraph above took off it, four GBU-12 on BRU-33 racks, ATFLIR and
+three AAMs). It now flies 680–750 (0.35–0.38, Mach 0.59–0.67, ~280 KIAS). Weigh
+the loadout as well as the airframe — a bombed-up jet sits at the bottom of the
+band, a clean CAP at the top.
 
 **`Mission.flight_group_inflight` is the same argument with no one watching it.**
 Its `speed` is km/h like every other pydcs speed, and unlike a runway start there
@@ -744,7 +744,7 @@ pydcs-side gotcha, including the `strike_flight` / `sead_flight` helpers that
 pick `max_speed * 0.8` (Mach 1.4 for a Viper) for themselves, is in
 PYDCS_REFERENCE.md §4.2.
 
-A one-off audit across all six missions is a short script — build each mission,
+A one-off audit across every mission is a short script — build each mission,
 walk every flying group, and print each distinct waypoint speed over
 `unit_type.max_speed`. That is what found Pontiac after the unit fix had already
 gone in, and it is worth re-running after touching any route. **Include the
@@ -769,7 +769,7 @@ So **every tanker in this project was briefed on a frequency it was not on** —
 and printed on the kneeboard on that frequency too, because
 `kneeboard/comms.py` reads the `SetFrequencyCommand` in preference to the field,
 that being where the mission's intent was recorded. The tell was which asset
-worked: all four missions with both a tanker and an AWACS put the AWACS on 251,
+worked: every mission with both a tanker and an AWACS put the AWACS on 251,
 which *is* pydcs's default, so the AWACS was reachable by accident and the
 tanker never was. ED's own missions do it the other way round — the working
 tanker in `Mods/aircraft/F-16C/Missions/QuickStart/F-16C - Caucasus - Air
@@ -1292,7 +1292,7 @@ sortie, so a `TimeAfter(FALLBACK_S)` is OR'd in and the flight launches on its
 own after fifteen minutes.
 
 What is left is exactly the flight the player was briefed to fly *with*, and
-across the eight missions that is three: `coastal_cover` `Hawg` (the A-10 pair
+across the whole project that is three: `coastal_cover` `Hawg` (the A-10 pair
 the frag says to escort), `kodori_strike` `Weasel` (the SEAD element clearing
 the strike's path) and `eastern_shield` `Hawg`. The rest hold nothing, and each
 for a reason the mission already had — `idlib_gauntlet`'s `Pontiac` is a
@@ -1355,9 +1355,9 @@ line per decision under an `IADS/<net name>` prefix — read a sortie back with
 `grep 'IADS/' dcs.log` — and it is drawn from the same rolls whether or not
 anyone is reading it, so a traced sortie decides what a quiet one would have.
 `trace` follows `debug` unless set, so `debug=True` gives both and
-`trace=True, debug=False` gives the quiet, log-only one. `idlib_gauntlet`
-currently ships with `debug=True` while its net is being tuned; turn it off
-before flying it, or Skynet talks over the mission on screen.
+`trace=True, debug=False` gives the quiet, log-only one — which is what a
+shipped mission wants, because Skynet's half prints on the player's screen and
+will talk over the mission.
 
 It adds **three** mission-start triggers the first time it is called, in order:
 `core/lua/mist_shim.lua`, `core/lua/vendor/skynet-iads.lua` (both as
@@ -1686,11 +1686,11 @@ because the pod was never the half that was wrong. `core/jtac.py` refuses a
 his own GBU-12s and pod are already there, so there is nothing to arrange. Both
 briefing views carry it, and so does the `kneeboard.remark`, which is the one
 place it can live on a card — pydcs writes the code into no field, so nothing
-about it is derivable. The three missions that carry a laser weapon each say it
-on one line: `coastal_cover` ("Pinpoint 1-1 lases on 1688; your GBU-12s are
-coded the same"), `kuban_forge` and `idlib_gauntlet`, where the flight with the
-bombs is `Pontiac` rather than the player and the briefing says that too — `Uzi`
-carries self-guided SFW and nothing on a laser at all.
+about it is derivable. Every mission that hangs a laser-guided weapon says it on
+one line: `coastal_cover` ("Pinpoint 1-1 lases on 1688; your GBU-12s are coded
+the same"), `kodori_strike`, `kuban_forge`, and `idlib_gauntlet`, where the
+flight with the bombs is `Pontiac` rather than the player and the briefing says
+that too — `Uzi` carries self-guided SFW and nothing on a laser at all.
 
 ### The spot has to be up before the jet is there
 
@@ -1869,7 +1869,7 @@ field. [`kneeboard/charts.py`](src/dcs_mission_creator/core/kneeboard/charts.py)
 answers the question by looking — matching the airport name against the chart file
 names, since that is all the name a chart has and pydcs carries no ICAO to join on
 — and the card is written only where the answer is no. Today that is Hatay and
-nothing else across the eight missions. **With no install the answer is unknown and
+nothing else anywhere here. **With no install the answer is unknown and
 the card is written**, because the two failure modes are not symmetric: a
 redundant page costs a page, a missing one costs the player their field's
 elevation, its ATC channel and where their jet is parked.
@@ -2411,7 +2411,7 @@ estimates, so those cards are as imprecise as the maps they repeat. `ansariyah_w
 radius earns its override: its SA-5 row prints the 160 km the flight plan was
 built from, not the 255 km the jet's own threat table carries for the system.
 
-All eight missions ([coastal_cover](src/dcs_mission_creator/missions/coastal_cover.py),
+Every mission ([coastal_cover](src/dcs_mission_creator/missions/coastal_cover.py),
 [kodori_strike](src/dcs_mission_creator/missions/kodori_strike.py),
 [eastern_shield](src/dcs_mission_creator/missions/eastern_shield.py),
 [idlib_gauntlet](src/dcs_mission_creator/missions/idlib_gauntlet.py),
@@ -2469,7 +2469,7 @@ paths on `\` and cannot be used off Windows (see the docstring).
 **Arm every blue flight explicitly — never rely on the task default.** It is
 sourced from the installed game, so it is empty without `DCS_INSTALL_DIR` and
 is whatever DCS happens to frag with it. Either way it is not what the briefing
-promised, and five of the six missions once shipped with entirely empty pylons
+promised, and most of the missions here once shipped with entirely empty pylons
 while their briefings named specific stores. Use
 [`mission_kit.arm`](src/dcs_mission_creator/core/mission_kit.py), which clears
 the stations first so no default survives on a station the list skips:
@@ -2507,7 +2507,7 @@ caught, both legal in pydcs:
   `abkhaz_sweep` flies the second; the four F-16 missions with a HARM or a bomb
   on 3/7 fly the first. Note also that **every** ED two-tank F-16C payload
   carries an ALQ-184 on the centreline (station 5), and this project left that
-  station empty in all six missions. Every player fit in the project now
+  station empty in every mission. Every player fit in the project now
   carries it.
 - **The F-15C never flies a single wing tank.** Its fuel stations are 2 (left
   wing), 6 (centerline) and 10 (right wing); all eleven ED payloads that carry

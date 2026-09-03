@@ -109,7 +109,7 @@ Claude authors a new module under [src/dcs_mission_creator/missions/](src/dcs_mi
 
 ## Bundled mission examples
 
-Six worked missions ship under [src/dcs_mission_creator/missions/](src/dcs_mission_creator/missions/) — read them as templates for what a generator does with the overlay, flight packages, threats, triggers, and TTS. All are single-seat F-16C-50 sorties (coop-scalable via `--players`); every ground placement comes from the `map_overlay` tactical-scene helpers, not hand-tuned offsets.
+Worked missions ship under [src/dcs_mission_creator/missions/](src/dcs_mission_creator/missions/) — read them as templates for what a generator does with the overlay, flight packages, threats, triggers, and TTS. All are F-16C-50 sorties built for 2–6 coop slots (`--players`), with the flight's loadout split across them; every ground placement comes from the `map_overlay` tactical-scene helpers, not hand-tuned offsets. Each module's own docstring is that mission's full brief — this table is only the index.
 
 | Slug | Theater | Difficulty | Sortie |
 |------|---------|-----------|--------|
@@ -117,10 +117,12 @@ Six worked missions ship under [src/dcs_mission_creator/missions/](src/dcs_missi
 | [`kodori_strike`](src/dcs_mission_creator/missions/kodori_strike.py) | Caucasus | trained | Lead a mixed package (`Weasel` SEAD, `Eagle` F-15C CAP, `Magic` AWACS, `Texaco` tanker) onto a Russian FOB astride the coast road at the Kodori delta; SA-6 rollback inland, Su-27 CAP launches on intrusion. |
 | [`idlib_gauntlet`](src/dcs_mission_creator/missions/idlib_gauntlet.py) | Syria | trained | Interdict a Syrian resupply column out of Hatay through three overlapping SAM belts that sit dark, cue off the EWR chain and go quiet under HARM fire. A 90 km front line prices every flank and funnels the ingress into the SA-6's sector; a JTAC lases the column and reads coordinates in your own cockpit's format. The reference mission for SEAD, front lines, and recon stills. |
 | [`eastern_shield`](src/dcs_mission_creator/missions/eastern_shield.py) | Syria | trained | SEAD an SA-6 defending the Kuweires depot, escort A-10C `Hawg` onto it, then a MiG-29S scramble + armoured reserve push. Full support: `Magic` AWACS, `Texaco` tanker, `Eagle` F-15C TARCAP. |
-| [`abkhaz_sweep`](src/dcs_mission_creator/missions/abkhaz_sweep.py) | Caucasus | ace | Solo air-superiority sweep off the Abkhaz coast vs. Su-27 + MiG-29S aggressors from Sochi-Adler / Gudauta, under an SA-6 that forces a high fight. No support. |
-| [`daryal_run`](src/dcs_mission_creator/missions/daryal_run.py) | Caucasus | ace | Solo SEAD strike on an S-300PS (SA-10) south of Beslan; low-level ingress up the Daryal Gorge, terrain-masked HARM pop-up. AWACS only, no escort/tanker. |
+| [`ansariyah_works`](src/dcs_mission_creator/missions/ansariyah_works.py) | Syria | veteran | Deep strike out of Akrotiri on a Syrian rocket-motor plant behind the Jebel al-Ansariyah — 279 km east, 250 km of it water, flown at fifty metres under an S-200 that reaches most of the way to Cyprus and cannot shoot below three hundred. Three buildings, two bombs, one briefed choice. |
+| [`abkhaz_sweep`](src/dcs_mission_creator/missions/abkhaz_sweep.py) | Caucasus | ace | Air-superiority sweep off the Abkhaz coast vs. Su-27 + MiG-29S aggressors from Sochi-Adler / Gudauta, under an SA-6 that forces a high fight. No support. |
+| [`daryal_run`](src/dcs_mission_creator/missions/daryal_run.py) | Caucasus | ace | SEAD strike on an S-300PS (SA-10) south of Beslan; low-level ingress up the Daryal Gorge, terrain-masked HARM pop-up. AWACS only, no escort/tanker. |
+| [`kuban_forge`](src/dcs_mission_creator/missions/kuban_forge.py) | Caucasus | ace | Strike out of Senaki on a motor works on the Kuban, flown up the Abkhaz plain and the Kodori and over the Klukhori Pass. No anti-radiation weapon: the terrain is the SEAD, and the corridor is masked from the Buk until 34 km short. Low in, high out. |
 
-`idlib_gauntlet` and `eastern_shield` are the Syria examples; the other four are Caucasus. The two `ace` missions withhold the enemy picture — the F10 plan draws the friendly package plus one vague threat zone, and they carry no cartridge and no imagery, because at that difficulty nothing was fixed precisely enough to claim.
+Difficulty is a reveal policy as much as a threat count: a `trained` mission draws its threat rings about 2 km off truth, `veteran` a quarter wider and 4 km off, `ace` wider again and 6 km off. Every mission loads its briefed rings into the F-16C's data cartridge and prints them on the kneeboard, so what changes with difficulty is how far the drawn ring sits from the launchers — never whether the player gets one.
 
 ## Supported maps
 

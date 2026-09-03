@@ -18,6 +18,18 @@ repos:
         pass_filenames: false
         require_serial: true
 
+      # The document checks, on their own hook because they are the only tests
+      # a *markdown-only* commit can break — and a markdown-only commit is
+      # exactly how both mission catalogues went stale. Half a second, so it
+      # runs on either kind of change rather than being conditional.
+      - id: docs
+        name: pytest (documents match the code)
+        entry: uv run pytest -q tests/test_docs.py
+        language: system
+        types_or: [python, markdown]
+        pass_filenames: false
+        require_serial: true
+
       # Only the fast tests: the `slow` ones need the built map overlay, which
       # not every checkout has. CI runs the same selection.
       - id: pytest

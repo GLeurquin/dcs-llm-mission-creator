@@ -1,10 +1,10 @@
 # pydcs LLM reference
 
-Task-oriented API reference for writing DCS missions with **pydcs**
-(the version vendored under
-[.venv/lib/python3.12/site-packages/dcs/](../../../.venv/lib/python3.12/site-packages/dcs/)).
-Every signature below was read from that installed source — trust it over
-memory, and re-grep the source when you touch an API that isn't listed.
+Task-oriented API reference for writing DCS missions with **pydcs** — the
+version installed in this project's `.venv/` (locate it with the `$DCS` recipe
+below rather than typing a `python3.<n>` path, which breaks on the next
+`uv sync`). Every signature below was read from that installed source — trust it
+over memory, and re-grep the source when you touch an API that isn't listed.
 `SKILL.md` covers *design* (what package to build, difficulty policy);
 this file covers *the API* (what to call).
 
@@ -12,7 +12,7 @@ this file covers *the API* (what to call).
 > inconsistent names (`F_16C_50` but `MiG_29S`; `Strela_10M3` but
 > `X_1L13_EWR`). Never invent a class or attribute name — `grep` it first:
 > ```bash
-> DCS=.venv/lib/python3.12/site-packages/dcs
+> DCS=$(uv run python -c 'import dcs, pathlib; print(pathlib.Path(dcs.__file__).parent)')
 > grep -nE "^class <Name>" "$DCS/planes.py"        # or helicopters.py / ships.py
 > grep -nE "^class <Name>" "$DCS/vehicles.py"      # AirDefence / Armor / … namespaces
 > ```
