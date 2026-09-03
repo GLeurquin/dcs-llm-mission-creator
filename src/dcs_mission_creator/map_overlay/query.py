@@ -132,6 +132,17 @@ class MapOverlay:
             seed=seed,
         )
 
+    def cell_of(self, point: Point, cell_size_m: int) -> tuple[int, int]:
+        """World `Point` → the `(row, col)` of the cell holding it.
+
+        The public inverse of `cell_center`, and the pair a caller needs to walk
+        a `read_window` by world coordinate rather than by index. It performs
+        **no bounds check** — `read_window` is what turns an out-of-extent cell
+        into no-data — so a caller indexing an array with this must clamp or
+        validate for itself.
+        """
+        return self._xz_to_cell(point, cell_size_m)
+
     def _xz_to_cell(self, point: Point, cell_size_m: int) -> tuple[int, int]:
         """DCS (x, z) → (row, col) in a raster whose (0,0) is the NW corner."""
         b = self.manifest.bounds

@@ -70,6 +70,27 @@ _REVEAL = {
     Difficulty.ACE: (6_000.0, 1.35, " (approx.)"),
 }
 
+
+@dataclass(frozen=True)
+class RevealPolicy:
+    """How far a drawn estimate may sit from truth, and how wide it grows."""
+
+    offset_m: float
+    radius_factor: float
+    suffix: str
+
+
+def reveal_policy(difficulty: Union[str, Difficulty]) -> RevealPolicy:
+    """The reveal this difficulty applies, for callers outside this module.
+
+    `core/survey.py` needs it to say how much tighter a margin will *look* on
+    the F10 map than it is on the ground, and that number has to come from here
+    or the two drift. Nothing outside this module may apply it — drawing is
+    still the only thing that turns a true position into a claim.
+    """
+    return RevealPolicy(*_REVEAL[Difficulty.coerce(difficulty)])
+
+
 # -- what was drawn, kept so the cockpit can be given the same plan ---------
 #
 # `core/dtc.py` turns these into the Viper's own steerpoints and GEO lines, so

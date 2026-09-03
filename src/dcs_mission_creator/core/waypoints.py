@@ -49,10 +49,15 @@ if TYPE_CHECKING:
 
 log = structlog.get_logger(__name__)
 
-# Waypoint types that are, by definition, on the airfield surface. pydcs emits
-# the take-off variants from `flight_group_from_airport` / `flight_group` and
-# "Land" from `land_at`; all of them ship with `alt = 0`.
-_BASE_POINT_TYPES = frozenset(
+#: Waypoint types that are, by definition, on the airfield surface. pydcs emits
+#: the take-off variants from `flight_group_from_airport` / `flight_group` and
+#: "Land" from `land_at`; all of them ship with `alt = 0`.
+#:
+#: Public because it is the answer to "is this point a flight profile or an
+#: airfield event", which `core/audit.py` has to ask before it complains about
+#: an altitude or a speed: the take-off and landing points carry the field's
+#: elevation and pydcs's hard-coded 108 kt, and neither is a defect.
+BASE_POINT_TYPES = frozenset(
     {
         "TakeOff",
         "TakeOffParking",
@@ -62,6 +67,7 @@ _BASE_POINT_TYPES = frozenset(
         "Land",
     }
 )
+_BASE_POINT_TYPES = BASE_POINT_TYPES
 
 
 def ground_elevation_m(overlay: MapOverlay, position: Point) -> float:
@@ -275,6 +281,50 @@ def _raise_offending_legs(
             alts[i + 1] = need_b
         moved = True
     return moved
+
+
+def leg_violation(
+    a: Point,
+    b: Point,
+    alt_a: float,
+    alt_b: float,
+    overlay: MapOverlay,
+    *,
+    clearance_m: float = 150.0,
+    sample_m: float = 50.0,
+    floor_m: float | None = None,
+) -> tuple[float, float]:
+    """How far this leg goes *into* the terrain, and where along it.
+
+    Returns `(metres short, fraction along)` — `(0.0, 0.0)` for a leg that
+    clears. `clear_terrain` answers the same question by solving for what each
+    end would have to be; this answers it as a depth, which is what a planner
+    choosing *where to put another waypoint* needs. `core/route_plan.py` inserts
+    at the returned fraction and re-asks.
+
+    Sampling matches `clear_terrain`'s, `sample_m` default included, so the two
+    cannot disagree about whether a route is flyable — a planner that used a
+    coarser sampler would hand back corridors the mission then had to lift.
+
+    `floor_m` raises any ground below it to it, and the case it exists for is
+    **water**: the elevation layer holds depth below datum out at sea, so a
+    wave-top leg reads as tens of metres underground unless the waterline is the
+    floor. `None` leaves the raster alone, because a below-datum reading is real
+    data everywhere except under an aeroplane.
+    """
+    distance = a.distance_to_point(b)
+    steps = max(1, int(distance / sample_m))
+    worst, where = 0.0, 0.0
+    for step in range(steps + 1):
+        f = step / steps
+        here = a.new_in_same_map(a.x + (b.x - a.x) * f, a.y + (b.y - a.y) * f)
+        ground = ground_elevation_m(overlay, here)
+        if floor_m is not None:
+            ground = max(floor_m, ground)
+        short = (ground + clearance_m) - (alt_a * (1.0 - f) + alt_b * f)
+        if short > worst:
+            worst, where = short, f
+    return worst, where
 
 
 def _leg_requirement(

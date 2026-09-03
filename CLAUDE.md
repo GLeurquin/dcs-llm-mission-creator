@@ -2221,6 +2221,13 @@ because CI has neither. That is a hard constraint on anything committed here:
 - **Do not assert on mission content.** The smoke test checks that every
   mission builds a readable `.miz` and builds reproducibly, not what is in it;
   freezing composition would make every balance tweak look like a regression.
+- The three tool modules follow the same constraint and are worth copying from:
+  `test_route_plan.py` stands up a synthetic elevation array with the **real**
+  row/column transform on it, so the bulk window and the point query cannot
+  disagree about which cell a coordinate is in — which is the one way that stub
+  could make a broken planner look correct. `test_audit.py` builds two-point
+  missions by hand rather than a real one. `test_loadout_check.py` parses a
+  fixture payload block instead of the install.
 
 ## Briefings read as intel, not as the mission file
 
@@ -2668,6 +2675,225 @@ half is now mechanical (`air_to_air_shots`); the air-to-ground half still has to
 be counted by hand, and it is what caught `kodori_strike` flying a pure
 air-to-air fit against a win condition of "the FOB is wrecked".
 
+## The order the tools go in
+
+There are now four of these and they answer four different questions. Running
+them out of order is what makes a mission expensive, and `ansariyah_works` is the
+worked example of getting it wrong twice in one build:
+
+| # | Ask | Tool |
+|---|-----|------|
+| 1 | Is this **layout** legal — does anything reach anything it should not? | `survey` |
+| 2 | Can an aeroplane **fly** the line between those places? | `route` |
+| 3 | — write the mission — | |
+| 4 | Is the **built** mission internally consistent? | `audit` |
+
+Both failures were sequence rather than knowledge. That mission had its target
+sited, its corridor planned and half its briefing written before anybody measured
+the distance from the target to the southern coastal battery and found the target
+**inside** its envelope — a one-line check that arrived four hours late and cost a
+re-site of the whole AO. And `audit` was skipped entirely in favour of a
+hand-rolled speed audit, which found the same three things `audit` finds and
+missed the ones it does not.
+
+So: **survey before you route, route before you write, audit before you say it is
+done.** The last one is a shell command and the first two are one command each.
+
+## Siting a mission (project-owned)
+
+[`survey`](src/dcs_mission_creator/core/survey.py) answers the question that
+comes before `core/route_plan.py`: **where does everything go, and does that
+layout hold together?** It exists because building `ansariyah_works` took about
+fifteen throwaway scripts, and they asked the same three questions over and over
+— find me a place near here with these properties, how far is each of these from
+each of those, and what is this place called.
+
+```bash
+uv run dcs-mission-creator survey syria \
+  --point "TARGET@35.1640,36.0860" --point "FEET DRY@35.2100,35.9300" \
+  --site "S-125 Tartus@34.9000,35.9200:18000" \
+  --site "SA-8 works@35.1550,36.0760:10300" --defends "SA-8 works" \
+  --agl 150 --difficulty veteran
+```
+
+```python
+from dcs_mission_creator.core import survey
+
+for spot in survey.spots(overlay, anchor, 20_000.0, require, count=8):
+    print(spot.row())          # pasteable degrees + elevation, slope, road, name
+print(survey.report(survey.reaches(overlay, points, sites, agl_m=150.0)))
+survey.covered(rows)           # the list worth a non-zero exit code
+```
+
+Three things it is worth knowing:
+
+- **A margin is measured against what a system reaches, not against the ring the
+  map draws.** Those are different numbers and the difference is the reveal
+  policy: `ansariyah_works`' coast crossing is 18.1 and 16.4 km outside what the
+  two coastal batteries can actually do, and only 9.7 and 8.2 km outside the
+  circles the player is shown. The first pair decides whether a pilot who
+  complies with the briefing lives; the second is what the plan *looks* like. The
+  report prints both, off `map_draw.reveal_policy` so the two cannot drift.
+- **The objective's own defences are declared (`--defends`), not inferred.**
+  Borrowing `routing.avoid_threats`' rule — a ring covering the target is not a
+  finding — was tried first and was exactly wrong: the defect this module was
+  written after *is* a ring covering the target, and the derived rule explained
+  it away. Geometry cannot tell the Osa emplaced on the works from the belt that
+  reaches it by accident; only the author can, and saying so is a claim they
+  should be able to defend.
+- **`spots` ranks and describes; `find_placement` samples and returns bare
+  points.** Both are reproducible (the sampling is seeded from the overlay), but
+  siting wants the best candidate *near where you asked* together with the
+  terrain facts and the settlement to name it after — which is the loop that kept
+  being written by hand.
+
+## Planning a low route (project-owned)
+
+[`route_plan`](src/dcs_mission_creator/core/route_plan.py) answers the three
+questions a mountain corridor has to answer before a line of the mission is
+written, and it exists because answering them by hand is the single most
+expensive thing in this project. `kuban_forge`'s corridor took most of a day of
+hand-picking waypoints, running `clear_terrain`, finding lifts of two and three
+kilometres and re-picking; the same corridor comes out of one command in twenty
+seconds.
+
+```bash
+uv run dcs-mission-creator route caucasus \
+  --via 42.42,41.90 --via 42.90,41.55 --via 43.24,41.745 --via 43.86,41.90 \
+  --threat "SA-11@43.984,41.884" --threat "EWR@43.991,41.970" --speed 680
+```
+
+```python
+from dcs_mission_creator.core import route_plan
+
+route = route_plan.plan_corridor(overlay, [senaki, kodori, klukhori, works])
+print(route.table(("PUSH", "OCHAMCHIRA", "KLUKHOR", "TARGET"), speed_kph=680))
+for look in route_plan.sighting(overlay, route.points, [(sa11, "SA-11")],
+                                altitudes_m=route.altitude_m):
+    print(look.summary())          # "first seen at point 13, 33 km out"
+route_plan.nav_headroom(len(route.points))    # marks left in the DTC
+```
+
+**`--via` is the steering and the rest is measurement.** Between the anchors a
+least-cost search over the elevation raster (cost rises as the cube of the
+ground) finds the valley — which is what a pilot reading a chart picks and what
+nobody can pick out of a grid of numbers — and then the trace is thinned to the
+fewest waypoints whose *straight legs* still clear, by asking
+`waypoints.leg_violation` which leg goes deepest into rock and putting a point
+exactly there. The output is a paste-ready `_CORRIDOR` table in degrees.
+
+Three things it is worth knowing about the answers:
+
+- **The real question is not "how low" but "how low for a waypoint budget I can
+  afford".** Both halves are load-bearing and neither is guessable.
+  `kuban_forge`'s corridor needs **23 waypoints at 250 m AGL and 11 at 600 m** —
+  and the 600 m version is still masked from every radar that matters, because
+  on that map the massif does the hiding rather than the last three hundred
+  metres. `--agl` is that dial; raising the mountain band is what buys back
+  waypoints on a route that will not fit.
+- **`sighting` is the half that cannot be argued.** Line of sight against the
+  raster, from a radar mast to the aeroplane at the altitude actually planned.
+  It reproduced the "detected 34 km short of the target" figure `kuban_forge`'s
+  briefing is built on, which had been derived by hand three times. It answers
+  only about terrain, which is the only thing DCS models — there is no earth
+  curvature, so a mission may promise masking and may not promise a horizon.
+- **`nav_headroom` is the question nobody thinks to ask until the cartridge is
+  full.** The route wins every budget fight in `core/dtc.py`, so a twenty-point
+  corridor leaves one navigation steerpoint for the whole F10 plan — and finding
+  that out from `arm_plan`'s warning *after* a build is finding it out too late
+  to change the route.
+
+Geometry only, like `core/routing.py` and `core/frontline.py`: `Point`s and a
+`MapOverlay` in, `Point`s out. What a route *means* — which valley, what the
+briefing calls each point, where the IP goes — stays the mission's decision.
+
+## Auditing a built mission (project-owned)
+
+[`audit`](src/dcs_mission_creator/core/audit.py) checks the mechanical half of
+the rules in this file, which was until now checked by eye. Every check exists
+because the project shipped the mistake it looks for.
+
+```bash
+uv run dcs-mission-creator audit kuban_forge     # or omit the slug for all eight
+```
+
+It runs against `MissionBuilder.assemble` — the mission exactly as it would be
+written, finishing steps and all, minus the save. That split is the reason the
+audit is usable at all: a `generate` renders text-to-speech, writes a
+five-megabyte archive and draws kneeboard pages, none of which says anything
+about whether a waypoint is inside a mountain. Exit code is non-zero if anything
+came back at `error`, so it works as a gate.
+
+What it checks: commanded speeds against each airframe's own `max_speed` (the
+knots-for-km/h mistake below the floor, afterburner above it), the departure
+gate `set_departure_speeds` is supposed to have corrected, take-off and landing
+points sitting on the field, **client** routes against the terrain at every
+waypoint and along every leg, the cartridge's navigation headroom, enemy groups
+left visible on the F10 map, flights with empty pylons, stores on stations the
+game itself does not use (`core/loadout_check.py`), and the player flight's
+air-to-air magazine against the number of enemy aircraft.
+
+**Findings, not failures.** Several are heuristics about design and a mission is
+allowed to be deliberate about any of them. `idlib_gauntlet`'s only warning is
+an unarmed MQ-9, which is what a spotter is; `kuban_forge`'s only station note
+is the AN/AAQ-33 where ED ships the LITENING, which its own `_FITS` docstring
+already calls a deliberate substitution and gives a reason for. Both are the
+system working: the check names the deviation, the mission answers it in prose,
+and nothing is silently different from the rest of the project. The point is
+that the deliberate cases should be the only ones left.
+
+Three false positives had to be killed before the output was worth reading, and
+each is a fact about pydcs rather than about any mission:
+
+- **`alt_type`.** pydcs writes most altitudes `"BARO"` (AMSL) and the two
+  runway gates `"RADIO"` (above the ground). Read without the type, the 300 m
+  gate at Vaziani is 133 m of solid rock, and the audit's first run reported it
+  on every mission from a field above 300 m.
+- **The approach gate.** `add_runway_waypoint` writes 108 kt at both ends;
+  `set_departure_speeds` corrects the departure one because that is below a
+  loaded jet's stall speed, and leaves the approach one alone because by then
+  the jet is light. Flagging it is the loudest false positive available — every
+  flight in the project has one.
+- **Water.** The elevation layer holds depth below datum out at sea, so
+  `ansariyah_works` — which crosses 250 km of it at sixty metres, under a hard
+  deck taken from the S-200's own weapon table — read as flying underground for
+  its whole ingress. Sea level is the floor for a route (`waypoints.
+  leg_violation(floor_m=…)`), and only for a route.
+
+## Legal is not realistic (project-owned)
+
+[`loadout_check`](src/dcs_mission_creator/core/loadout_check.py) reads ED's own
+payload tables out of the installed game and answers "which stations does the
+game actually hang this store on". pydcs only checks that a station *accepts* a
+store, which is how an AMRAAM ended up on an F-16C's station 2 and a Sidewinder
+on its wingtip in every mission here for months.
+
+```python
+for note in loadout_check.check(planes.F_16C_50, fit.stores):
+    print(note)   # station 11: Sniper ATP — no shipped payload carries it;
+                  # the game ships AN/AAQ-28 LITENING here
+```
+
+Two joins make it work and both are easy to get wrong: a `PylonN` attribute is
+`(station, {clsid, name, weight})` with a **lowercase** `clsid`, while a *loaded*
+pylon on a unit carries `CLSID` — so the by-name and by-unit paths cannot share a
+lookup. And an unlisted store is usually a working alternative to a listed one
+rather than a mistake, so the note names what the game ships there instead;
+that is the difference between something actionable and a shrug.
+
+The same applies one branch over, and it is worth more there. A store the game
+flies on *other* stations gets the stations it does fly on **and** what this one
+ships, because those are two different findings that read identically without
+the second half: an AMRAAM on an F-16C's station 2 is a swapped pair and a bug —
+the game hangs a Sidewinder there and nothing else — while an AIM-120C on an
+F-15C's station 4 is a sub-variant substitution, since ED's own payloads put an
+AIM-120**B** on that station. Twenty of the thirty-one findings across this repo
+were the harmless one, printed in the shape of the bug.
+
+With no `DCS_INSTALL_DIR` there is nothing to read and every check returns empty,
+exactly as `load_task_default_loadout` does. The audit says so out loud rather
+than reporting a clean bill of health it did not earn.
+
 ## Running
 
 (rely on the `DCS_MISSIONS_FOLDER` and `DCS_INSTALL_DIR` env vars being
@@ -2679,6 +2905,17 @@ uv run python -m dcs_mission_creator.missions.coastal_cover --players 2
 # or via the unified CLI (auto-discovers every mission module):
 uv run dcs-mission-creator list
 uv run dcs-mission-creator generate coastal_cover --players 2
+
+# build without saving and report what looks wrong (seconds, not a minute)
+uv run dcs-mission-creator audit coastal_cover
+
+# check a layout before anything is written around it (exit 1 = something reaches
+# something it should not)
+uv run dcs-mission-creator survey syria --point "TARGET@35.164,36.086" \
+  --site "S-125 Tartus@34.90,35.92:18000"
+
+# plan a corridor the terrain allows, before writing any of it
+uv run dcs-mission-creator route caucasus --via 42.42,41.90 --via 43.86,41.90
 ```
 
 ## Lint and type-check

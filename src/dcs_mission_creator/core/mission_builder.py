@@ -196,6 +196,35 @@ class MissionBuilder(ABC):
         beside the package. An asset alongside the mission, not a gap in what
         pydcs writes.
         """
+        m, overlay = self.assemble()
+        miz_path.parent.mkdir(parents=True, exist_ok=True)
+        m.save(str(miz_path))
+        dtc.write_cartridges(m, miz_path)
+        kneeboard.publish(m, miz_path, overlay=overlay, title=self.title)
+        recon.publish_stills(m, miz_path.parent)
+
+    def assemble(self) -> tuple[Mission, MapOverlay]:
+        """The finished mission and its overlay, up to but not including the save.
+
+        Everything in `build_miz`'s first list happens here, in that order, so
+        this is the mission exactly as it will be written — corrected altitudes,
+        corrected departure speeds, datalink identities, tuned radios and the
+        held package all applied. What is missing is only the three things that
+        are *files inside the archive* and therefore cannot exist before it.
+
+        It is split out for `core/audit.py`, which needs the built mission and
+        nothing on disk: a full `generate` renders voice, writes a five-megabyte
+        archive and draws kneeboard pages, and none of that tells you whether a
+        waypoint is inside a mountain. Splitting it rather than letting the
+        audit re-run the finishing steps itself is the point — the ordering
+        above is load-bearing and lives in exactly one place, so an audit cannot
+        report on a mission subtly different from the one that ships.
+
+        Seeds the RNG for the same reason `generate` does, so a bare
+        `assemble()` is as reproducible as a build. Seeding twice before any
+        draw is harmless: it sets the same state from the same slug.
+        """
+        self._seed_rng()
         m = Mission(self._terrain)
         self._permit_crash_recovery(m)
         overlay = self._assemble(m)
@@ -205,11 +234,7 @@ class MissionBuilder(ABC):
         waypoints.set_departure_speeds(m)
         datalink.assign_datalink_identities(m)
         radio.tune_working_frequencies(m)
-        miz_path.parent.mkdir(parents=True, exist_ok=True)
-        m.save(str(miz_path))
-        dtc.write_cartridges(m, miz_path)
-        kneeboard.publish(m, miz_path, overlay=overlay, title=self.title)
-        recon.publish_stills(m, miz_path.parent)
+        return m, overlay
 
     @staticmethod
     def _remark_loadouts(m: Mission) -> None:

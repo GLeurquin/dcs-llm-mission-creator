@@ -10,10 +10,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+import structlog
 from dcs.mapping import Point
 
 from dcs_mission_creator.map_overlay.placement import Placement, Vegetation
 from dcs_mission_creator.map_overlay.query import MapOverlay
+
+log = structlog.get_logger(__name__)
 
 
 @dataclass
@@ -56,6 +59,16 @@ class AirfieldRingDefense:
     shorad: list[Point]
     aaa: list[Point]
     long_sam: list[Point]
+
+
+#: How many candidate cells to pull when `place_ingress_corridor` has to apply
+#: its own visibility test. `find_placement` hands back one by default, and one
+#: candidate that fails the flown-altitude check leaves nothing to choose from.
+_MASKED_CANDIDATES = 24
+
+#: Eye height for a search radar in a line-of-sight test. The other end is the
+#: aeroplane, and that is the number that actually decides the answer.
+_RADAR_MAST_M = 15.0
 
 
 @dataclass
@@ -567,8 +580,39 @@ class TacticalScene:
         threats: tuple[Point, ...],
         waypoints: int = 4,
         leg_search_radius_m: float = 8_000.0,
+        altitude_m: float | None = None,
     ) -> list[Point]:
-        """Terrain-masked waypoint chain from IP to target avoiding LOS to threats."""
+        """Waypoints from IP to target, nudged toward ground `threats` cannot see.
+
+        Evenly spaced along the straight line and moved up to
+        `leg_search_radius_m` to a cell with no line of sight to `threats`. It is
+        a *lateral* nudge, not a route: it does not follow valleys, does not
+        guarantee the legs clear terrain, and does not choose how many waypoints
+        the ground needs. `core/route_plan.py` answers those, and answers a
+        different question — the lowest way through, rather than the hidden one —
+        so neither replaces the other.
+
+        **`altitude_m` is the height the corridor will be flown at, and leaving
+        it `None` makes the masking claim nearly worthless.** The underlying
+        filter tests line of sight between two points two metres off the deck,
+        which is the right question for a vehicle and the wrong one for an
+        aeroplane by three orders of magnitude. Measured across the four
+        missions that call this: at two metres their corridors are masked at 0-3
+        points of 8, and at the altitude they are actually flown 3-8 of those
+        same points are in view of every belt — `kodori_strike`'s is visible from
+        all of them, at every point. Pass the cruise altitude and the search
+        answers the question the flight is going to ask.
+
+        The default stays `None` because changing it moves the waypoints of four
+        shipped missions, which is a mission-design decision rather than a bug
+        fix. A new caller should pass it.
+
+        Two more things the caller owns, because this cannot: when no masked cell
+        is found the straight-line anchor is used, so a corridor may be entirely
+        unmasked and say nothing about it; and nothing here looks at the terrain
+        *between* the points, which is what `core/waypoints.clear_terrain`
+        catches at build time.
+        """
         if waypoints <= 0:
             return [ip, target]
         pts: list[Point] = [ip]
@@ -582,11 +626,45 @@ class TacticalScene:
             require = Placement(
                 max_slope_deg=45,
                 not_in=(Vegetation.WATER,),
-                no_line_of_sight_to=threats,
+                no_line_of_sight_to=() if altitude_m is not None else threats,
             )
+            # With an altitude the visibility test cannot be left to
+            # `find_placement`, whose LOS filter is fixed at two metres — so it
+            # is asked for a *pool* of otherwise-suitable cells and the flown
+            # test is applied here. The default `count=1` is why this cannot
+            # simply post-filter the usual call: one candidate that fails leaves
+            # nothing, and every point would silently fall back to the anchor.
             spots = self.overlay.find_placement(
-                anchor, radius_m=leg_search_radius_m, require=require
+                anchor,
+                radius_m=leg_search_radius_m,
+                require=require,
+                count=1 if altitude_m is None else _MASKED_CANDIDATES,
             )
+            if altitude_m is not None:
+                spots = [
+                    spot
+                    for spot in spots
+                    if not any(
+                        self.overlay.line_of_sight(
+                            threat, spot, eye_a_m=_RADAR_MAST_M, eye_b_m=altitude_m
+                        )
+                        for threat in threats
+                    )
+                ]
+            if not spots and altitude_m is not None:
+                # Say so. The alternative is a corridor that reads as masked in
+                # the mission source and is in plain view in the air, which is
+                # the state all four callers are in today. Above a few hundred
+                # metres this is the *normal* outcome rather than a near miss:
+                # terrain masking is a low-altitude idea, and a lateral nudge of
+                # a few kilometres cannot buy it back at cruise.
+                log.warning(
+                    "no masked cell for this corridor point; using the straight "
+                    "line, which the threats can see",
+                    altitude_m=altitude_m,
+                    search_radius_m=leg_search_radius_m,
+                    threats=len(threats),
+                )
             pts.append(spots[0] if spots else anchor)
         pts.append(target)
         return pts
