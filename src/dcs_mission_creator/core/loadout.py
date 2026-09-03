@@ -59,7 +59,7 @@ from __future__ import annotations
 
 import textwrap
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING, Any, Sequence
 
 import structlog
 
@@ -127,6 +127,22 @@ def assign(loadouts: Sequence[Loadout], slots: int) -> tuple[Loadout, ...]:
     return tuple(loadouts[i % len(loadouts)] for i in range(slots))
 
 
+def pylon_entry(plane_type: type, pylon: int, store: str) -> Any:
+    """The `PylonN.<store>` value pydcs hangs on a station, or `None`.
+
+    The one place the `Pylon<N>` attribute-name convention is written down. Two
+    modules need it and they want opposite failure behaviour, which is why it
+    returns rather than raises: arming wants an `AttributeError` at build time
+    for a store that station cannot take (a wrong name should not ship), and
+    `core/loadout_check` is *asking* whether the name resolves at all.
+
+    The value is `(station number, {clsid, name, weight})` — note the lowercase
+    `clsid`, unlike the `CLSID` a *loaded* pylon carries on a unit.
+    """
+    station = getattr(plane_type, f"Pylon{pylon}", None)
+    return getattr(station, store, None) if station is not None else None
+
+
 def arm_unit(
     unit: FlyingUnit, plane_type: type, stores: Sequence[tuple[int, str]]
 ) -> None:
@@ -137,6 +153,8 @@ def arm_unit(
     """
     unit.pylons.clear()
     for pylon, weapon in stores:
+        # `getattr` unguarded on purpose: a store name the station cannot take
+        # is an AttributeError at build time rather than a silently empty rail.
         unit.load_pylon(getattr(getattr(plane_type, f"Pylon{pylon}"), weapon))
 
 

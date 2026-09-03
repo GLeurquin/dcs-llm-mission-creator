@@ -14,82 +14,29 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from dcs.mapping import Point
-from dcs.terrain.caucasus.caucasus import Caucasus
 
 from dcs_mission_creator.core import route_plan, waypoints
+from tests.conftest import RasterOverlay, at
 
-TERRAIN = Caucasus()
-
+#: 100 m cells over a 20 km square, which is the scale a corridor is planned at.
 CELL_M = 100
 #: World coordinates of the synthetic raster's north-west corner.
 TOP, LEFT = 10_000.0, 0.0
 
 
-class _Bounds:
-    top, left = TOP, LEFT
-    bottom, right = -10_000.0, 20_000.0
+class _Overlay(RasterOverlay):
+    """The shared raster stub, at this module's cell size.
 
-
-class _Manifest:
-    bounds = _Bounds()
-
-
-class _Window:
-    def __init__(self, values, row0, col0):
-        self.values, self.row0, self.col0 = values, row0, col0
-        self.cell_size_m = CELL_M
-        self.valid = np.ones_like(values, dtype=bool)
-
-
-class _Overlay:
-    """Everything `route_plan` and `waypoints` ask an overlay for.
-
-    Backed by one array with the same row/col transform the real overlay uses,
-    so the bulk window and the point query cannot disagree about which cell a
-    world coordinate is in — which is the one way this stub could make a broken
-    planner look correct.
+    Nothing is added: `route_plan` and `waypoints` ask an overlay only for the
+    transform, the point query, one bulk window and line of sight, and all four
+    are `conftest`'s — with the same row/col transform the real overlay uses, so
+    the bulk window and the point query cannot disagree about which cell a world
+    coordinate is in. That is the one way this stub could make a broken planner
+    look correct.
     """
 
-    theater = "Caucasus"
-    manifest = _Manifest()
-
     def __init__(self, heights: np.ndarray) -> None:
-        self.heights = heights
-
-    def _cell(self, point: Point) -> tuple[int, int]:
-        return (
-            int((TOP - point.x) / CELL_M),
-            int((point.y - LEFT) / CELL_M),
-        )
-
-    def cell_of(self, point: Point, cell_size_m: int) -> tuple[int, int]:
-        return self._cell(point)
-
-    def elevation_at(self, point: Point) -> float:
-        row, col = self._cell(point)
-        if 0 <= row < self.heights.shape[0] and 0 <= col < self.heights.shape[1]:
-            return float(self.heights[row, col])
-        return 0.0
-
-    def read_window(self, name, center, *, half_width_m, half_height_m=None, fill=0):
-        return _Window(self.heights.astype(float), 0, 0)
-
-    def line_of_sight(self, a: Point, b: Point, eye_a_m=2.0, eye_b_m=2.0) -> bool:
-        """Straight-line visibility over the same array, sampled per cell."""
-        top_a = self.elevation_at(a) + eye_a_m
-        top_b = self.elevation_at(b) + eye_b_m
-        steps = max(1, int(a.distance_to_point(b) / CELL_M))
-        for i in range(1, steps):
-            f = i / steps
-            here = a.new_in_same_map(a.x + (b.x - a.x) * f, a.y + (b.y - a.y) * f)
-            if self.elevation_at(here) > top_a * (1 - f) + top_b * f:
-                return False
-        return True
-
-
-def at(x: float, y: float) -> Point:
-    return Point(x, y, TERRAIN)
+        super().__init__(heights, cell_m=CELL_M, top=TOP, left=LEFT)
 
 
 def flat(height: float = 0.0) -> _Overlay:

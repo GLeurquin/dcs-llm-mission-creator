@@ -12,17 +12,12 @@ the opinionated core helpers, not here.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING, Iterator, Sequence
 
 from dcs.unit import Skill
 from dcs.unittype import UnitType
 
 from dcs_mission_creator.core import loadout
-
-# Re-exported: `set_skill` has lived in air_defense.py since the site builders
-# needed it, and it applies to any group, so missions should not have to know
-# that. Importing it here keeps that detail out of the mission files.
-from dcs_mission_creator.core.air_defense import set_skill
 from dcs_mission_creator.core.loadout import Loadout, arm_group
 
 if TYPE_CHECKING:
@@ -37,10 +32,15 @@ if TYPE_CHECKING:
 
 __all__ = [
     "arm",
+    "CLIENT_SKILLS",
+    "flying_groups",
+    "flying_groups_by_side",
+    "is_client",
     "mark_clients",
     "MAX_FLIGHT_SIZE",
     "offset",
     "player_flight",
+    "player_groups",
     "RaceTrack",
     "race_track",
     "section_names",
@@ -50,6 +50,67 @@ __all__ = [
     "slot_names",
     "unit_of_type",
 ]
+
+
+#: The two skills that mean "a person is flying this". DCS distinguishes them by
+#: whether the mission is single- or multiplayer, and nothing here ever cares
+#: which — every caller is asking "is a human in this cockpit".
+CLIENT_SKILLS = frozenset({Skill.Client, Skill.Player})
+
+
+def flying_groups(m: Mission, *, coalition: str | None = None) -> Iterator[FlyingGroup]:
+    """Every plane and helicopter group in the mission, in build order.
+
+    Six modules walked this by hand — `join_up`, `datalink`, `radio`,
+    `waypoints` (twice, in one file), `kneeboard/comms` and `audit` — and the
+    copies had already drifted on whether an empty group counts. The nesting is
+    three deep and the same every time, which is the definition of something
+    that belongs in one place.
+    """
+    for name, side in m.coalition.items():
+        if coalition is not None and name != coalition:
+            continue
+        for country in side.countries.values():
+            yield from country.plane_group
+            yield from country.helicopter_group
+
+
+def flying_groups_by_side(
+    m: Mission, *, coalition: str | None = None
+) -> Iterator[tuple[str, FlyingGroup]]:
+    """The same walk, tagged with the coalition name that owns each group.
+
+    Separate from `flying_groups` rather than an option on it, because a caller
+    either needs the side for every group or needs none of them, and a tuple
+    nobody unpacks is noise at five of the seven call sites.
+    """
+    for name, side in m.coalition.items():
+        if coalition is not None and name != coalition:
+            continue
+        for country in side.countries.values():
+            for group in (*country.plane_group, *country.helicopter_group):
+                yield name, group
+
+
+def is_client(group: FlyingGroup) -> bool:
+    """Whether a human flies any airframe in `group`."""
+    return any(unit.skill in CLIENT_SKILLS for unit in group.units)
+
+
+def player_groups(m: Mission, *, coalition: str | None = None) -> list[FlyingGroup]:
+    """Every flying group holding a client slot, in build order."""
+    return [g for g in flying_groups(m, coalition=coalition) if is_client(g)]
+
+
+def set_skill(group: Group, skill: Skill) -> None:
+    """Apply `skill` to every unit of `group` (was per-mission `_set_skill`).
+
+    Takes any pydcs `Group` — vehicle sites, flights, ships — which is why it
+    is here rather than in `core/air_defense`, where it started because the site
+    builders were the first to need it. Every mission calls it on flights.
+    """
+    for unit in group.units:
+        unit.skill = skill
 
 
 def offset(origin: Point, *, east_m: float = 0.0, north_m: float = 0.0) -> Point:

@@ -58,8 +58,8 @@ from typing import TYPE_CHECKING
 
 import structlog
 from dcs import condition
-from dcs.unit import Skill
 
+from dcs_mission_creator.core import mission_kit
 from dcs_mission_creator.core.tasking import scramble_on_trigger
 
 if TYPE_CHECKING:
@@ -91,7 +91,7 @@ FALLBACK_S = 900
 ON_STATION_TASKS = frozenset({"AWACS", "Refueling", "CAP"})
 
 #: Waypoint types that mean the flight starts on an airfield. Same list as
-#: `core/waypoints._BASE_POINT_TYPES` minus "Land": a group that spawns in the
+#: `core/waypoints.BASE_POINT_TYPES` minus "Land": a group that spawns in the
 #: air has nothing to be held on.
 _GROUND_START_TYPES = frozenset(
     {
@@ -105,8 +105,6 @@ _GROUND_START_TYPES = frozenset(
 
 #: Marker set by `launch_immediately`, read by the sweep.
 _OPT_OUT = "join_up_launch_immediately"
-
-_CLIENT_SKILLS = frozenset({Skill.Client, Skill.Player})
 
 
 def launch_immediately(group: FlyingGroup) -> FlyingGroup:
@@ -138,7 +136,7 @@ def hold_package_for_player(
         return 0
     coalitions = {coalition for coalition, _unit in clients}
     held = 0
-    for coalition, group in _flying_groups(m):
+    for coalition, group in mission_kit.flying_groups_by_side(m):
         if coalition not in coalitions or not _should_hold(group):
             continue
         scramble_on_trigger(
@@ -180,7 +178,7 @@ def _player_airborne(
 
 def _should_hold(group: FlyingGroup) -> bool:
     """Whether this flight is one the player is meant to launch ahead of."""
-    if any(u.skill in _CLIENT_SKILLS for u in group.units):
+    if mission_kit.is_client(group):
         return False  # the player flight itself
     if getattr(group, _OPT_OUT, False):
         return False
@@ -195,17 +193,7 @@ def _client_units(m: Mission) -> list[tuple[str, int]]:
     """Every player slot in the mission as `(coalition, unit id)`."""
     return [
         (coalition, unit.id)
-        for coalition, group in _flying_groups(m)
+        for coalition, group in mission_kit.flying_groups_by_side(m)
         for unit in group.units
-        if unit.skill in _CLIENT_SKILLS
-    ]
-
-
-def _flying_groups(m: Mission) -> list[tuple[str, FlyingGroup]]:
-    """Every plane and helicopter group, tagged with the coalition that owns it."""
-    return [
-        (name, group)
-        for name, coalition in m.coalition.items()
-        for country in coalition.countries.values()
-        for group in (*country.plane_group, *country.helicopter_group)
+        if unit.skill in mission_kit.CLIENT_SKILLS
     ]

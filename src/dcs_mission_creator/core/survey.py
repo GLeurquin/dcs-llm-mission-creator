@@ -31,8 +31,8 @@ inside its envelope. That is a one-line check that arrived four hours late.
     print(survey.report(survey.reaches(
         overlay,
         {"TARGET": plant, "FEET DRY": crossing},
-        [survey.Site("S-125 Tartus", tartus, 18_000.0),
-         survey.Site("S-200", jableh, 160_000.0, defends_objective=True)],
+        [survey.Site.named("S-125 Tartus", tartus, 18_000.0),
+         survey.Site.named("S-200", jableh, 160_000.0, defends_objective=True)],
         agl_m=150.0,
     )))
 
@@ -69,6 +69,8 @@ import structlog
 
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.map_draw import reveal_policy
+from dcs_mission_creator.core.routing import ThreatRing
+from dcs_mission_creator.map_overlay.query import FIRE_CONTROL_MAST_M
 
 if TYPE_CHECKING:
     from dcs.mapping import Point
@@ -89,11 +91,12 @@ PLACES_WITHIN_M = 8_000.0
 #: writes into a land corridor.
 DEFAULT_AGL_M = 150.0
 
-#: How high a ground radar's antenna sits. `MapOverlay.line_of_sight` adds this
-#: to the terrain under it, and two points on the deck fail across the gentlest
-#: rise — the same reason `core/lua/autolase.lua` lifts both ends of its own
-#: test.
-RADAR_MAST_M = 6.0
+#: A layout is checked against what a *battery* can see, so the eye height is
+#: its tracking radar rather than a search mast: what `reaches` answers is
+#: whether a briefed point is shootable, and the launchers are cued by the low
+#: antenna. `core/route_plan.sighting` asks the other question — who *detects*
+#: a corridor — and uses the search mast.
+RADAR_MAST_M = FIRE_CONTROL_MAST_M
 
 
 @dataclass(frozen=True)
@@ -131,8 +134,14 @@ class Spot:
 
 
 @dataclass(frozen=True)
-class Site:
+class Site(ThreatRing):
     """A named thing in the layout, and how far it reaches.
+
+    A `routing.ThreatRing` with one extra claim on it, and the same one on
+    purpose: the circle a layout is checked against and the circle an AI route
+    is bent around are the same circle, so `margin_m` and `covers` are
+    inherited rather than written twice. What is added is `defends_objective`,
+    and it is the whole difference between the two questions — see below.
 
     `radius_m` is what the system **actually does** — the envelope a pilot dies
     inside — not the ring the F10 plan will draw for it. Zero means the site has
@@ -141,9 +150,6 @@ class Site:
     something that cannot shoot.
     """
 
-    label: str
-    position: "Point"
-    radius_m: float = 0.0
     #: Is this system *for* the objective — its point defence, or an area
     #: system whose envelope the whole sortie is flown inside? Then being inside
     #: it is the mission rather than a defect, and it stays out of `covered`.
@@ -159,6 +165,22 @@ class Site:
     #: can, and saying so is a claim they should be able to defend the way
     #: `_threat_rings` defends leaving a ring out of the routing set.
     defends_objective: bool = False
+
+    @classmethod
+    def named(
+        cls,
+        label: str,
+        position: "Point",
+        radius_m: float = 0.0,
+        *,
+        defends_objective: bool = False,
+    ) -> "Site":
+        """A site in label-first order, which is how a layout is written down.
+
+        `ThreatRing` puts the position first because a route is planned from
+        geometry; a layout is read from a list of names. Same object either way.
+        """
+        return cls(position, radius_m, label, defends_objective=defends_objective)
 
     def drawn_margin_m(
         self, distance_m: float, difficulty: Difficulty | str
@@ -210,16 +232,9 @@ def describe(
 ) -> Spot:
     """Everything the overlay knows about one position, as one record."""
     latlng = point.latlng()
-    places = overlay.places(point, places_within_m)
-    named = tuple(
-        p.name
-        for p in sorted(
-            places,
-            key=lambda p: point.distance_to_point(
-                point.new_in_same_map(p.position.x, p.position.y)
-            ),
-        )
-    )
+    # `MapOverlay.places` returns them nearest-first already, which is the order
+    # a name wants; re-sorting here was a no-op over an already-sorted list.
+    named = tuple(p.name for p in overlay.places(point, places_within_m))
     return Spot(
         position=point,
         lat=latlng.lat,
@@ -310,7 +325,7 @@ def reaches(
                     point=label,
                     site=site,
                     distance_m=distance,
-                    margin_m=distance - site.radius_m if site.radius_m else None,
+                    margin_m=site.margin_m(point) if site.radius_m else None,
                     visible=overlay.line_of_sight(
                         site.position, point, eye_a_m=mast_m, eye_b_m=agl_m
                     ),

@@ -42,7 +42,7 @@ from typing import TYPE_CHECKING, Sequence
 import structlog
 from dcs.weapons_data import weapon_ids
 
-from dcs_mission_creator.core import dcs_install
+from dcs_mission_creator.core import dcs_install, loadout
 
 if TYPE_CHECKING:
     from dcs.unitgroup import FlyingGroup
@@ -118,12 +118,9 @@ def clsid_for(aircraft_type: type[FlyingType], pylon: int, store: str) -> str | 
     time; the payload tables are keyed by CLSID, so the two have to be joined
     before anything can be compared.
     """
-    station = getattr(aircraft_type, f"Pylon{pylon}", None)
-    entry = getattr(station, store, None) if station is not None else None
-    # A `PylonN` attribute is `(station number, {clsid, name, weight})` — a
-    # lowercase `clsid`, unlike the `CLSID` a *loaded* pylon carries on a unit.
-    # The two spellings are the reason `check` and `check_group` cannot share
-    # one lookup.
+    entry = loadout.pylon_entry(aircraft_type, pylon, store)
+    # The lowercase `clsid` here is the reason `check` and `check_group` cannot
+    # share one lookup: a *loaded* pylon on a unit carries `CLSID`.
     if isinstance(entry, tuple) and len(entry) == 2 and isinstance(entry[1], dict):
         value = entry[1].get("clsid")
         return str(value) if value else None

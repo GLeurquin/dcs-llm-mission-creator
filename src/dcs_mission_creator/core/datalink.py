@@ -140,14 +140,14 @@ def assign_datalink_identities(m: Mission) -> None:
 
 
 def _flying_groups(m: Mission) -> list[FlyingGroup]:
-    """Every plane and helicopter group in the mission, in group-id order."""
-    groups = [
-        group
-        for coalition in m.coalition.values()
-        for country in coalition.countries.values()
-        for group in (*country.plane_group, *country.helicopter_group)
-        if group.units
-    ]
+    """Every plane and helicopter group in the mission, in **group-id** order.
+
+    Ordered rather than in build order, and that is this module's own
+    requirement rather than a general one: track numbers are handed out in
+    blocks as they are walked, so the `.miz` stays byte-identical only if the
+    walk does.
+    """
+    groups = [g for g in mission_kit.flying_groups(m) if g.units]
     return sorted(groups, key=lambda g: g.id)
 
 

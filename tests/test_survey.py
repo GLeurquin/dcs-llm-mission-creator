@@ -16,44 +16,43 @@ from __future__ import annotations
 import numpy as np
 import pytest
 from dcs.mapping import Point
-from dcs.terrain.caucasus.caucasus import Caucasus
 
 from dcs_mission_creator.core import survey
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.map_draw import reveal_policy
-
-TERRAIN = Caucasus()
+from tests.conftest import RasterOverlay, at
 
 #: A coarse raster on purpose: `survey` does no fine terrain work beyond line of
 #: sight, and the distances it is asked about are tens of kilometres, so 500 m
 #: cells over 200 km is the shape of the question rather than a compromise.
 CELL_M = 500
-TOP, LEFT = 100_000.0, 0.0
+#: The raster is centred on the origin — 200 km square — so a candidate offset a
+#: few kilometres west of a point at (0, 0) is still on it. The old stub had its
+#: west edge at y = 0 and got away with it only through numpy's negative-index
+#: wraparound, which quietly read the far side of the map.
+TOP, LEFT = 100_000.0, -100_000.0
 
 
 class _Place:
     def __init__(self, name: str, x: float, y: float) -> None:
         self.name = name
         self.kind = "village"
-        self.position = Point(x, y, TERRAIN)
+        self.position = at(x, y)
 
 
-class _Overlay:
-    """Everything `survey` asks an overlay for, over one elevation array."""
+class _Overlay(RasterOverlay):
+    """The shared raster stub plus the four point queries `survey` describes with.
 
-    theater = "Caucasus"
+    `find_placement` is the one that had to be written rather than borrowed, and
+    it deliberately returns candidates **out of distance order**, because that is
+    what the real one does — it samples its mask — and putting the nearest first
+    is the whole reason `survey.spots` exists.
+    """
 
     def __init__(self, heights: np.ndarray, places: list[_Place] | None = None) -> None:
-        self.heights = heights
+        super().__init__(heights, cell_m=CELL_M, top=TOP, left=LEFT)
         self._places = places or []
         self.asked: list[tuple[Point, float]] = []
-
-    def _cell(self, point: Point) -> tuple[int, int]:
-        return int((TOP - point.x) / CELL_M), int((point.y - LEFT) / CELL_M)
-
-    def elevation_at(self, point: Point) -> int:
-        row, col = self._cell(point)
-        return int(self.heights[row, col])
 
     def slope_at(self, point: Point) -> float:
         return 3.0
@@ -74,40 +73,17 @@ class _Overlay:
         return -40.0
 
     def places(self, point: Point, radius_m: float) -> list[_Place]:
-        return [
-            p
-            for p in self._places
-            if point.distance_to_point(Point(p.position.x, p.position.y, TERRAIN))
-            <= radius_m
+        """Nearest first, as the real one documents and `survey.describe` trusts."""
+        found = [
+            p for p in self._places if point.distance_to_point(p.position) <= radius_m
         ]
-
-    def line_of_sight(
-        self, a: Point, b: Point, eye_a_m: float = 2.0, eye_b_m: float = 2.0
-    ) -> bool:
-        """Straight sample along the row/col line, the same shape as the real one."""
-        (ra, ca), (rb, cb) = self._cell(a), self._cell(b)
-        steps = max(abs(ra - rb), abs(ca - cb), 1)
-        top_a = float(self.heights[ra, ca]) + eye_a_m
-        top_b = float(self.heights[rb, cb]) + eye_b_m
-        for i in range(1, steps):
-            t = i / steps
-            r = int(round(ra + (rb - ra) * t))
-            c = int(round(ca + (cb - ca) * t))
-            if self.heights[r, c] > top_a + (top_b - top_a) * t:
-                return False
-        return True
+        return sorted(found, key=lambda p: point.distance_to_point(p.position))
 
     def find_placement(self, near: Point, radius_m: float, require, count: int = 1):
-        """A deterministic stand-in: cells on a coarse grid inside the radius.
-
-        Deliberately returned **out of distance order**, because that is what the
-        real one does — it samples its mask — and putting the nearest one first
-        is the whole reason `survey.spots` exists.
-        """
         self.asked.append((near, radius_m))
         step = 5 * CELL_M
         found = [
-            Point(near.x + dx, near.y + dy, TERRAIN)
+            at(near.x + dx, near.y + dy)
             for dy in range(int(radius_m), -int(radius_m) - 1, -step)
             for dx in range(int(radius_m), -int(radius_m) - 1, -step)
             if (dx * dx + dy * dy) <= radius_m * radius_m
@@ -119,26 +95,22 @@ def _flat(value: float = 100.0) -> _Overlay:
     return _Overlay(np.full((400, 400), value, dtype=float))
 
 
-def _at(x: float, y: float) -> Point:
-    return Point(x, y, TERRAIN)
-
-
 # -- the check the module exists for ----------------------------------------
 
 
 def test_a_point_inside_a_real_envelope_is_reported() -> None:
     """The `ansariyah_works` case: a target 9.4 km from an 18 km battery."""
     overlay = _flat()
-    battery = survey.Site("S-125 Tartus", _at(0.0, 0.0), 18_000.0)
-    rows = survey.reaches(overlay, {"TARGET": _at(9_400.0, 0.0)}, [battery])
+    battery = survey.Site.named("S-125 Tartus", at(0.0, 0.0), 18_000.0)
+    rows = survey.reaches(overlay, {"TARGET": at(9_400.0, 0.0)}, [battery])
     assert [r.site.label for r in survey.covered(rows)] == ["S-125 Tartus"]
     assert rows[0].margin_m == pytest.approx(-8_600.0)
 
 
 def test_a_point_outside_it_is_not() -> None:
     overlay = _flat()
-    battery = survey.Site("S-125 Tartus", _at(0.0, 0.0), 18_000.0)
-    rows = survey.reaches(overlay, {"TARGET": _at(34_400.0, 0.0)}, [battery])
+    battery = survey.Site.named("S-125 Tartus", at(0.0, 0.0), 18_000.0)
+    rows = survey.reaches(overlay, {"TARGET": at(34_400.0, 0.0)}, [battery])
     assert survey.covered(rows) == []
     assert rows[0].margin_m == pytest.approx(16_400.0)
 
@@ -147,7 +119,7 @@ def test_a_site_with_no_envelope_reports_distance_only() -> None:
     """An EWR cannot shoot, so a margin against it would be a made-up number."""
     overlay = _flat()
     rows = survey.reaches(
-        overlay, {"P": _at(5_000.0, 0.0)}, [survey.Site("EWR", _at(0.0, 0.0))]
+        overlay, {"P": at(5_000.0, 0.0)}, [survey.Site.named("EWR", at(0.0, 0.0))]
     )
     assert rows[0].margin_m is None
     assert rows[0].covered is False
@@ -161,8 +133,10 @@ def test_the_objective_s_own_defences_are_not_a_finding() -> None:
     is the list a build gate reads.
     """
     overlay = _flat()
-    osa = survey.Site("SA-8 works", _at(0.0, 0.0), 10_300.0, defends_objective=True)
-    points = {"TARGET": _at(1_400.0, 0.0), "IP": _at(4_000.0, 0.0)}
+    osa = survey.Site.named(
+        "SA-8 works", at(0.0, 0.0), 10_300.0, defends_objective=True
+    )
+    points = {"TARGET": at(1_400.0, 0.0), "IP": at(4_000.0, 0.0)}
     rows = survey.reaches(overlay, points, [osa])
     assert all(r.margin_m is not None and r.margin_m < 0.0 for r in rows)
     assert survey.covered(rows) == []
@@ -178,8 +152,8 @@ def test_a_ring_over_the_target_is_still_a_finding_unless_declared() -> None:
     *is* a ring covering the objective. Undeclared, it must still fire.
     """
     overlay = _flat()
-    stray = survey.Site("S-125 Tartus", _at(0.0, 0.0), 18_000.0)
-    rows = survey.reaches(overlay, {"TARGET": _at(9_400.0, 0.0)}, [stray])
+    stray = survey.Site.named("S-125 Tartus", at(0.0, 0.0), 18_000.0)
+    rows = survey.reaches(overlay, {"TARGET": at(9_400.0, 0.0)}, [stray])
     assert [r.site.label for r in survey.covered(rows)] == ["S-125 Tartus"]
 
 
@@ -188,22 +162,20 @@ def test_a_ring_over_the_target_is_still_a_finding_unless_declared() -> None:
 
 def test_a_ridge_between_them_masks_the_point() -> None:
     """The claim every low corridor in this project rests on, measured."""
-    heights = np.full((400, 400), 100.0)
-    heights[:, 12:16] = 3_000.0  # a wall between the site and the point
-    overlay = _Overlay(heights)
-    site = survey.Site("SA-11", _at(5_000.0, 0.0), 50_000.0)
-    rows = survey.reaches(overlay, {"IP": _at(5_000.0, 8_000.0)}, [site], agl_m=150.0)
+    overlay = _flat()
+    overlay.ridge(6_000.0, 8_000.0, 3_000.0)  # between the site and the point
+    site = survey.Site.named("SA-11", at(5_000.0, 0.0), 50_000.0)
+    rows = survey.reaches(overlay, {"IP": at(5_000.0, 8_000.0)}, [site], agl_m=150.0)
     assert rows[0].covered is True, "inside the envelope on distance"
     assert rows[0].visible is False, "and masked from it by the ridge"
 
 
 def test_line_of_sight_is_tested_at_the_height_asked_for() -> None:
     """The same point at 150 m and at 3,000 m is a different answer."""
-    heights = np.full((400, 400), 100.0)
-    heights[:, 12:16] = 1_500.0
-    overlay = _Overlay(heights)
-    site = survey.Site("SA-11", _at(5_000.0, 0.0), 50_000.0)
-    point = {"IP": _at(5_000.0, 8_000.0)}
+    overlay = _flat()
+    overlay.ridge(6_000.0, 8_000.0, 1_500.0)
+    site = survey.Site.named("SA-11", at(5_000.0, 0.0), 50_000.0)
+    point = {"IP": at(5_000.0, 8_000.0)}
     assert survey.reaches(overlay, point, [site], agl_m=150.0)[0].visible is False
     assert survey.reaches(overlay, point, [site], agl_m=5_000.0)[0].visible is True
 
@@ -213,7 +185,7 @@ def test_line_of_sight_is_tested_at_the_height_asked_for() -> None:
 
 def test_the_drawn_margin_is_tighter_than_the_real_one() -> None:
     """And it comes from `map_draw`, so the two cannot drift apart."""
-    site = survey.Site("S-125", _at(0.0, 0.0), 18_000.0)
+    site = survey.Site.named("S-125", at(0.0, 0.0), 18_000.0)
     factor = reveal_policy(Difficulty.VETERAN).radius_factor
     assert site.drawn_margin_m(34_400.0, Difficulty.VETERAN) == pytest.approx(
         34_400.0 - 18_000.0 * factor
@@ -222,7 +194,10 @@ def test_the_drawn_margin_is_tighter_than_the_real_one() -> None:
 
 
 def test_a_site_with_no_envelope_has_no_drawn_margin() -> None:
-    assert survey.Site("EWR", _at(0.0, 0.0)).drawn_margin_m(5_000.0, "trained") is None
+    assert (
+        survey.Site.named("EWR", at(0.0, 0.0)).drawn_margin_m(5_000.0, "trained")
+        is None
+    )
 
 
 def test_reveal_policy_accepts_a_label_as_well_as_the_enum() -> None:
@@ -235,7 +210,7 @@ def test_reveal_policy_accepts_a_label_as_well_as_the_enum() -> None:
 def test_spots_come_back_nearest_first() -> None:
     """`find_placement` samples; siting wants the best one near where you asked."""
     overlay = _flat()
-    anchor = _at(0.0, 0.0)
+    anchor = at(0.0, 0.0)
     found = survey.spots(overlay, anchor, 4_000.0, require=object(), count=5)
     distances = [anchor.distance_to_point(s.position) for s in found]
     assert distances == sorted(distances)
@@ -245,7 +220,7 @@ def test_spots_are_described_and_named() -> None:
     """A bare `Point` is not enough to decide anything — that was the loop."""
     overlay = _flat()
     overlay._places = [_Place("Al-Ghansala", 0.0, 500.0)]
-    spot = survey.spots(overlay, _at(0.0, 0.0), 2_000.0, require=object(), count=1)[0]
+    spot = survey.spots(overlay, at(0.0, 0.0), 2_000.0, require=object(), count=1)[0]
     assert spot.places[0] == "Al-Ghansala"
     assert spot.elevation_m == 100
     assert "Al-Ghansala" in spot.row()
@@ -255,7 +230,7 @@ def test_spots_are_described_and_named() -> None:
 def test_spots_draws_a_wider_pool_than_it_returns() -> None:
     """Otherwise ranking picks the best of one and the order means nothing."""
     overlay = _flat()
-    survey.spots(overlay, _at(0.0, 0.0), 4_000.0, require=object(), count=3, pool=40)
+    survey.spots(overlay, at(0.0, 0.0), 4_000.0, require=object(), count=3, pool=40)
     assert overlay.asked, "the overlay was queried"
 
 

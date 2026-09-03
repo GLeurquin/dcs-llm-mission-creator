@@ -34,10 +34,12 @@ landing points are ground events already.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from typing import TYPE_CHECKING
 
 import structlog
+
+from dcs_mission_creator.core import mission_kit
 
 if TYPE_CHECKING:
     from dcs.mapping import Point
@@ -67,7 +69,6 @@ BASE_POINT_TYPES = frozenset(
         "Land",
     }
 )
-_BASE_POINT_TYPES = BASE_POINT_TYPES
 
 
 def ground_elevation_m(overlay: MapOverlay, position: Point) -> float:
@@ -121,10 +122,8 @@ def snap_base_waypoints(m: Mission, overlay: MapOverlay) -> None:
     just before `m.save(...)`.
     """
     snapped = 0
-    for coalition in m.coalition.values():
-        for country in coalition.countries.values():
-            for group in (*country.plane_group, *country.helicopter_group):
-                snapped += _snap_group_base_points(group, overlay)
+    for group in mission_kit.flying_groups(m):
+        snapped += _snap_group_base_points(group, overlay)
     log.debug("base waypoints snapped to field elevation", count=snapped)
 
 
@@ -132,7 +131,7 @@ def _snap_group_base_points(group: FlyingGroup, overlay: MapOverlay) -> int:
     """Snap one group's ground points; also its units when it starts on a field."""
     snapped = 0
     for i, point in enumerate(group.points):
-        if point.type not in _BASE_POINT_TYPES:
+        if point.type not in BASE_POINT_TYPES:
             continue
         elevation = ground_elevation_m(overlay, point.position)
         point.alt = elevation
@@ -175,17 +174,15 @@ def set_departure_speeds(m: Mission) -> None:
     reason as `snap_base_waypoints`: a flight added later cannot miss it.
     """
     fixed = 0
-    for coalition in m.coalition.values():
-        for country in coalition.countries.values():
-            for group in (*country.plane_group, *country.helicopter_group):
-                fixed += _set_group_departure_speed(group)
+    for group in mission_kit.flying_groups(m):
+        fixed += _set_group_departure_speed(group)
     log.debug("departure waypoints given climb-out speed", count=fixed)
 
 
 def _set_group_departure_speed(group: FlyingGroup) -> int:
     """Raise one group's departure waypoint to its first en-route speed."""
     points = group.points
-    if len(points) < 3 or points[0].type not in _BASE_POINT_TYPES:
+    if len(points) < 3 or points[0].type not in BASE_POINT_TYPES:
         return 0
     departure = points[1]
     # `add_runway_waypoint` is the only point pydcs writes as AGL.
@@ -302,29 +299,46 @@ def leg_violation(
     choosing *where to put another waypoint* needs. `core/route_plan.py` inserts
     at the returned fraction and re-asks.
 
-    Sampling matches `clear_terrain`'s, `sample_m` default included, so the two
-    cannot disagree about whether a route is flyable — a planner that used a
-    coarser sampler would hand back corridors the mission then had to lift.
-
-    `floor_m` raises any ground below it to it, and the case it exists for is
-    **water**: the elevation layer holds depth below datum out at sea, so a
-    wave-top leg reads as tens of metres underground unless the waterline is the
-    floor. `None` leaves the raster alone, because a below-datum reading is real
-    data everywhere except under an aeroplane.
+    Sampling matches `clear_terrain`'s — same walk, `sample_m` default included
+    — so the two cannot disagree about whether a route is flyable; a planner
+    that used a coarser sampler would hand back corridors the mission then had
+    to lift. `floor_m` is the waterline; see `_walk_leg`.
     """
-    distance = a.distance_to_point(b)
-    steps = max(1, int(distance / sample_m))
     worst, where = 0.0, 0.0
-    for step in range(steps + 1):
-        f = step / steps
-        here = a.new_in_same_map(a.x + (b.x - a.x) * f, a.y + (b.y - a.y) * f)
-        ground = ground_elevation_m(overlay, here)
-        if floor_m is not None:
-            ground = max(floor_m, ground)
+    for f, ground in _walk_leg(a, b, overlay, sample_m=sample_m, floor_m=floor_m):
         short = (ground + clearance_m) - (alt_a * (1.0 - f) + alt_b * f)
         if short > worst:
             worst, where = short, f
     return worst, where
+
+
+def _walk_leg(
+    a: Point,
+    b: Point,
+    overlay: MapOverlay,
+    *,
+    sample_m: float,
+    floor_m: float | None = None,
+) -> Iterator[tuple[float, float]]:
+    """Every sample along the leg as `(fraction along, ground elevation)`.
+
+    One walk for both leg checks below. They ask different questions of the
+    same points — one for the depth of the worst penetration, one for what each
+    end would have to be — and having written the stepping twice is how the two
+    could have come to disagree about which cell a leg passes through.
+
+    `floor_m` raises any ground below it to it, and the case it exists for is
+    **water**: the elevation layer holds depth below datum out at sea, so a
+    wave-top leg reads as tens of metres underground unless the waterline is
+    the floor. `None` leaves the raster alone, because a below-datum reading is
+    real data everywhere except under an aeroplane.
+    """
+    steps = max(1, int(a.distance_to_point(b) / sample_m))
+    for step in range(steps + 1):
+        f = step / steps
+        here = a.new_in_same_map(a.x + (b.x - a.x) * f, a.y + (b.y - a.y) * f)
+        ground = ground_elevation_m(overlay, here)
+        yield f, ground if floor_m is None else max(floor_m, ground)
 
 
 def _leg_requirement(
@@ -344,13 +358,9 @@ def _leg_requirement(
     other held fixed gives what it would take to lift the ramp over the highest
     ground on the leg. Both answers are returned; the caller picks.
     """
-    distance = a.distance_to_point(b)
-    steps = max(1, int(distance / sample_m))
     need_a, need_b = alt_a, alt_b
-    for step in range(steps + 1):
-        f = step / steps
-        here = a.new_in_same_map(a.x + (b.x - a.x) * f, a.y + (b.y - a.y) * f)
-        floor = ground_elevation_m(overlay, here) + clearance_m
+    for f, ground in _walk_leg(a, b, overlay, sample_m=sample_m):
+        floor = ground + clearance_m
         if alt_a * (1.0 - f) + alt_b * f >= floor:
             continue
         if f < 1.0:

@@ -29,11 +29,10 @@ tell which is which without reading the whole file.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Iterable, Iterator, Sequence
+from typing import TYPE_CHECKING, Iterable, Sequence
 
 import structlog
 from dcs.mission import Mission
-from dcs.unit import Skill
 
 from dcs_mission_creator.core import (
     dcs_install,
@@ -41,6 +40,8 @@ from dcs_mission_creator.core import (
     laser,
     loadout,
     loadout_check,
+    mission_kit,
+    visibility,
     waypoints,
 )
 
@@ -51,8 +52,6 @@ if TYPE_CHECKING:
     from dcs_mission_creator.map_overlay.query import MapOverlay
 
 log = structlog.get_logger(__name__)
-
-_CLIENT_SKILLS = frozenset({Skill.Client, Skill.Player})
 
 #: Cruise and orbit speeds as a fraction of the airframe's own `max_speed`.
 #: Below the floor is the knots-for-km/h mistake — every `patrol_flight` call in
@@ -125,17 +124,6 @@ def audit_mission(m: Mission, overlay: MapOverlay) -> list[Finding]:
 # -- flights -----------------------------------------------------------------
 
 
-def _flying_groups(m: Mission) -> Iterator[tuple[str, FlyingGroup]]:
-    for side, coalition in m.coalition.items():
-        for country in coalition.countries.values():
-            for group in (*country.plane_group, *country.helicopter_group):
-                yield side, group
-
-
-def _is_client(group: FlyingGroup) -> bool:
-    return any(u.skill in _CLIENT_SKILLS for u in group.units)
-
-
 def _profile_points(group: FlyingGroup) -> list:
     """The waypoints that are a flight profile rather than an airfield event.
 
@@ -200,7 +188,7 @@ def _departure_gate(group: FlyingGroup) -> int | None:
 
 def _check_speeds(m: Mission, overlay: MapOverlay) -> Iterable[Finding]:
     """Every commanded speed against what the airframe can hold."""
-    for _side, group in _flying_groups(m):
+    for _side, group in mission_kit.flying_groups_by_side(m):
         top = float(group.units[0].unit_type.max_speed)
         if top < SUPERSONIC_KPH:
             continue
@@ -230,7 +218,7 @@ def _check_speeds(m: Mission, overlay: MapOverlay) -> Iterable[Finding]:
 
 def _check_departure(m: Mission, overlay: MapOverlay) -> Iterable[Finding]:
     """The first point after rotation, which pydcs writes at 108 kt."""
-    for _side, group in _flying_groups(m):
+    for _side, group in mission_kit.flying_groups_by_side(m):
         gate = _departure_gate(group)
         if gate is None:
             continue
@@ -249,7 +237,7 @@ def _check_departure(m: Mission, overlay: MapOverlay) -> Iterable[Finding]:
 
 def _check_base_waypoints(m: Mission, overlay: MapOverlay) -> Iterable[Finding]:
     """Take-off and landing points sitting on the field rather than under it."""
-    for _side, group in _flying_groups(m):
+    for _side, group in mission_kit.flying_groups_by_side(m):
         for point in group.points:
             if point.type not in waypoints.BASE_POINT_TYPES:
                 continue
@@ -272,8 +260,8 @@ def _check_route_terrain(m: Mission, overlay: MapOverlay) -> Iterable[Finding]:
     and a ground-target steerpoint is deliberately *on* the surface, so those
     are skipped rather than reported as a route that hits it.
     """
-    for _side, group in _flying_groups(m):
-        if not _is_client(group):
+    for _side, group in mission_kit.flying_groups_by_side(m):
+        if not mission_kit.is_client(group):
             continue
         profile = _profile_points(group)
         # Sea level is the floor, not the raster. Over water the elevation layer
@@ -281,7 +269,8 @@ def _check_route_terrain(m: Mission, overlay: MapOverlay) -> Iterable[Finding]:
         # metres *underground* if the number is taken at face value — which is
         # every over-water waypoint in `ansariyah_works`.
         heights = [
-            max(0.0, waypoints.ground_elevation_m(overlay, p.position)) for p in profile
+            max(SEA_LEVEL_M, waypoints.ground_elevation_m(overlay, p.position))
+            for p in profile
         ]
         flown = [_amsl(p, overlay) for p in profile]
         on_ground = [abs(a - g) <= 1.0 for a, g in zip(flown, heights)]
@@ -317,10 +306,10 @@ def _check_route_terrain(m: Mission, overlay: MapOverlay) -> Iterable[Finding]:
 
 def _check_cartridge(m: Mission, overlay: MapOverlay) -> Iterable[Finding]:
     """Whether the F10 plan will still fit in the cockpit beside the route."""
-    for _side, group in _flying_groups(m):
-        if not _is_client(group):
+    for _side, group in mission_kit.flying_groups_by_side(m):
+        if not mission_kit.is_client(group):
             continue
-        spare = dtc.MAX_NAV_POINTS - len(group.points)
+        spare = dtc.nav_headroom(len(group.points))
         if spare < 0:
             yield Finding(
                 "cartridge",
@@ -346,21 +335,18 @@ def _check_concealment(m: Mission, overlay: MapOverlay) -> Iterable[Finding]:
     "Enemy" is derived rather than assumed: it is whichever coalition the client
     slots are not on, so a mission that flies red needs no special case.
     """
-    ours = {side for side, group in _flying_groups(m) if _is_client(group)}
+    ours = {
+        side
+        for side, group in mission_kit.flying_groups_by_side(m)
+        if mission_kit.is_client(group)
+    }
     if not ours:
         return
     for side, coalition in m.coalition.items():
         if side in ours:
             continue
         for country in coalition.countries.values():
-            groups = (
-                *country.vehicle_group,
-                *country.ship_group,
-                *country.plane_group,
-                *country.helicopter_group,
-                *country.static_group,
-            )
-            for group in groups:
+            for group in visibility.groups_of(country):
                 if not getattr(group, "hidden", False):
                     yield Finding(
                         "concealment",
@@ -378,7 +364,7 @@ def _check_armament(m: Mission, overlay: MapOverlay) -> Iterable[Finding]:
     empty and five of the six missions here once shipped clean jets under
     briefings naming specific stores.
     """
-    for _side, group in _flying_groups(m):
+    for _side, group in mission_kit.flying_groups_by_side(m):
         if any(unit.pylons for unit in group.units):
             continue
         if not group.units[0].unit_type.pylons:
@@ -401,7 +387,7 @@ def _check_laser_code(m: Mission, overlay: MapOverlay) -> Iterable[Finding]:
     but that is luck rather than a check, and it is exactly the claim
     `core/laser.py` exists to make hold.
     """
-    for _side, group in _flying_groups(m):
+    for _side, group in mission_kit.flying_groups_by_side(m):
         stores = laser.laser_guided_stores(group)
         if not stores or laser.stated_code(group) is not None:
             continue
@@ -424,7 +410,7 @@ def _check_stations(m: Mission, overlay: MapOverlay) -> Iterable[Finding]:
             "the game's own payload tables",
         )
         return
-    for _side, group in _flying_groups(m):
+    for _side, group in mission_kit.flying_groups_by_side(m):
         for note in loadout_check.check_group(group):
             yield Finding(
                 "stations",
@@ -443,9 +429,15 @@ def _check_magazine(m: Mission, overlay: MapOverlay) -> Iterable[Finding]:
     the number on the page is what lets that be checked by eye in one line
     instead of by reading two spawn helpers.
     """
-    ours = {side for side, group in _flying_groups(m) if _is_client(group)}
+    ours = {
+        side
+        for side, group in mission_kit.flying_groups_by_side(m)
+        if mission_kit.is_client(group)
+    }
     bandits = sum(
-        len(group.units) for side, group in _flying_groups(m) if side not in ours
+        len(group.units)
+        for side, group in mission_kit.flying_groups_by_side(m)
+        if side not in ours
     )
     for flight, assignment in loadout.assignments(m):
         shots = loadout.shots(assignment)

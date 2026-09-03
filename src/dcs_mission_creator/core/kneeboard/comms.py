@@ -38,7 +38,7 @@ from typing import TYPE_CHECKING, Iterator
 from dcs import task
 from dcs.unit import Skill
 
-from dcs_mission_creator.core import radio
+from dcs_mission_creator.core import mission_kit, radio
 
 if TYPE_CHECKING:
     from dcs.mission import Mission
@@ -82,15 +82,6 @@ class AtcChannel:
     vhf_high_mhz: float | None
     vhf_low_mhz: float | None
     hf_mhz: float | None
-
-
-def player_groups(m: Mission) -> list[FlyingGroup]:
-    """Every flying group holding a client slot, in build order."""
-    return [
-        group
-        for group in _flying_groups(m)
-        if any(u.skill in (Skill.Client, Skill.Player) for u in group.units)
-    ]
 
 
 def stations(m: Mission, *, coalition: str = "blue") -> list[Station]:
@@ -257,7 +248,7 @@ def _fac(group: Group) -> tuple[float | None, str, str]:
 
 
 def _player_type(m: Mission) -> FlyingType | None:
-    groups = player_groups(m)
+    groups = mission_kit.player_groups(m)
     if not groups or not groups[0].units:
         return None
     return groups[0].units[0].unit_type

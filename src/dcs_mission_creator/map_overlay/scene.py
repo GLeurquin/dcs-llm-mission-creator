@@ -14,7 +14,7 @@ import structlog
 from dcs.mapping import Point
 
 from dcs_mission_creator.map_overlay.placement import Placement, Vegetation
-from dcs_mission_creator.map_overlay.query import MapOverlay
+from dcs_mission_creator.map_overlay.query import SEARCH_MAST_M, MapOverlay
 
 log = structlog.get_logger(__name__)
 
@@ -68,7 +68,7 @@ _MASKED_CANDIDATES = 24
 
 #: Eye height for a search radar in a line-of-sight test. The other end is the
 #: aeroplane, and that is the number that actually decides the answer.
-_RADAR_MAST_M = 15.0
+_RADAR_MAST_M = SEARCH_MAST_M
 
 
 @dataclass

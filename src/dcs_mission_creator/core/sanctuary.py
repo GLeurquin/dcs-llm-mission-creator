@@ -87,7 +87,7 @@ from dcs.unit import Skill
 from dcs.unitgroup import VehicleGroup
 from dcs.vehicles import AirDefence
 
-from dcs_mission_creator.core import air_defense as ad, dtc
+from dcs_mission_creator.core import air_defense as ad, dtc, mission_kit
 from dcs_mission_creator.core.placement import NO_FOREST, snap_units_clear
 
 if TYPE_CHECKING:
@@ -710,7 +710,7 @@ def _spawn_point_defence(
             position=pos,
             heading=int(bearing),
         )
-        ad.set_skill(grp, skill)
+        mission_kit.set_skill(grp, skill)
         if overlay is not None and terrain is not None:
             # `disperse_site` returns early on a one-unit group, so it would
             # skip the snap with it — and an airfield boundary is exactly where

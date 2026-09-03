@@ -50,6 +50,7 @@ import structlog
 from dcs.mapping import Point
 
 from dcs_mission_creator.core import dtc, waypoints
+from dcs_mission_creator.map_overlay.query import SEARCH_MAST_M
 
 if TYPE_CHECKING:
     from dcs_mission_creator.map_overlay.query import MapOverlay
@@ -239,34 +240,24 @@ class _Elevation:
         self._values = np.asarray(window.values, dtype=float)
         self._cell = float(window.cell_size_m)
         self._row0, self._col0 = window.row0, window.col0
-        self._top = overlay.manifest.bounds.top
-        self._left = overlay.manifest.bounds.left
         self._overlay = overlay
-        self._anchor = points[0]
-
-    def at(self, x: float, y: float) -> float:
-        row, col = self._overlay.cell_of(
-            self._anchor.new_in_same_map(x, y), int(self._cell)
-        )
-        r, c = row - self._row0, col - self._col0
-        if 0 <= r < self._values.shape[0] and 0 <= c < self._values.shape[1]:
-            return float(self._values[r, c])
-        return 0.0
 
     def grid(self, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
         """Elevation over the outer product of `xs` (north) and `ys` (east).
 
         The bulk form, and the reason the search runs in a second rather than a
         minute: the per-point path builds a `Point` and walks the same transform
-        for every cell of a quarter-million-cell grid. `np.trunc` rather than
-        floor division so the rounding matches `cell_of`'s `int()` exactly —
-        they only differ north or west of the raster, which is clamped here and
-        no-data there, but a search grid that disagreed with the point query
-        about which cell it was in would be a very quiet bug.
+        for every cell of a quarter-million-cell grid. The transform itself is
+        `MapOverlay.cell_coords`, so this cannot come to disagree with the point
+        query about which cell a coordinate is in — which would be a planner
+        whose answers were quietly not about the terrain it reported. `np.trunc`
+        is `cell_of`'s `int()` on an array.
         """
         height, width = self._values.shape
-        rows = np.trunc((self._top - xs) / self._cell).astype(int) - self._row0
-        cols = np.trunc((ys - self._left) / self._cell).astype(int) - self._col0
+        row_f, _ = self._overlay.cell_coords(xs, 0.0, self._cell)
+        _, col_f = self._overlay.cell_coords(0.0, ys, self._cell)
+        rows = np.trunc(row_f).astype(int) - self._row0
+        cols = np.trunc(col_f).astype(int) - self._col0
         rows_in = (rows >= 0) & (rows < height)
         cols_in = (cols >= 0) & (cols < width)
         values = self._values[
@@ -484,7 +475,7 @@ def sighting(
     *,
     altitudes_m: Sequence[float] = (),
     agl_for: AglFor | None = None,
-    mast_m: float = 15.0,
+    mast_m: float = SEARCH_MAST_M,
 ) -> list[Sighting]:
     """Which of `sites` can see each point of `route`, at the altitude flown.
 
@@ -537,6 +528,8 @@ def nav_headroom(en_route: int, *, overhead: int = ROUTE_OVERHEAD) -> int:
     Negative means the route itself is over the tab and the plan gets nothing.
 
     `overhead` is the four points a mission does not write: the spawn, the two
-    runway gates and the landing.
+    runway gates and the landing. Adding them is this function's whole job —
+    the subtraction itself is `dtc.nav_headroom`, so a planner and a built
+    mission cannot come to different answers about the same route.
     """
-    return dtc.MAX_NAV_POINTS - (en_route + overhead)
+    return dtc.nav_headroom(en_route + overhead)

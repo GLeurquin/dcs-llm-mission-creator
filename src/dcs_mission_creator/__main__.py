@@ -33,10 +33,11 @@ import os
 import pkgutil
 from collections.abc import Callable, Collection
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import argcomplete
 import structlog
-from dcs.mapping import LatLng, Point
+from dcs.mapping import Point
 from dcs.terrain.terrain import Terrain
 
 from dcs_mission_creator import missions
@@ -48,6 +49,9 @@ from dcs_mission_creator.core.mission_builder import (
     MissionBuilder,
 )
 from dcs_mission_creator.map_overlay.layers import BuildLayer, QueryLayer, RenderLayer
+
+if TYPE_CHECKING:
+    from dcs_mission_creator.map_overlay.query import MapOverlay
 
 _MISSIONS_ENV = "DCS_MISSIONS_FOLDER"
 _GENERATED_SUBDIR = "IAGeneratedMissions"
@@ -212,11 +216,8 @@ def _cmd_survey(
     """
     from dcs_mission_creator.core import survey
     from dcs_mission_creator.map_overlay.placement import Placement, Vegetation
-    from dcs_mission_creator.map_overlay.query import MapOverlay
-    from dcs_mission_creator.map_overlay.terrains import terrain_for
 
-    terrain = terrain_for(theater)
-    overlay = MapOverlay.load(theater)
+    terrain, overlay = _load(theater)
 
     for spec in near:
         head, _, radius = spec.rpartition(":")
@@ -280,7 +281,7 @@ def _site(terrain: Terrain, spec: str, *, defends: Collection[str] = ()):
     if not head:
         head, radius = spec, "0"
     position, label = _labelled(terrain, head)
-    return survey.Site(
+    return survey.Site.named(
         label, position, float(radius or 0.0), defends_objective=label in defends
     )
 
@@ -303,11 +304,8 @@ def _cmd_route(
     navigation tab is left for the F10 plan afterwards.
     """
     from dcs_mission_creator.core import route_plan
-    from dcs_mission_creator.map_overlay.query import MapOverlay
-    from dcs_mission_creator.map_overlay.terrains import terrain_for
 
-    terrain = terrain_for(theater)
-    overlay = MapOverlay.load(theater)
+    terrain, overlay = _load(theater)
     anchors = [_degrees(terrain, point) for point in via]
     if len(anchors) < 2:
         log.error("route needs at least two --via points")
@@ -338,10 +336,31 @@ def _cmd_route(
     return 0
 
 
+def _load(theater: str) -> tuple[Terrain, "MapOverlay"]:
+    """The theater's pydcs terrain and its built overlay.
+
+    Three commands open with these same four lines, and the import is here
+    rather than at module scope for the reason every command body's is: the
+    overlay stack is a second of import time that `list` and `--help` should
+    not pay for.
+    """
+    from dcs_mission_creator.map_overlay.query import MapOverlay
+    from dcs_mission_creator.map_overlay.terrains import terrain_for
+
+    return terrain_for(theater), MapOverlay.load(theater)
+
+
 def _degrees(terrain: Terrain, spec: str) -> Point:
-    """`"LAT,LNG"` → a world point on `terrain`."""
+    """`"LAT,LNG"` → a world point on `terrain`.
+
+    `map_overlay.coords.latlon_to_dcs` is the same conversion; this stays as a
+    name because the CLI parses a `"LAT,LNG"` *string* and the split is the
+    part worth having in one place for the two spec parsers below.
+    """
+    from dcs_mission_creator.map_overlay.coords import latlon_to_dcs
+
     lat, lng = (float(part) for part in spec.split(",", 1))
-    return Point.from_latlng(LatLng(lat, lng), terrain)
+    return latlon_to_dcs(lat, lng, terrain)
 
 
 def _labelled(terrain: Terrain, spec: str) -> tuple[Point, str]:
@@ -392,17 +411,13 @@ def _cmd_overlay_inspect(theater: str, layers: list[RenderLayer], out: Path) -> 
 
 def _cmd_overlay_query(theater: str, point_arg: str, layer: QueryLayer) -> int:
 
-    from dcs_mission_creator.map_overlay import MapOverlay
-    from dcs_mission_creator.map_overlay.terrains import terrain_for
-
     try:
         x_str, z_str = point_arg.split(",", 1)
         x, z = float(x_str), float(z_str)
     except ValueError as err:
         raise SystemExit(f"--point must be X,Z (got {point_arg!r}): {err}") from err
-    terrain = terrain_for(theater)
+    terrain, ov = _load(theater)
     pt = Point(x, z, terrain)
-    ov = MapOverlay.load(theater)
     queries: dict[QueryLayer, Callable[[Point], object]] = {
         QueryLayer.ELEVATION: lambda p: ov.elevation_at(p),
         QueryLayer.SLOPE: lambda p: ov.slope_at(p),
@@ -431,8 +446,14 @@ def _comma_list(enum_cls: type[BuildLayer | RenderLayer]):
     return parse
 
 
-def _add_overlay_subcommand(sub: argparse._SubParsersAction) -> None:
+def _add_theater(parser: argparse.ArgumentParser) -> None:
+    """The theater positional, declared once for the five parsers that take it."""
     from dcs_mission_creator.map_overlay.terrains import known_theaters
+
+    parser.add_argument("theater", choices=known_theaters())
+
+
+def _add_overlay_subcommand(sub: argparse._SubParsersAction) -> None:
 
     overlay = sub.add_parser(
         "map-overlay",
@@ -442,7 +463,7 @@ def _add_overlay_subcommand(sub: argparse._SubParsersAction) -> None:
 
     build_choices = ",".join(m.value for m in BuildLayer)
     build = osub.add_parser("build", help="Build overlay layers for a theater.")
-    build.add_argument("theater", choices=known_theaters())
+    _add_theater(build)
     build.add_argument(
         "--layers",
         type=_comma_list(BuildLayer),
@@ -456,7 +477,7 @@ def _add_overlay_subcommand(sub: argparse._SubParsersAction) -> None:
         "inspect",
         help="Render layers as a PNG for visual review.",
     )
-    inspect.add_argument("theater", choices=known_theaters())
+    _add_theater(inspect)
     inspect.add_argument(
         "--layers",
         type=_comma_list(RenderLayer),
@@ -477,7 +498,7 @@ def _add_overlay_subcommand(sub: argparse._SubParsersAction) -> None:
         "query",
         help="Query a single point against one layer.",
     )
-    query.add_argument("theater", choices=known_theaters())
+    _add_theater(query)
     query.add_argument(
         "--point",
         required=True,
@@ -536,7 +557,6 @@ def build_parser(
     is the one lookup the parser needs, and every command body imports its own
     dependencies when it runs.
     """
-    from dcs_mission_creator.map_overlay.terrains import known_theaters
 
     parser = argparse.ArgumentParser(
         prog="dcs-mission-creator",
@@ -595,7 +615,7 @@ def build_parser(
         "survey",
         help="Check a layout: distances, envelope margins and line of sight.",
     )
-    srv.add_argument("theater", choices=known_theaters())
+    _add_theater(srv)
     srv.add_argument(
         "--point",
         action="append",
@@ -665,7 +685,7 @@ def build_parser(
         "route",
         help="Plan a terrain-clearing low corridor and report what can see it.",
     )
-    rte.add_argument("theater", choices=known_theaters())
+    _add_theater(rte)
     rte.add_argument(
         "--via",
         action="append",

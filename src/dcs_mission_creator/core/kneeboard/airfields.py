@@ -30,10 +30,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Sequence
 
-from dcs_mission_creator.core import waypoints
+from dcs_mission_creator.core import mission_kit, waypoints
 from dcs_mission_creator.core.kneeboard import beacons as beacon_data
 from dcs_mission_creator.core.kneeboard.beacons import Beacon
-from dcs_mission_creator.core.kneeboard.comms import player_groups
 from dcs_mission_creator.core.kneeboard.flightplan import FT_PER_M
 
 if TYPE_CHECKING:
@@ -158,7 +157,7 @@ def airfield_cards(
 
 def _ordered_groups(m: Mission, coalition: str):
     """Player flights first, so their field heads the list of airfields."""
-    players = player_groups(m)
+    players = mission_kit.player_groups(m)
     rest = [
         group
         for name, side in m.coalition.items()

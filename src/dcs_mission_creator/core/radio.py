@@ -41,10 +41,11 @@ Two things it deliberately leaves alone.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Iterator
+from typing import TYPE_CHECKING
 
 from dcs import task
-from dcs.unit import Skill
+
+from dcs_mission_creator.core import mission_kit
 
 if TYPE_CHECKING:
     from dcs.mission import Mission
@@ -87,8 +88,8 @@ def working_frequency(group: FlyingGroup) -> tuple[float, int] | None:
 
 def tune_working_frequencies(m: Mission) -> None:
     """Write each AI flight's working frequency into its own group field."""
-    for group in _flying_groups(m):
-        if any(u.skill in (Skill.Client, Skill.Player) for u in group.units):
+    for group in mission_kit.flying_groups(m):
+        if mission_kit.is_client(group):
             continue
         found = working_frequency(group)
         if found is None:
@@ -102,10 +103,3 @@ def tune_working_frequencies(m: Mission) -> None:
             int(frequency_mhz) if frequency_mhz % 1 == 0 else frequency_mhz
         )
         group.modulation = modulation
-
-
-def _flying_groups(m: Mission) -> Iterator[FlyingGroup]:
-    for side in m.coalition.values():
-        for country in side.countries.values():
-            yield from country.plane_group
-            yield from country.helicopter_group

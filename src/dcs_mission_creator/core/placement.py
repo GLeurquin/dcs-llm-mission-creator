@@ -232,16 +232,6 @@ def ewr_high_ground(
     return spots[0]
 
 
-def aaa_overwatch(
-    scene: TacticalScene,
-    defended_axis: list[Point],
-    *,
-    count: int = 3,
-) -> list[Point]:
-    """AAA on hilltops covering an ingress corridor."""
-    return scene.place_aaa_overwatch(defended_axis=defended_axis, count=count)
-
-
 def manpads_in_valley(
     scene: TacticalScene,
     near: Point,
@@ -258,25 +248,6 @@ def manpads_in_valley(
     spots = scene.overlay.find_placement(near, radius_m=radius_m, require=require)
     if not spots:
         raise LookupError("no MANPADS spot found")
-    return spots[0]
-
-
-def infantry_treeline(
-    scene: TacticalScene,
-    near: Point,
-    *,
-    radius_m: float = 2_000.0,
-) -> Point:
-    """Infantry concealed at a forest edge — light forest OK."""
-    require = Placement.near_treeline(
-        within_m=50.0,
-        light_forest_ok=True,
-        max_slope_deg=30,
-        not_in_built_up=True,
-    )
-    spots = scene.overlay.find_placement(near, radius_m=radius_m, require=require)
-    if not spots:
-        raise LookupError("no infantry treeline spot found")
     return spots[0]
 
 

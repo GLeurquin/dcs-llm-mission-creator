@@ -173,11 +173,13 @@ def _read(overlay: MapOverlay, frame: Frame, name: str) -> LayerWindow:
 def _cell_coords(
     overlay: MapOverlay, win: LayerWindow, north: np.ndarray, east: np.ndarray
 ) -> list[np.ndarray]:
-    """World coordinate arrays -> fractional `(row, col)` inside `win`."""
-    b = overlay.manifest.bounds
-    rows = (b.top - north) / win.cell_size_m - win.row0
-    cols = (east - b.left) / win.cell_size_m - win.col0
-    return [rows, cols]
+    """World coordinate arrays -> fractional `(row, col)` inside `win`.
+
+    Fractional on purpose: `map_coordinates` interpolates between cells, which
+    is why this cannot just call `cell_of`. The transform is the overlay's.
+    """
+    rows, cols = overlay.cell_coords(north, east, win.cell_size_m)
+    return [rows - win.row0, cols - win.col0]
 
 
 def _sample_elevation(

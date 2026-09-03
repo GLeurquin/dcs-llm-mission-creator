@@ -42,9 +42,9 @@ from typing import TYPE_CHECKING, Sequence
 import structlog
 from PIL import Image
 
+from dcs_mission_creator.core import mission_kit
 from dcs_mission_creator.core.kneeboard import charts, pages as page_content
 from dcs_mission_creator.core.kneeboard.airfields import airfield_cards
-from dcs_mission_creator.core.kneeboard.comms import player_groups
 
 if TYPE_CHECKING:
     from dcs.mission import Mission
@@ -97,7 +97,7 @@ def publish(
     forget it and no mission has to know the archive layout. Returns the pages
     written, in kneeboard order.
     """
-    flights = player_groups(m)
+    flights = mission_kit.player_groups(m)
     if not flights:
         log.warning("no client slot, no kneeboard written", miz=str(miz_path))
         return []

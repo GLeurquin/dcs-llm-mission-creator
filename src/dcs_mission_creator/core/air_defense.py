@@ -40,6 +40,8 @@ from dcs.unit import Skill
 from dcs.unitgroup import VehicleGroup
 from dcs.vehicles import AirDefence
 
+from dcs_mission_creator.core import mission_kit
+
 if TYPE_CHECKING:
     from dcs.country import Country
     from dcs.mapping import Point
@@ -87,16 +89,6 @@ _WIDE_FOOTPRINT_M = 150.0
 
 
 # -- shared placement primitives -------------------------------------------
-
-
-def set_skill(group: Group, skill: Skill) -> None:
-    """Apply `skill` to every unit of `group` (was per-mission `_set_skill`).
-
-    Takes any pydcs `Group` — vehicle sites, flights, ships — not just the
-    air-defense groups the rest of this module builds.
-    """
-    for u in group.units:
-        u.skill = skill
 
 
 def _jitter(bearing: float, distance: float) -> tuple[float, float]:
@@ -231,7 +223,7 @@ def _finish(
     terrain: Terrain | None,
 ) -> VehicleGroup:
     """Set uniform skill and, if an overlay is given, snap units off canopy."""
-    set_skill(vg, skill)
+    mission_kit.set_skill(vg, skill)
     _snap(vg, overlay, terrain)
     log.debug(
         "built air-defense site",
@@ -708,7 +700,7 @@ def build_ewr_chain(
             position=pos,
             heading=heading,
         )
-        set_skill(grp, skill)
+        mission_kit.set_skill(grp, skill)
         groups.append(grp)
     log.debug("built EWR chain", prefix=prefix, count=len(groups))
     return groups

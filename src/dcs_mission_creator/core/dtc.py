@@ -544,6 +544,23 @@ def briefed(
     return [ThreatPoint(position, system, radius_m=radius_m, label=label)]
 
 
+def nav_headroom(route_points: int) -> int:
+    """Navigation steerpoints left for the F10 plan beside a route that long.
+
+    The route wins every budget fight — uploading a NAV tab *replaces* the
+    flight plan DCS put in the cockpit — so this is always "what is left after
+    the pilot's navigation", never "what has to be cut from it". Negative means
+    the route is itself over the tab and the plan gets nothing.
+
+    One subtraction, three callers who each arrive with a different count: this
+    module has the built route, `core/audit.py` has the group's waypoints, and
+    `core/route_plan.py` has only a planned en-route figure and has to add the
+    points a mission does not write. Splitting them let three answers to one
+    question drift.
+    """
+    return MAX_NAV_POINTS - route_points
+
+
 def record_briefed(m: "Mission", points: Sequence[ThreatPoint]) -> None:
     """Note `points` as this mission's briefed air-defence picture.
 
@@ -685,7 +702,7 @@ def arm_plan(
         )
     route = route_steerpoints(groups[0], takeoff_s=takeoff_zulu_s(m, groups[0]))
     extra = plan_steerpoints(plan)
-    room = MAX_NAV_POINTS - len(route)
+    room = nav_headroom(len(route))
     if len(extra) > max(room, 0):
         log.warning(
             "plan steerpoints do not fit beside the route, dropping the last",

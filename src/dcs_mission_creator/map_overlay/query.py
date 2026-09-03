@@ -78,6 +78,23 @@ class LayerWindow:
     valid: np.ndarray
 
 
+#: Eye heights for `line_of_sight`, in metres above the terrain under the point.
+#: Three numbers for three different things, written down once because they had
+#: been written down three times with two different values and no way to tell
+#: which was meant. Both ends are always lifted: two points on the deck fail
+#: across the gentlest rise, which is the same reason `core/lua/autolase.lua`
+#: lifts its own test.
+#:
+#: `GROUND_EYE_M` is a person or a vehicle-mounted sight — the default, and what
+#: a JTAC or an observation post looks from. `FIRE_CONTROL_MAST_M` is a
+#: battery's own tracking radar, which sits on the vehicle. `SEARCH_MAST_M` is
+#: an acquisition or early-warning antenna on its own mast, and it is the one
+#: that changes answers at range.
+GROUND_EYE_M = 2.0
+FIRE_CONTROL_MAST_M = 6.0
+SEARCH_MAST_M = 15.0
+
+
 @dataclass(frozen=True)
 class Place:
     """A named settlement from the `places.geojson` sidecar.
@@ -145,10 +162,28 @@ class MapOverlay:
 
     def _xz_to_cell(self, point: Point, cell_size_m: int) -> tuple[int, int]:
         """DCS (x, z) → (row, col) in a raster whose (0,0) is the NW corner."""
+        row, col = self.cell_coords(point.x, point.y, cell_size_m)
+        return int(row), int(col)
+
+    def cell_coords(self, north: Any, east: Any, cell_size_m: float) -> tuple[Any, Any]:
+        """World coordinates → **fractional** `(row, col)`, unrounded and unclamped.
+
+        The one place the raster transform is written. It takes plain numbers or
+        numpy arrays, because its three callers want three different things from
+        it and only this expression is common to them: `_xz_to_cell` truncates
+        to an integer cell, `core/route_plan`'s bulk search truncates a whole
+        grid of them, and `core/recon/sample` keeps the fraction and interpolates
+        between cells.
+
+        Having written it three times is a quiet kind of hazard: a search grid
+        and a point query that disagreed about which cell a coordinate is in
+        would produce a planner whose answers were subtly not about the terrain
+        it reported. Truncation is the rounding everywhere — `int()` here,
+        `np.trunc` in the bulk path — so a coordinate north or west of the
+        raster lands on the same cell either way.
+        """
         b = self.manifest.bounds
-        row = int((b.top - point.x) / cell_size_m)
-        col = int((point.y - b.left) / cell_size_m)
-        return row, col
+        return (b.top - north) / cell_size_m, (east - b.left) / cell_size_m
 
     def _open_layer(self, name: str) -> Any:
         """Open a layer's zarr array once and keep it.
@@ -344,7 +379,11 @@ class MapOverlay:
         return float(z[row, col]) - float(window.mean())
 
     def line_of_sight(
-        self, a: Point, b: Point, eye_a_m: float = 2.0, eye_b_m: float = 2.0
+        self,
+        a: Point,
+        b: Point,
+        eye_a_m: float = GROUND_EYE_M,
+        eye_b_m: float = GROUND_EYE_M,
     ) -> bool:
         from dcs_mission_creator.map_overlay.los import line_of_sight_cells
 

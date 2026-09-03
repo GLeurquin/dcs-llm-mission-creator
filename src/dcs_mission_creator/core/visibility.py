@@ -34,6 +34,24 @@ def conceal(*groups: Optional[Group]) -> None:
         group.hidden_on_mfd = True  # datalink & MFD symbology
 
 
+def groups_of(country: Country) -> tuple[Group, ...]:
+    """Every group a country owns, of every kind that can carry an icon.
+
+    The five kinds are enumerated in exactly one place, because there are two
+    callers who must agree on the list and they read it from opposite ends:
+    `conceal_country` hides them, and `core/audit.py` checks that nothing was
+    left showing. A kind in one list and not the other is a group the audit
+    cannot see and the sweep does not hide.
+    """
+    return (
+        *country.vehicle_group,
+        *country.ship_group,
+        *country.plane_group,
+        *country.helicopter_group,
+        *country.static_group,
+    )
+
+
 def conceal_country(*countries: Country) -> None:
     """`conceal` every group a country owns — aircraft, vehicles, ships, statics.
 
@@ -43,10 +61,4 @@ def conceal_country(*countries: Country) -> None:
     `_draw_plan` step).
     """
     for country in countries:
-        conceal(
-            *country.vehicle_group,
-            *country.ship_group,
-            *country.plane_group,
-            *country.helicopter_group,
-            *country.static_group,
-        )
+        conceal(*groups_of(country))
