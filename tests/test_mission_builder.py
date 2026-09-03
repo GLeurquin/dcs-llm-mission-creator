@@ -16,8 +16,9 @@ import pytest
 from dcs.mission import Mission
 
 from dcs_mission_creator.core.difficulty import Difficulty
-from dcs_mission_creator.core.mission_builder import MissionBuilder
+from dcs_mission_creator.core.mission_builder import Assembled, MissionBuilder
 from dcs_mission_creator.core.weather import Weather, Wind
+from tests.conftest import at
 
 
 class FakeBuilder(MissionBuilder):
@@ -26,8 +27,11 @@ class FakeBuilder(MissionBuilder):
     name = "fake"
     title = "Fake Mission"
 
-    def _assemble(self, m: Mission):  # pragma: no cover - never called
+    def _assemble(self, m, plan):  # pragma: no cover - never called
         raise AssertionError("build_miz is overridden; _assemble should not run")
+
+    def _in_game_briefing(self) -> str:  # pragma: no cover - never called
+        return "fake"
 
     def build_miz(self, miz_path: Path) -> None:
         miz_path.write_bytes(b"PK\x03\x04fake")  # fake zip prefix
@@ -86,7 +90,12 @@ def test_generate_propagates_player_count(tmp_path: Path):
 
 
 def test_abstract_methods_required():
-    """A subclass that forgets `_assemble` / `readme` must not instantiate."""
+    """A subclass that forgets one of the abstract methods must not instantiate.
+
+    Four of them now: `_assemble`, `readme` and `_in_game_briefing`, the last
+    because `_finish_briefing` calls it — a mission without one would otherwise
+    fail at build time rather than at class definition.
+    """
 
     class Incomplete(MissionBuilder):
         name = "incomplete"
@@ -134,6 +143,8 @@ class StubAssembler(MissionBuilder):
     #: time a sortie flies and what the weather is are decisions, and a mission
     #: that forgets one should fail rather than quietly ship mid-morning clear.
     start_time = datetime(2026, 5, 15, 10, 0, 0, tzinfo=timezone.utc)
+    blue_task = "stub blue"
+    red_task = "stub red"
     weather = Weather(
         name="Stub clear",
         season_temperature=15.0,
@@ -153,9 +164,14 @@ class StubAssembler(MissionBuilder):
         self._terrain = Caucasus()
         self.calls: list[str] = []
 
-    def _assemble(self, m: Mission):
+    def _assemble(self, m: Mission, plan) -> Assembled:
         self.calls.append("assemble")
-        return None  # snap_base_waypoints tolerates a mission with no flights
+        # `None` for the overlay: `snap_base_waypoints` tolerates a mission with
+        # no flights, and this stub is about the order the base calls in.
+        return Assembled(None)  # type: ignore[arg-type]
+
+    def _in_game_briefing(self) -> str:
+        return "stub briefing"
 
     def readme(self) -> str:
         return "stub"
@@ -194,6 +210,66 @@ def test_a_mission_can_compute_its_time_and_weather_instead():
     m, _overlay = Computed().assemble()
     assert m.start_time == moved
     assert m.weather.name == "Computed"
+
+
+def test_the_base_writes_the_briefing_panels():
+    """Four calls with no distinct payload across eight `_add_briefing` methods."""
+    m, _overlay = StubAssembler().assemble()
+    assert m.description_text() == "stub briefing"
+    assert m.description_bluetask_text() == "stub blue"
+    assert m.description_redtask_text() == "stub red"
+    assert m.sortie_text() == "Stub"
+
+
+def test_a_mission_can_write_its_own_briefing_instead():
+    """`_finish_briefing` is a normal method: the base owns it, not the answer."""
+
+    class Custom(StubAssembler):
+        def blue_task_text(self) -> str:
+            return f"{self.title} at {self.difficulty.value}"
+
+    m, _overlay = Custom().assemble()
+    assert m.description_bluetask_text() == "Stub at trained"
+
+
+def test_the_base_conceals_the_side_the_players_are_not_on():
+    """Derived, so a mission that flies red needs no special case.
+
+    Forgetting this leaks the whole enemy order of battle onto the F10 map and
+    the datalink, which is the failure class the base exists to prevent.
+    """
+    from dcs.vehicles import Armor
+
+    class WithEnemy(StubAssembler):
+        def _assemble(self, m: Mission, plan) -> Assembled:
+            self.convoy = m.vehicle_group(
+                m.country("Russia"), "convoy", Armor.T_72B, position=at(0.0, 0.0)
+            )
+            return Assembled(None)  # type: ignore[arg-type]
+
+    builder = WithEnemy()
+    builder.assemble()
+    assert builder.convoy.hidden is True
+    assert builder.convoy.hidden_on_planner is True
+
+
+def test_no_viper_slot_means_no_cartridge_but_still_a_threat_block():
+    """The branch that keeps "F-16C" out of the base's contract.
+
+    Only the Viper draws a pre-planned threat ring or reads a steerpoint
+    cartridge. A package without one still needs the coordinates recorded,
+    because the kneeboard's threat block is then the only place they exist.
+    """
+    from dcs_mission_creator.core import dtc
+
+    point = dtc.ThreatPoint(at(1_000.0, 2_000.0), dtc.SA_6, radius_m=25_000.0)
+
+    class NoViper(StubAssembler):
+        def _assemble(self, m: Mission, plan) -> Assembled:
+            return Assembled(None, [point])  # type: ignore[arg-type]
+
+    m, _overlay = NoViper().assemble()
+    assert dtc.briefed_threats(m) == [point]
 
 
 def test_build_miz_assembles_and_saves(tmp_path: Path, monkeypatch):
@@ -249,7 +325,10 @@ def test_build_miz_snaps_after_assembling(tmp_path: Path, monkeypatch):
         mb.waypoints, "snap_base_waypoints", lambda m, overlay: order.append("snap")
     )
     builder = StubAssembler()
-    builder._assemble = lambda m: order.append("assemble")  # type: ignore[method-assign]
+    builder._assemble = lambda m, plan: (  # type: ignore[method-assign]
+        order.append("assemble"),
+        Assembled(None),  # type: ignore[arg-type]
+    )[1]
     builder.build_miz(tmp_path / "s.miz")
     assert order == ["assemble", "snap"]
 

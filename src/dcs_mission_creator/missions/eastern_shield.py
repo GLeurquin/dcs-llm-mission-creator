@@ -54,7 +54,10 @@ from dcs_mission_creator.core import (
 from dcs_mission_creator.core.cli import run_cli
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.map_draw import PlanOverlay
-from dcs_mission_creator.core.mission_builder import MIN_PLAYERS, MissionBuilder
+from dcs_mission_creator.core.mission_builder import (
+    Assembled,
+    MissionBuilder,
+)
 from dcs_mission_creator.core.mission_kit import (
     arm,
     offset,
@@ -68,10 +71,7 @@ from dcs_mission_creator.core.tasking import (
     apply_ai_difficulty,
     apply_threat_reaction,
 )
-from dcs_mission_creator.core.tts import VoiceSynth
-from dcs_mission_creator.core.visibility import conceal_country
 from dcs_mission_creator.core.weather import Weather, Wind
-from dcs_mission_creator.map_overlay.query import MapOverlay
 from dcs_mission_creator.map_overlay.scene import TacticalScene
 
 
@@ -169,6 +169,24 @@ class EasternShield(MissionBuilder):
     name = "eastern_shield"
     title = "Eastern Shield"
     difficulty = Difficulty.TRAINED
+    terrain = Syria
+
+    #: The two coalition task panels. Plain strings: nothing here needs
+    #: to compute one, and `blue_task_text` / `red_task_text` are there
+    #: for the mission that does.
+    blue_task = (
+        "Suppress the SA-6 north of Kuweires, escort Hawg 1-2 onto the "
+        "Russian depot, then intercept the MiG-29S scramble out of "
+        "Bassel Al-Assad and disrupt the armored reserve on the Aleppo "
+        "road. RTB Incirlik. Tank from Texaco as required."
+    )
+
+    red_task = (
+        "Defend the Kuweires depot with the SA-6 ridge and SHORAD. "
+        "Scramble MiG-29S from Bassel Al-Assad on depot strike. "
+        "Push the armored reserve west from the Aleppo road to retake "
+        "the site once it is struck."
+    )
 
     #: 09:00 map-local on 21 May 2026 — the wall clock DCS shows in-game.
     start_time = datetime(2026, 5, 21, 9, 0, 0, tzinfo=timezone.utc)
@@ -185,11 +203,6 @@ class EasternShield(MissionBuilder):
         wind_at_2000=Wind(300, 6),
         wind_at_8000=Wind(290, 10),
     )
-
-    def __init__(self, *, players: int = MIN_PLAYERS) -> None:
-        super().__init__(players=players)
-        self._terrain = Syria()
-        self._voice = VoiceSynth()
 
     # -- in-game and README briefings ---------------------------------------
 
@@ -430,7 +443,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     # -- top-level orchestration --------------------------------------------
 
-    def _assemble(self, m: Mission) -> MapOverlay:
+    def _assemble(self, m: Mission, plan: PlanOverlay) -> Assembled:
         """Assemble the mission by calling each step in package order."""
         scene = self._setup_airports(m)
         usa, russia = m.country("USA"), m.country("Russia")
@@ -462,8 +475,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         )
         sanc.remark_all(m, home, forward, bassel_ad)
 
-        self._conceal_red(russia)
-        plan = PlanOverlay(m, self.difficulty)
         briefed_threats = self._draw_plan(
             m,
             scene,
@@ -480,7 +491,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             forward=forward,
             bassel_ad=bassel_ad,
         )
-        self._load_cartridge(m, scene, briefed_threats, plan=plan)
         self._add_intro_voice(m)
         self._add_support_checkins(m, home)
         self._add_layered_triggers(
@@ -491,8 +501,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             migs=migs,
             reserve=reserve,
         )
-        self._add_briefing(m)
-        return scene.overlay.overlay
+        return Assembled(scene.overlay.overlay, briefed_threats)
 
     # -- airports ------------------------------------------------------------
 
@@ -1087,14 +1096,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     # -- F10 map briefing ---------------------------------------------------
 
-    def _conceal_red(self, russia: Country) -> None:
-        """Keep every Russian group off the F10 map, the planner and the datalink.
-
-        Includes the reserve waiting on the Aleppo road — an unhidden reserve
-        would spoil its own counter-push before it ever rolls.
-        """
-        conceal_country(russia)
-
     def _threat_rings(
         self, *, sa6_pos: Point, shorad_pos: Point
     ) -> tuple[ThreatRing, ...]:
@@ -1171,27 +1172,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         # 172 km away, so it costs the strike nothing and costs a chase down the
         # coast everything.
         return hsd + bassel_ad.draw(plan)
-
-    def _load_cartridge(
-        self,
-        m: Mission,
-        scene: _Scene,
-        points: list[dtc.ThreatPoint],
-        *,
-        plan: PlanOverlay,
-    ) -> None:
-        """Load the briefed SAM rings as pre-planned threats on the player's cartridge.
-
-        And onto the kneeboard's threat block, which is where the same estimates
-        turn into coordinates a pilot can read.
-
-        The same cartridge carries the rest of the plan the F10 map shows: the
-        flight's own route and the plan's marks as steerpoints, its lines as the
-        HSD's GEO lines. The map and the cockpit are one briefing, drawn from
-        one set of positions.
-        """
-        dtc.arm_hsd_threats(m, points, overlay=scene.overlay.overlay)
-        dtc.arm_plan(m, plan, overlay=scene.overlay.overlay)
 
     # -- triggers and briefing ----------------------------------------------
 
@@ -1379,23 +1359,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                 "nothing left to run the strike with. Springfield, RTB Incirlik."
             ),
         )
-
-    def _add_briefing(self, m: Mission) -> None:
-        """Wire the in-game description, side tasks, and sortie name."""
-        m.set_description_text(self._in_game_briefing())
-        m.set_description_bluetask_text(
-            "Suppress the SA-6 north of Kuweires, escort Hawg 1-2 onto the "
-            "Russian depot, then intercept the MiG-29S scramble out of "
-            "Bassel Al-Assad and disrupt the armored reserve on the Aleppo "
-            "road. RTB Incirlik. Tank from Texaco as required."
-        )
-        m.set_description_redtask_text(
-            "Defend the Kuweires depot with the SA-6 ridge and SHORAD. "
-            "Scramble MiG-29S from Bassel Al-Assad on depot strike. "
-            "Push the armored reserve west from the Aleppo road to retake "
-            "the site once it is struck."
-        )
-        m.set_sortie_text(self.title)
 
 
 def main() -> None:

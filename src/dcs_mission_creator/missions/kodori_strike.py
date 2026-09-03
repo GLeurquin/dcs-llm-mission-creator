@@ -57,7 +57,10 @@ from dcs_mission_creator.core import (
 from dcs_mission_creator.core.cli import run_cli
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.map_draw import PlanOverlay
-from dcs_mission_creator.core.mission_builder import MIN_PLAYERS, MissionBuilder
+from dcs_mission_creator.core.mission_builder import (
+    Assembled,
+    MissionBuilder,
+)
 from dcs_mission_creator.core.mission_kit import (
     arm,
     offset,
@@ -84,11 +87,8 @@ from dcs_mission_creator.core.tasking import (
     apply_ai_difficulty,
     apply_threat_reaction,
 )
-from dcs_mission_creator.core.tts import VoiceSynth
-from dcs_mission_creator.core.visibility import conceal_country
 from dcs_mission_creator.core.weather import Weather, Wind
 from dcs_mission_creator.map_overlay.placement import Placement
-from dcs_mission_creator.map_overlay.query import MapOverlay
 from dcs_mission_creator.map_overlay.scene import TacticalScene
 
 #: Elevation floor (m) for any air-defence placement in this AO. The threat
@@ -196,6 +196,22 @@ class KodoriStrike(MissionBuilder):
     name = "kodori_strike"
     title = "Kodori Strike"
     difficulty = Difficulty.TRAINED
+    terrain = Caucasus
+
+    #: The two coalition task panels. Plain strings: nothing here needs
+    #: to compute one, and `blue_task_text` / `red_task_text` are there
+    #: for the mission that does.
+    blue_task = (
+        "Lead the strike on the Russian FOB at the Kodori delta. Weasel "
+        "rolls back the SA-6 site; Eagle holds a CAP station between "
+        "Kutaisi and Gudauta and handles the Su-27 intercept. RTB Kutaisi."
+    )
+
+    red_task = (
+        "Hold the FOB at the Kodori delta. SA-6 / SA-13 cover the target "
+        "box; Su-27s out of Gudauta launch against any USAF package "
+        "crossing the Inguri."
+    )
 
     #: 10:00 map-local on 20 May 2026 — the wall clock DCS shows in-game.
     start_time = datetime(2026, 5, 20, 10, 0, 0, tzinfo=timezone.utc)
@@ -212,11 +228,6 @@ class KodoriStrike(MissionBuilder):
         wind_at_2000=Wind(270, 6),
         wind_at_8000=Wind(260, 11),
     )
-
-    def __init__(self, *, players: int = MIN_PLAYERS) -> None:
-        super().__init__(players=players)
-        self._terrain = Caucasus()
-        self._voice = VoiceSynth()
 
     # -- in-game and README briefings ---------------------------------------
 
@@ -481,7 +492,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     # -- top-level orchestration --------------------------------------------
 
-    def _assemble(self, m: Mission) -> MapOverlay:
+    def _assemble(self, m: Mission, plan: PlanOverlay) -> Assembled:
         """Assemble the mission by calling each step in package order."""
         scene = self._setup_airports(m)
         usa, russia = m.country("USA"), m.country("Russia")
@@ -513,11 +524,9 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self._add_end_triggers(m, fob=fob, sa6=sa6, weasel=weasel)
         sanc.announce(m, home, at_seconds=180, voice=self._voice)
         sanc.remark_all(m, home, gudauta_ad)
-        self._conceal_red(russia)
         # One overlay for every reveal channel: the F10 plan, the cockpit
         # cartridge and the recon still all have to make the same claim, and the
         # difficulty policy that decides how much they claim lives in here.
-        plan = PlanOverlay(m, self.difficulty)
         briefed_threats = self._draw_plan(
             m,
             scene,
@@ -533,10 +542,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             home=home,
             gudauta_ad=gudauta_ad,
         )
-        self._load_cartridge(m, scene, briefed_threats, plan=plan)
         self._render_recon(m, scene, plan=plan, fob=fob)
-        self._add_briefing(m)
-        return scene.overlay.overlay
+        return Assembled(scene.overlay.overlay, briefed_threats)
 
     # -- airports ------------------------------------------------------------
 
@@ -1212,14 +1219,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     # -- F10 map briefing ---------------------------------------------------
 
-    def _conceal_red(self, russia: Country) -> None:
-        """Keep every Russian group off the F10 map, the planner and the datalink.
-
-        What the player knows about the FOB and its cover is the briefing plus
-        the estimates `_draw_plan` paints — nothing else.
-        """
-        conceal_country(russia)
-
     def _draw_plan(
         self,
         m: Mission,
@@ -1366,27 +1365,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             label="fob",
         )
 
-    def _load_cartridge(
-        self,
-        m: Mission,
-        scene: _Scene,
-        points: list[dtc.ThreatPoint],
-        *,
-        plan: PlanOverlay,
-    ) -> None:
-        """Load the briefed SAM rings as pre-planned threats on the Weasel's cartridge.
-
-        And onto the kneeboard's threat block, which is where the same estimates
-        turn into coordinates a pilot can read.
-
-        The same cartridge carries the rest of the plan the F10 map shows: the
-        flight's own route and the plan's marks as steerpoints, its lines as the
-        HSD's GEO lines. The map and the cockpit are one briefing, drawn from
-        one set of positions.
-        """
-        dtc.arm_hsd_threats(m, points, overlay=scene.overlay.overlay)
-        dtc.arm_plan(m, plan, overlay=scene.overlay.overlay)
-
     # -- triggers and briefing ----------------------------------------------
 
     def _add_end_triggers(self, m: Mission, *, fob, sa6, weasel) -> None:
@@ -1422,21 +1400,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                 "that valley is closed to us. Dodge, return to base, Kutaisi."
             ),
         )
-
-    def _add_briefing(self, m: Mission) -> None:
-        """Wire the in-game description, side tasks, and sortie name."""
-        m.set_description_text(self._in_game_briefing())
-        m.set_description_bluetask_text(
-            "Lead the strike on the Russian FOB at the Kodori delta. Weasel "
-            "rolls back the SA-6 site; Eagle holds a CAP station between "
-            "Kutaisi and Gudauta and handles the Su-27 intercept. RTB Kutaisi."
-        )
-        m.set_description_redtask_text(
-            "Hold the FOB at the Kodori delta. SA-6 / SA-13 cover the target "
-            "box; Su-27s out of Gudauta launch against any USAF package "
-            "crossing the Inguri."
-        )
-        m.set_sortie_text(self.title)
 
 
 def main() -> None:

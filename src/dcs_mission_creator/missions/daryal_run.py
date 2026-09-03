@@ -53,7 +53,10 @@ from dcs_mission_creator.core import (
 from dcs_mission_creator.core.cli import run_cli
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.map_draw import PlanOverlay
-from dcs_mission_creator.core.mission_builder import MIN_PLAYERS, MissionBuilder
+from dcs_mission_creator.core.mission_builder import (
+    Assembled,
+    MissionBuilder,
+)
 from dcs_mission_creator.core.mission_kit import (
     offset,
     player_flight,
@@ -62,11 +65,8 @@ from dcs_mission_creator.core.mission_kit import (
 )
 from dcs_mission_creator.core.placement import load_scene
 from dcs_mission_creator.core.tasking import apply_ai_difficulty
-from dcs_mission_creator.core.tts import VoiceSynth
-from dcs_mission_creator.core.visibility import conceal_country
 from dcs_mission_creator.core.waypoints import Leg
 from dcs_mission_creator.core.weather import Weather, Wind
-from dcs_mission_creator.map_overlay.query import MapOverlay
 from dcs_mission_creator.map_overlay.scene import TacticalScene
 
 #: What the briefing claims each emplaced system reaches, before the difficulty
@@ -251,6 +251,22 @@ class DaryalRun(MissionBuilder):
     name = "daryal_run"
     title = "Daryal Run"
     difficulty = Difficulty.ACE
+    terrain = Caucasus
+
+    #: The two coalition task panels. Plain strings: nothing here needs
+    #: to compute one, and `blue_task_text` / `red_task_text` are there
+    #: for the mission that does.
+    blue_task = (
+        "Ingress the Daryal Gorge below 1000 m AGL, destroy the Russian "
+        "S-300PS radars (Big Bird SR + Flap Lid TR) south of Beslan, then "
+        "egress WEST around the western ridges and RTB Vaziani. Do not "
+        "re-cross Daryal on egress — the MiG-29S CAP will be up."
+    )
+
+    red_task = (
+        "Hold the S-300PS battery south of Beslan. MiG-29S from Mozdok "
+        "intercept any USAF push that comes north up the gorge."
+    )
 
     #: 18:15 map-local on 12 October 2026 — dusk, the wall clock DCS shows in-
     #: game.
@@ -269,11 +285,6 @@ class DaryalRun(MissionBuilder):
         wind_at_2000=Wind(10, 6),
         wind_at_8000=Wind(350, 8),
     )
-
-    def __init__(self, *, players: int = MIN_PLAYERS) -> None:
-        super().__init__(players=players)
-        self._terrain = Caucasus()
-        self._voice = VoiceSynth()
 
     # -- in-game and README briefings ---------------------------------------
 
@@ -581,14 +592,13 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     # -- top-level orchestration --------------------------------------------
 
-    def _assemble(self, m: Mission) -> MapOverlay:
+    def _assemble(self, m: Mission, plan: PlanOverlay) -> Assembled:
         """Assemble the mission by calling each step in package order."""
         # The overlay comes first because the *flight plan* is built off it:
         # every steerpoint that refers to the battery refers to the estimate
         # this will draw, never to the battery. Nothing the player can read —
         # map, DED, HSD, kneeboard — then carries a position better than the
         # ELINT cut the briefing admits to.
-        plan = PlanOverlay(m, self.difficulty)
         scene = self._setup_airports(m)
         usa, russia = m.country("USA"), m.country("Russia")
 
@@ -602,13 +612,10 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self._add_end_triggers(m, sa10=sa10, dodge=dodge)
         sanc.announce(m, home, at_seconds=200, voice=self._voice)
         sanc.remark_all(m, home, mozdok_ad)
-        self._conceal_red(russia)
         briefed_threats = self._draw_plan(
             m, scene, plan=plan, route=route, home=home, mozdok_ad=mozdok_ad
         )
-        self._load_cartridge(m, scene, briefed_threats, plan=plan)
-        self._add_briefing(m)
-        return scene.overlay.overlay
+        return Assembled(scene.overlay.overlay, briefed_threats)
 
     # -- airports ------------------------------------------------------------
 
@@ -895,14 +902,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     # -- F10 map briefing ---------------------------------------------------
 
-    def _conceal_red(self, russia: Country) -> None:
-        """Keep every Russian group off the F10 map, the planner and the datalink.
-
-        Ace: the battery is a target area on the map, not a set of icons —
-        the player finds the radars with the HTS and the RWR.
-        """
-        conceal_country(russia)
-
     def _spawn_sanctuaries(
         self,
         m: Mission,
@@ -1033,31 +1032,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         briefed += mozdok_ad.draw(plan)
         return briefed
 
-    def _load_cartridge(
-        self,
-        m: Mission,
-        scene: _Scene,
-        points: list[dtc.ThreatPoint],
-        *,
-        plan: PlanOverlay,
-    ) -> None:
-        """Put the assessed envelopes on `Dodge`'s HSD, where the map drew them.
-
-        Ace used to load nothing, which sounded right for a picture this thin
-        and was not: the player got the battery's position anyway, out of a
-        target steerpoint no reveal policy had touched. Two deliberately
-        imprecise rings in the cockpit are both more honest and more use — they
-        are the same wrong-by-kilometres claim the F10 map makes, carried where
-        the player can see it with their head in the pit.
-
-        The same cartridge carries the rest of the plan the F10 map shows: the
-        flight's own route and the plan's marks as steerpoints, its lines as the
-        HSD's GEO lines. The map and the cockpit are one briefing, drawn from
-        one set of positions.
-        """
-        dtc.arm_hsd_threats(m, points, overlay=scene.overlay.overlay)
-        dtc.arm_plan(m, plan, overlay=scene.overlay.overlay)
-
     # -- triggers and briefing ----------------------------------------------
 
     def _add_end_triggers(
@@ -1107,21 +1081,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             ),
             seconds=25,
         )
-
-    def _add_briefing(self, m: Mission) -> None:
-        """Wire the in-game description, side tasks, and sortie name."""
-        m.set_description_text(self._in_game_briefing())
-        m.set_description_bluetask_text(
-            "Ingress the Daryal Gorge below 1000 m AGL, destroy the Russian "
-            "S-300PS radars (Big Bird SR + Flap Lid TR) south of Beslan, then "
-            "egress WEST around the western ridges and RTB Vaziani. Do not "
-            "re-cross Daryal on egress — the MiG-29S CAP will be up."
-        )
-        m.set_description_redtask_text(
-            "Hold the S-300PS battery south of Beslan. MiG-29S from Mozdok "
-            "intercept any USAF push that comes north up the gorge."
-        )
-        m.set_sortie_text(self.title)
 
 
 def main() -> None:

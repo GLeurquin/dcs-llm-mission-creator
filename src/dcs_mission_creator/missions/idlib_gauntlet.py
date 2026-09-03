@@ -96,7 +96,10 @@ from dcs_mission_creator.core.frontline import Frontline, plan_frontline
 from dcs_mission_creator.core.iads import Listener, Site, arm_iads
 from dcs_mission_creator.core.jtac import CoordTarget, arm_jtac_coords
 from dcs_mission_creator.core.map_draw import PlanOverlay
-from dcs_mission_creator.core.mission_builder import MIN_PLAYERS, MissionBuilder
+from dcs_mission_creator.core.mission_builder import (
+    Assembled,
+    MissionBuilder,
+)
 from dcs_mission_creator.core.mission_kit import (
     arm,
     player_flight,
@@ -126,10 +129,7 @@ from dcs_mission_creator.core.tasking import (
     fac_attack_group,
     scramble_on_trigger,
 )
-from dcs_mission_creator.core.tts import VoiceSynth
-from dcs_mission_creator.core.visibility import conceal_country
 from dcs_mission_creator.core.weather import Weather, Wind
-from dcs_mission_creator.map_overlay.query import MapOverlay
 from dcs_mission_creator.map_overlay.scene import TacticalScene
 
 # Flag raised when the F/A-18C strike pair is cleared into the AO.
@@ -325,6 +325,32 @@ class IdlibGauntlet(MissionBuilder):
     name = "idlib_gauntlet"
     title = "Idlib Gauntlet"
     difficulty = Difficulty.TRAINED
+    terrain = Syria
+
+    #: The two coalition task panels. Plain strings: nothing here needs
+    #: to compute one, and `blue_task_text` / `red_task_text` are there
+    #: for the mission that does.
+    blue_task = (
+        "Cross the Syrian front line at the seam, high — the frontage is guns "
+        "and MANPADS and each shoulder is an S-125 battery, and there is an "
+        "emitter north of the corridor we never located. Then break up the "
+        "resupply column before it reaches the Taftanaz "
+        "off-load. Suppress the SA-2, SA-6 and SA-8 belts covering the "
+        "corridor — their crews drop emissions when they see a HARM and "
+        "stay dark for minutes, so work the window. Pontiac is held "
+        "in reserve and will run the column once the SAM threat over the "
+        "route is suppressed. RTB Hatay."
+    )
+
+    red_task = (
+        "Run the resupply column from Abu al-Duhur to the Taftanaz "
+        "off-load; the ammunition is for the divisions holding the line. "
+        "Hold the frontage, keep both shoulder batteries on the air and let "
+        "the middle sector stay the SA-6's business. "
+        "Air defence belts cover the corridor; drop emissions on "
+        "anti-radiation fire and re-radiate once the shooter is dry. "
+        "Scramble the MiG-29S alert pair when the column takes losses."
+    )
 
     #: 08:40 map-local on 12 September 2026 — the wall clock DCS shows in-game.
     start_time = datetime(2026, 9, 12, 8, 40, 0, tzinfo=timezone.utc)
@@ -341,11 +367,6 @@ class IdlibGauntlet(MissionBuilder):
         wind_at_2000=Wind(280, 7),
         wind_at_8000=Wind(290, 12),
     )
-
-    def __init__(self, *, players: int = MIN_PLAYERS) -> None:
-        super().__init__(players=players)
-        self._terrain = Syria()
-        self._voice = VoiceSynth()
 
     # -- in-game and README briefings ---------------------------------------
 
@@ -821,7 +842,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     # -- top-level orchestration --------------------------------------------
 
-    def _assemble(self, m: Mission) -> MapOverlay:
+    def _assemble(self, m: Mission, plan: PlanOverlay) -> Assembled:
         """Assemble the mission by calling each step in package order."""
         scene = self._setup_airports(m)
         usa = m.country("USA")
@@ -855,7 +876,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         # cartridge, the recon still — and the flight plan, which is why it is
         # built here rather than after the package. The difficulty policy that
         # decides how much any of them claim lives in it.
-        plan = PlanOverlay(m, self.difficulty)
         # Uzi is sent to where the SA-6 is *assessed* to be, not to the site.
         # The corridor used to end on the launchers exactly, so `SEAD TGT` read
         # out of the DED gave the player a fix the map had deliberately drawn
@@ -884,7 +904,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         )
         sanc.remark_all(m, home, rear_field, bassel_ad)
 
-        self._conceal_red(russia, syria)
         briefed_threats = self._draw_plan(
             m,
             scene,
@@ -901,7 +920,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             rear_field=rear_field,
             bassel_ad=bassel_ad,
         )
-        self._load_cartridge(m, scene, briefed_threats, plan=plan)
         self._render_recon(m, scene, plan=plan, convoy=convoy)
         self._add_iads(
             m,
@@ -922,8 +940,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self._add_strike_release_triggers(m, sa6=sa6, pontiac=pontiac)
         self._add_scramble_trigger(m, convoy=convoy, migs=migs)
         self._add_end_triggers(m, scene, convoy=convoy, migs=migs)
-        self._add_briefing(m)
-        return scene.overlay.overlay
+        return Assembled(scene.overlay.overlay, briefed_threats)
 
     # -- airports ------------------------------------------------------------
 
@@ -1824,14 +1841,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     # -- F10 map briefing ---------------------------------------------------
 
-    def _conceal_red(self, *countries: Country) -> None:
-        """Keep every Syrian and Russian group off the map, planner and datalink.
-
-        The belts are an intel problem: the player gets the estimated rings
-        `_draw_plan` paints, not a stock icon on every TEL.
-        """
-        conceal_country(*countries)
-
     @staticmethod
     def _belt_named(belts: tuple[ThreatRing, ...], label: str) -> ThreatRing:
         """One belt by its label, so nothing here depends on tuple order."""
@@ -2028,27 +2037,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         # the cartridge beside the belts. It reaches 18 km and the axis is 102 km
         # away, so it costs the run nothing and costs a chase everything.
         return hsd + bassel_ad.draw(plan)
-
-    def _load_cartridge(
-        self,
-        m: Mission,
-        scene: _Scene,
-        points: list[dtc.ThreatPoint],
-        *,
-        plan: PlanOverlay,
-    ) -> None:
-        """Load the briefed belts as pre-planned threats on the player's cartridge.
-
-        And onto the kneeboard's threat block, which names each belt the way the
-        map does — the label handed to `dtc.briefed` above is `plan.threat`'s own.
-
-        The same cartridge carries the rest of the plan the F10 map shows: the
-        flight's own route and the plan's marks as steerpoints, its lines as the
-        HSD's GEO lines. The map and the cockpit are one briefing, drawn from
-        one set of positions.
-        """
-        dtc.arm_hsd_threats(m, points, overlay=scene.overlay.overlay)
-        dtc.arm_plan(m, plan, overlay=scene.overlay.overlay)
 
     # -- the imagery the briefing cites --------------------------------------
 
@@ -2561,31 +2549,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                 "RTB Hatay."
             ),
         )
-
-    def _add_briefing(self, m: Mission) -> None:
-        """Wire the in-game description, side tasks, and sortie name."""
-        m.set_description_text(self._in_game_briefing())
-        m.set_description_bluetask_text(
-            "Cross the Syrian front line at the seam, high — the frontage is guns "
-            "and MANPADS and each shoulder is an S-125 battery, and there is an "
-            "emitter north of the corridor we never located. Then break up the "
-            "resupply column before it reaches the Taftanaz "
-            "off-load. Suppress the SA-2, SA-6 and SA-8 belts covering the "
-            "corridor — their crews drop emissions when they see a HARM and "
-            "stay dark for minutes, so work the window. Pontiac is held "
-            "in reserve and will run the column once the SAM threat over the "
-            "route is suppressed. RTB Hatay."
-        )
-        m.set_description_redtask_text(
-            "Run the resupply column from Abu al-Duhur to the Taftanaz "
-            "off-load; the ammunition is for the divisions holding the line. "
-            "Hold the frontage, keep both shoulder batteries on the air and let "
-            "the middle sector stay the SA-6's business. "
-            "Air defence belts cover the corridor; drop emissions on "
-            "anti-radiation fire and re-radiate once the shooter is dry. "
-            "Scramble the MiG-29S alert pair when the column takes losses."
-        )
-        m.set_sortie_text(self.title)
 
 
 def main() -> None:

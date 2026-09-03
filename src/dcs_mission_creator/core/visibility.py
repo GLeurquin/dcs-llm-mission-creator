@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from dcs.country import Country
+    from dcs.mission import Mission
     from dcs.unitgroup import Group
 
 
@@ -32,6 +33,24 @@ def conceal(*groups: Optional[Group]) -> None:
         group.hidden = True  # F10 map in game
         group.hidden_on_planner = True  # briefing / mission-planner map
         group.hidden_on_mfd = True  # datalink & MFD symbology
+
+
+def conceal_coalition(m: "Mission", side: str) -> None:
+    """`conceal_country` every country on one side of the mission.
+
+    The form the base class calls, and the reason it can: a mission cannot
+    forget a country it never listed. `idlib_gauntlet` and `ansariyah_works`
+    each fly against two, and each had to remember both by hand.
+
+    A mission that wants something left visible on purpose — a defector, a
+    marked hulk, an EWR the briefing deliberately gives away — overrides the
+    base's briefing step or clears the flags again afterwards. The default being
+    safe is the point; the default being the only option is not.
+    """
+    coalition = m.coalition.get(side)
+    if coalition is None:
+        return
+    conceal_country(*coalition.countries.values())
 
 
 def groups_of(country: Country) -> tuple[Group, ...]:

@@ -14,12 +14,14 @@ once every flight exists, and saving. A mission supplies the middle.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import random
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING, Callable, Sequence
 
 from dcs.mapping import LatLng, Point
 from dcs.mission import Mission
@@ -33,11 +35,14 @@ from dcs_mission_creator.core import (
     loadout,
     mission_kit,
     radio,
+    visibility,
     waypoints,
 )
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.loadout import Loadout
+from dcs_mission_creator.core.map_draw import PlanOverlay
 from dcs_mission_creator.core.recon import publish as recon
+from dcs_mission_creator.core.tts import VoiceSynth
 from dcs_mission_creator.core.weather import Weather
 
 if TYPE_CHECKING:
@@ -64,6 +69,24 @@ MIN_PLAYERS = 2
 MAX_PLAYERS = 6
 
 
+@dataclass(frozen=True)
+class Assembled:
+    """What a mission hands back so the base can finish the briefing.
+
+    `overlay` is what `_assemble` always returned. `briefed_threats` is the list
+    `_draw_plan` produced, and it is here rather than loaded by the mission
+    because eight copies of `_load_cartridge` had byte-identical bodies: which
+    rings reach the cockpit is not a decision, it is the same two calls on
+    whatever the map drew.
+    """
+
+    overlay: MapOverlay
+    #: The estimates `PlanOverlay.threat` returned, by way of `dtc.briefed`.
+    #: Empty is a supported answer — a mission that briefs no ring, or whose
+    #: only air defence moves.
+    briefed_threats: Sequence[dtc.ThreatPoint] = ()
+
+
 class MissionBuilder(ABC):
     name: str
     title: str
@@ -73,8 +96,21 @@ class MissionBuilder(ABC):
     #: an untyped string each mission happens to define.
     difficulty: Difficulty = Difficulty.TRAINED
 
-    #: The theater, set by the subclass `__init__`.
-    _terrain: Terrain
+    #: The theater, as the pydcs class rather than an instance — so a mission
+    #: states it beside `name` and `title` instead of in an `__init__` whose
+    #: only other line was the voice synth.
+    #:
+    #: Typed as a factory rather than `type[Terrain]` because pydcs's base
+    #: `Terrain.__init__` takes five arguments its concrete subclasses fill in;
+    #: what a mission supplies is something that yields a terrain when called.
+    terrain: Callable[[], Terrain]
+
+    #: The two coalition task panels, as the mission editor calls them. Plain
+    #: strings in every mission here; read through `blue_task_text` /
+    #: `red_task_text` so one that needs to interpolate a callsign or a
+    #: difficulty still can.
+    blue_task: str
+    red_task: str
 
     #: When the mission starts, map-local. pydcs serialises the hour and minute
     #: verbatim and DCS reads the field as map-local, so `tzinfo` is inert:
@@ -105,11 +141,52 @@ class MissionBuilder(ABC):
         self._pin_onboard_numbers()
 
     @abstractmethod
-    def _assemble(self, m: Mission) -> MapOverlay:
-        """Build the whole mission into `m`.
+    def _assemble(self, m: Mission, plan: PlanOverlay) -> Assembled:
+        """Build the whole mission into `m`, and hand back what finishing needs.
 
-        Returns the overlay the mission's positions came from, which the base
-        uses to put take-off and landing waypoints on the terrain.
+        `plan` is the mission's F10 overlay, constructed by the base and passed
+        in rather than built here. Half the missions used to build it before
+        `_setup_airports` because their route geometry reads `plan.estimate`,
+        and half just before `_draw_plan` — an ordering hazard each of them
+        carried a comment about. Constructing it earlier than any of them is a
+        no-op: `PlanOverlay.__init__` stores three references and scans for a
+        layer, with no RNG draw, no dictionary allocation and no mutation.
+        """
+
+    @functools.cached_property
+    def _terrain(self) -> Terrain:
+        """This mission's terrain, built once.
+
+        Lazy rather than eager so a builder can be constructed — by
+        `dcs-mission-creator list`, by a test — without paying for it.
+        """
+        return self.terrain()
+
+    @functools.cached_property
+    def _voice(self) -> VoiceSynth:
+        """The mission's text-to-speech renderer, built on first use.
+
+        Every mission built one in `__init__` with no arguments. It is lazy for
+        the same reason as the terrain and because `PiperBackend` loads its ONNX
+        model on demand, so constructing a builder costs nothing.
+        """
+        return VoiceSynth()
+
+    def blue_task_text(self) -> str:
+        """The friendly coalition's task panel. Override to compute it."""
+        return self.blue_task
+
+    def red_task_text(self) -> str:
+        """The enemy coalition's task panel. Override to compute it."""
+        return self.red_task
+
+    @abstractmethod
+    def _in_game_briefing(self) -> str:
+        """The mission's in-game description panel, as plain text.
+
+        Every mission already had this method with this name and signature; it
+        is abstract so that an existing universal convention is part of the
+        contract rather than something eight files happen to agree on.
         """
 
     def start_time_for(self, m: Mission) -> datetime:
@@ -284,7 +361,10 @@ class MissionBuilder(ABC):
         self._permit_crash_recovery(m)
         m.start_time = self.start_time_for(m)
         self.weather_for(m).apply(m)
-        overlay = self._assemble(m)
+        plan = PlanOverlay(m, self.difficulty)
+        out = self._assemble(m, plan)
+        overlay = out.overlay
+        self._finish_briefing(m, plan, out)
         self._remark_loadouts(m)
         join_up.hold_package_for_player(m)
         waypoints.snap_base_waypoints(m, overlay)
@@ -292,6 +372,70 @@ class MissionBuilder(ABC):
         datalink.assign_datalink_identities(m)
         radio.tune_working_frequencies(m)
         return m, overlay
+
+    def _finish_briefing(self, m: Mission, plan: PlanOverlay, out: Assembled) -> None:
+        """Hide the enemy, load the briefed picture, and write the panels.
+
+        The four steps every mission's `_assemble` used to end with, in the
+        order it ended with them. They are here rather than in the missions for
+        the reason the rest of `assemble` is: none of them is a decision. Eight
+        `_load_cartridge` methods had byte-identical two-line bodies under
+        ninety-four lines of docstring, and eight `_conceal_red` methods had no
+        payload at all.
+
+        **Overridable, and every line degrades rather than raises.** The base
+        owning a step means it cannot be forgotten, not that it cannot be
+        changed: a mission that wants a group left visible on purpose, or a
+        briefing written some other way, overrides this and calls `super()` for
+        the parts it still wants.
+        """
+        visibility.conceal_coalition(m, self._enemy_coalition(m))
+        self._load_cartridge(m, plan, out)
+        m.set_description_text(self._in_game_briefing())
+        m.set_description_bluetask_text(self.blue_task_text())
+        m.set_description_redtask_text(self.red_task_text())
+        m.set_sortie_text(self.title)
+
+    @staticmethod
+    def _load_cartridge(m: Mission, plan: PlanOverlay, out: Assembled) -> None:
+        """The briefed picture, into the cockpit that can hold it and the card.
+
+        Two calls with no distinct payload across eight missions: the briefed
+        rings as pre-planned threats, and the rest of the F10 plan as
+        steerpoints and GEO lines. The map and the cockpit are one briefing
+        because they are read from one place.
+
+        Both need a player-flown F-16C, which is the only module in DCS that
+        draws a pre-planned threat ring or reads a steerpoint cartridge. Every
+        mission here flies one — and making the calls unconditional is exactly
+        how "F-16C" would become part of the base's contract without anyone
+        deciding it. A package with no Viper still gets the threat list
+        recorded, because `core/kneeboard`'s threat block is then the *only*
+        place those coordinates exist for that pilot.
+        """
+        if any(
+            unit.unit_type.id == dtc.AIRCRAFT.id
+            for group in mission_kit.player_groups(m)
+            for unit in group.units
+        ):
+            dtc.arm_hsd_threats(m, out.briefed_threats, overlay=out.overlay)
+            dtc.arm_plan(m, plan, overlay=out.overlay)
+        elif out.briefed_threats:
+            dtc.record_briefed(m, out.briefed_threats)
+
+    @staticmethod
+    def _enemy_coalition(m: Mission) -> str:
+        """Whichever side the client slots are not on.
+
+        Derived rather than assumed, so a mission that flies red needs no
+        special case — the same rule `core/audit.py`'s concealment check uses.
+        """
+        ours = {
+            side
+            for side, group in mission_kit.flying_groups_by_side(m)
+            if mission_kit.is_client(group)
+        }
+        return "red" if "red" not in ours else "blue"
 
     @staticmethod
     def _remark_loadouts(m: Mission) -> None:

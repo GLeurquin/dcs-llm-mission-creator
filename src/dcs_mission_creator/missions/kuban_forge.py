@@ -88,7 +88,10 @@ from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.iads import Listener, Site, arm_iads
 from dcs_mission_creator.core.jtac import CoordTarget, arm_jtac_coords
 from dcs_mission_creator.core.map_draw import PlanOverlay
-from dcs_mission_creator.core.mission_builder import MIN_PLAYERS, MissionBuilder
+from dcs_mission_creator.core.mission_builder import (
+    Assembled,
+    MissionBuilder,
+)
 from dcs_mission_creator.core.mission_kit import (
     offset,
     player_flight,
@@ -110,12 +113,9 @@ from dcs_mission_creator.core.tasking import (
     fac_attack_group,
     scramble_on_trigger,
 )
-from dcs_mission_creator.core.tts import VoiceSynth
-from dcs_mission_creator.core.visibility import conceal_country
 from dcs_mission_creator.core.waypoints import Leg
 from dcs_mission_creator.core.weather import Weather, Wind
 from dcs_mission_creator.map_overlay.placement import Placement, Vegetation
-from dcs_mission_creator.map_overlay.query import MapOverlay
 from dcs_mission_creator.map_overlay.scene import TacticalScene
 
 #: What the briefing claims each emplaced system reaches, before the ace reveal
@@ -391,9 +391,27 @@ class KubanForge(MissionBuilder):
     name = "kuban_forge"
     title = "Kuban Forge"
     difficulty = Difficulty.ACE
+    terrain = Caucasus
 
     #: 06:50 map-local on 18 October 2026 — twilight at the saddle.
     #:
+    #: The two coalition task panels. Plain strings: nothing here needs
+    #: to compute one, and `blue_task_text` / `red_task_text` are there
+    #: for the mission that does.
+    blue_task = (
+        "Fly the Abkhaz coast, the Kodori and the Klukhori Pass low, "
+        "destroy BOTH casting halls at the motor works on the Kuban north "
+        "of Karachayevsk, and take the night's shipment with whatever is "
+        "left. Egress is a climb south-west over the range. Do not go "
+        "north of the Kuban bend."
+    )
+
+    red_task = (
+        "Hold the motor works on the Kuban. The Buk battery on the plain "
+        "denies the airspace above the valley; the alert section at "
+        "Mineralnye Vody launches if the works are hit."
+    )
+
     #: Sunrise is about 07:05 there in the third week of October, and the
     #: sortie is fifty minutes to the target — so the crossing is flown in
     #: first light and the run-in in daylight, which is what a targeting pod
@@ -412,11 +430,6 @@ class KubanForge(MissionBuilder):
         wind_at_2000=Wind(10, 6),
         wind_at_8000=Wind(350, 9),
     )
-
-    def __init__(self, *, players: int = MIN_PLAYERS) -> None:
-        super().__init__(players=players)
-        self._terrain = Caucasus()
-        self._voice = VoiceSynth()
 
     # -- in-game and README briefings ---------------------------------------
 
@@ -807,7 +820,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     # -- top-level orchestration --------------------------------------------
 
-    def _assemble(self, m: Mission) -> MapOverlay:
+    def _assemble(self, m: Mission, plan: PlanOverlay) -> Assembled:
         """Assemble the mission by calling each step in package order."""
         scene = self._setup_airports(m)
         usa, russia = m.country("USA"), m.country("Russia")
@@ -858,11 +871,9 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self._add_scramble_triggers(m, plant=plant, migs=migs)
         self._add_end_triggers(m, plant=plant, shipment=shipment, colt=colt)
 
-        self._conceal_red(russia)
         # One overlay for every reveal channel: the F10 plan, the cockpit
         # cartridge and the kneeboard's threat block all make the same claim,
         # and the difficulty policy that decides how much they claim lives in it.
-        plan = PlanOverlay(m, self.difficulty)
         briefed_threats = self._draw_plan(
             m,
             scene,
@@ -874,9 +885,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             home=home,
             minvody_ad=minvody_ad,
         )
-        self._load_cartridge(m, scene, briefed_threats, plan=plan)
-        self._add_briefing(m)
-        return scene.overlay.overlay
+        return Assembled(scene.overlay.overlay, briefed_threats)
 
     # -- airports ------------------------------------------------------------
 
@@ -2089,16 +2098,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     # -- F10 map briefing ---------------------------------------------------
 
-    def _conceal_red(self, russia: Country) -> None:
-        """Keep every Russian group off the F10 map, the planner and the datalink.
-
-        By country rather than by hand, so the late-activated shipment and the
-        works' own buildings cannot be forgotten — an unhidden column sitting on
-        the planner map would give away the whole second half of the sortie
-        before the player started engines.
-        """
-        conceal_country(russia)
-
     def _draw_plan(
         self,
         m: Mission,
@@ -2200,47 +2199,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         )
         briefed += minvody_ad.draw(plan)
         return briefed
-
-    def _load_cartridge(
-        self,
-        m: Mission,
-        scene: _Scene,
-        points: list[dtc.ThreatPoint],
-        *,
-        plan: PlanOverlay,
-    ) -> None:
-        """Put the assessed envelopes on Colt's HSD, where the F10 map drew them.
-
-        This mission carries no HARM, so the pre-planned threats are not a
-        targeting aid — they are the only place the briefed rings exist once the
-        player's head is in the pit, and on a route flown at 250 m in a valley
-        that is where it stays. Same claim as the map, wrong by the same
-        kilometres, which is the point.
-
-        The same cartridge carries the rest of the plan: the flight's route and
-        the plan's marks as steerpoints, its lines as GEO lines. Twenty of the
-        twenty-five navigation slots are the route, and the route wins — a plan
-        that overflows loses its own marks, never the pilot's navigation.
-        """
-        dtc.arm_hsd_threats(m, points, overlay=scene.overlay.overlay)
-        dtc.arm_plan(m, plan, overlay=scene.overlay.overlay)
-
-    def _add_briefing(self, m: Mission) -> None:
-        """Wire the in-game description, side tasks, and sortie name."""
-        m.set_description_text(self._in_game_briefing())
-        m.set_description_bluetask_text(
-            "Fly the Abkhaz coast, the Kodori and the Klukhori Pass low, "
-            "destroy BOTH casting halls at the motor works on the Kuban north "
-            "of Karachayevsk, and take the night's shipment with whatever is "
-            "left. Egress is a climb south-west over the range. Do not go "
-            "north of the Kuban bend."
-        )
-        m.set_description_redtask_text(
-            "Hold the motor works on the Kuban. The Buk battery on the plain "
-            "denies the airspace above the valley; the alert section at "
-            "Mineralnye Vody launches if the works are hit."
-        )
-        m.set_sortie_text(self.title)
 
 
 def main() -> None:

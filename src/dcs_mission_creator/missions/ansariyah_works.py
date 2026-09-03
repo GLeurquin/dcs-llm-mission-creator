@@ -118,7 +118,10 @@ from dcs_mission_creator.core.cli import run_cli
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.iads import Listener, Site, arm_iads
 from dcs_mission_creator.core.map_draw import PlanOverlay
-from dcs_mission_creator.core.mission_builder import MIN_PLAYERS, MissionBuilder
+from dcs_mission_creator.core.mission_builder import (
+    Assembled,
+    MissionBuilder,
+)
 from dcs_mission_creator.core.mission_kit import (
     arm,
     offset,
@@ -133,11 +136,8 @@ from dcs_mission_creator.core.tasking import (
     apply_threat_reaction,
     scramble_on_trigger,
 )
-from dcs_mission_creator.core.tts import VoiceSynth
-from dcs_mission_creator.core.visibility import conceal_country
 from dcs_mission_creator.core.waypoints import Leg
 from dcs_mission_creator.core.weather import Weather, Wind
-from dcs_mission_creator.map_overlay.query import MapOverlay
 from dcs_mission_creator.map_overlay.scene import TacticalScene
 
 # -- what the briefing claims each emplaced system reaches --------------------
@@ -396,9 +396,30 @@ class AnsariyahWorks(MissionBuilder):
     name = "ansariyah_works"
     title = "Ansariyah Works"
     difficulty = Difficulty.VETERAN
+    terrain = Syria
 
     #: 06:10 map-local on 3 April 2026 — the wall clock DCS shows in-game.
     #:
+    #: The two coalition task panels. Plain strings: nothing here needs
+    #: to compute one, and `blue_task_text` / `red_task_text` are there
+    #: for the mission that does.
+    blue_task = (
+        "Cross the eastern Mediterranean below 300 m, coast in north of "
+        "Baniyas between the Latakia and Tartus batteries, and destroy the "
+        "casting hall at the Ansariyah rocket-motor works. Second bomb is "
+        "yours: the motor store while the load-out is still in it, or the "
+        "oxidiser plant. Egress west on the deck and climb only outside the "
+        "Gammon's ring. RTB Akrotiri; divert Paphos."
+    )
+
+    red_task = (
+        "Hold the Ansariyah works and get the load-out to the tunnel portal. "
+        "The Gammon behind Jableh denies every usable altitude over the "
+        "approach; the coastal batteries hold Latakia and Tartus. MiG-29A "
+        "from Hama intercept anything the coastal radar calls across the "
+        "beach."
+    )
+
     #: Sunrise on this coast is about 06:25, which puts the deck run in the
     #: last of the half-light and the run-in into a rising sun.
     start_time = datetime(2026, 4, 3, 6, 10, 0, tzinfo=timezone.utc)
@@ -415,11 +436,6 @@ class AnsariyahWorks(MissionBuilder):
         wind_at_2000=Wind(290, 9),
         wind_at_8000=Wind(280, 16),
     )
-
-    def __init__(self, *, players: int = MIN_PLAYERS) -> None:
-        super().__init__(players=players)
-        self._terrain = Syria()
-        self._voice = VoiceSynth()
 
     # -- in-game and README briefings ---------------------------------------
 
@@ -809,14 +825,13 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     # -- top-level orchestration --------------------------------------------
 
-    def _assemble(self, m: Mission) -> MapOverlay:
+    def _assemble(self, m: Mission, plan: PlanOverlay) -> Assembled:
         """Assemble the mission by calling each step in package order."""
         # The overlay is built before anything flies, because the *flight plan*
         # is derived from it: the letdown and climb points are where the briefed
         # Gammon ring begins, and the target steerpoint is where the plant is
         # assessed to be. Both are claims this object owns, and building it here
         # is what stops the route carrying a better position than the briefing.
-        plan = PlanOverlay(m, self.difficulty)
         scene = self._setup_airports(m)
         usa, syria, russia = m.country("USA"), m.country("Syria"), m.country("Russia")
 
@@ -848,7 +863,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self._add_strike_release_triggers(m, plant=red.plant, chevy=chevy)
         self._add_end_triggers(m, scene, red=red, colt=colt)
 
-        self._conceal_red(syria, russia)
         briefed_threats = self._draw_plan(
             m,
             scene,
@@ -860,9 +874,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             home=home,
             hama_ad=hama_ad,
         )
-        self._load_cartridge(m, scene, briefed_threats, plan=plan)
-        self._add_briefing(m)
-        return scene.overlay.overlay
+        return Assembled(scene.overlay.overlay, briefed_threats)
 
     # -- time, weather, geometry --------------------------------------------
 
@@ -1962,17 +1974,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     # -- F10 map briefing ---------------------------------------------------
 
-    def _conceal_red(self, *countries: Country) -> None:
-        """Keep every Syrian and Russian group off the map, planner and datalink.
-
-        `conceal_country` rather than a hand-picked list, which matters more here
-        than usual: this mission's enemy order of battle includes nine static
-        structures and a late-activated column, and a compound that showed up as
-        stock icons would hand the player the aimpoint choice the whole briefing
-        is built around asking him to make in the pod.
-        """
-        conceal_country(*countries)
-
     def _threat_rings(self, scene: _Scene) -> tuple[ThreatRing, ...]:
         """The rings the friendly package is planned around — on truth, not on the map.
 
@@ -2089,29 +2090,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         plan.orbit(*tarcap_track, "Eagle TARCAP")
         plan.orbit(*awacs_track, "Magic AWACS")
         return briefed + hama_ad.draw(plan)
-
-    def _load_cartridge(
-        self,
-        m: Mission,
-        scene: _Scene,
-        points: list[dtc.ThreatPoint],
-        *,
-        plan: PlanOverlay,
-    ) -> None:
-        """Put the briefed picture in the cockpit, where the map drew it.
-
-        And on the kneeboard's threat block, which is the same list again for
-        whoever is reading a card instead of an HSD. Every row is the estimate
-        `PlanOverlay.threat` returned, so the difficulty policy is applied once
-        and no channel can out-claim another.
-
-        The Gammon's row is the one worth checking on the ground: it prints the
-        briefed 160 km rather than the 255 km the jet's own threat table carries
-        for an SA-5, because `dtc.ThreatPoint.radius_m` overrides it — and the
-        briefed number is the one the whole flight plan was built from.
-        """
-        dtc.arm_hsd_threats(m, points, overlay=scene.overlay.overlay)
-        dtc.arm_plan(m, plan, overlay=scene.overlay.overlay)
 
     # -- the net ------------------------------------------------------------
 
@@ -2477,26 +2455,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             ),
             seconds=25,
         )
-
-    def _add_briefing(self, m: Mission) -> None:
-        """Wire the in-game description, side tasks, and sortie name."""
-        m.set_description_text(self._in_game_briefing())
-        m.set_description_bluetask_text(
-            "Cross the eastern Mediterranean below 300 m, coast in north of "
-            "Baniyas between the Latakia and Tartus batteries, and destroy the "
-            "casting hall at the Ansariyah rocket-motor works. Second bomb is "
-            "yours: the motor store while the load-out is still in it, or the "
-            "oxidiser plant. Egress west on the deck and climb only outside the "
-            "Gammon's ring. RTB Akrotiri; divert Paphos."
-        )
-        m.set_description_redtask_text(
-            "Hold the Ansariyah works and get the load-out to the tunnel portal. "
-            "The Gammon behind Jableh denies every usable altitude over the "
-            "approach; the coastal batteries hold Latakia and Tartus. MiG-29A "
-            "from Hama intercept anything the coastal radar calls across the "
-            "beach."
-        )
-        m.set_sortie_text(self.title)
 
 
 def main() -> None:

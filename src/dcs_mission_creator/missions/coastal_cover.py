@@ -93,7 +93,10 @@ from dcs_mission_creator.core.cli import run_cli
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.jtac import CoordTarget, arm_jtac_coords
 from dcs_mission_creator.core.map_draw import PlanOverlay
-from dcs_mission_creator.core.mission_builder import MIN_PLAYERS, MissionBuilder
+from dcs_mission_creator.core.mission_builder import (
+    Assembled,
+    MissionBuilder,
+)
 from dcs_mission_creator.core.mission_kit import (
     arm,
     offset,
@@ -122,10 +125,7 @@ from dcs_mission_creator.core.tasking import (
     fac_attack_group,
     scramble_on_trigger,
 )
-from dcs_mission_creator.core.tts import VoiceSynth
-from dcs_mission_creator.core.visibility import conceal_country
 from dcs_mission_creator.core.weather import Weather, Wind
-from dcs_mission_creator.map_overlay.query import MapOverlay
 from dcs_mission_creator.map_overlay.scene import TacticalScene
 
 
@@ -312,6 +312,31 @@ class CoastalCover(MissionBuilder):
     name = "coastal_cover"
     title = "Coastal Cover"
     difficulty = Difficulty.TRAINED
+    terrain = Caucasus
+
+    #: The two coalition task panels. Plain strings: nothing here needs
+    #: to compute one, and `blue_task_text` / `red_task_text` are there
+    #: for the mission that does.
+    blue_task = (
+        "Escort Hawg 1-2 onto the Russian column north of Senaki, then stop "
+        "the fuel and ammunition detachment behind it before it reaches the "
+        "Senaki junction — the flight's GBU-12s and Pinpoint 1-1 on the laser are "
+        "what you have for that, and Pinpoint has to survive to give it to you. "
+        "Eagle owns the air-to-air fight: the Sukhumi alert pair is a threat "
+        "to beat and the Gudauta pair behind it is not your target list. "
+        "The detachment travels with air defence nobody located, so keep the "
+        "release at or above 6000 m. Not cleared to pursue over "
+        "Sukhumi-Babushara. RTB Batumi."
+    )
+
+    red_task = (
+        "Push the column through the Inguri valley to the Senaki junction, "
+        "and get the fuel and ammunition detachment behind it through as "
+        "well — the column is worth nothing at the junction without it. "
+        "MiG-29S to intercept the USAF package; commit the Gudauta pair only "
+        "once the column is coming apart. Find the ground party doing the "
+        "lasing and send the gunships after it."
+    )
 
     #: 10:00 map-local on 15 May 2026 — the wall clock DCS shows in-game.
     start_time = datetime(2026, 5, 15, 10, 0, 0, tzinfo=timezone.utc)
@@ -328,11 +353,6 @@ class CoastalCover(MissionBuilder):
         wind_at_2000=Wind(290, 7),
         wind_at_8000=Wind(280, 12),
     )
-
-    def __init__(self, *, players: int = MIN_PLAYERS) -> None:
-        super().__init__(players=players)
-        self._terrain = Caucasus()
-        self._voice = VoiceSynth()
 
     # -- in-game and README briefings ---------------------------------------
 
@@ -678,7 +698,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     # -- top-level orchestration --------------------------------------------
 
-    def _assemble(self, m: Mission) -> MapOverlay:
+    def _assemble(self, m: Mission, plan: PlanOverlay) -> Assembled:
         """Assemble the mission by calling each step in package order."""
         scene = self._setup_airports(m)
         self._scene = scene
@@ -738,11 +758,9 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         if red.reserve is not None:
             self._add_reserve_trigger(m, convoy=red.convoy, reserve=red.reserve)
         self._add_end_triggers(m, scene, red=red, hog=hog, tacp=tacp)
-        self._conceal_red(russia)
         # One overlay for every reveal channel: the F10 plan, the cockpit
         # cartridge and the recon still all have to make the same claim, and the
         # difficulty policy that decides how much they claim lives in here.
-        plan = PlanOverlay(m, self.difficulty)
         briefed_threats = self._draw_plan(
             m,
             scene,
@@ -758,10 +776,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             home=home,
             sukhumi_ad=sukhumi_ad,
         )
-        self._load_cartridge(m, scene, briefed_threats, plan=plan)
         self._render_recon(m, scene, plan=plan, convoy=red.convoy)
-        self._add_briefing(m)
-        return scene.overlay.overlay
+        return Assembled(scene.overlay.overlay, briefed_threats)
 
     # -- airports ------------------------------------------------------------
 
@@ -1728,14 +1744,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     # -- F10 map briefing ---------------------------------------------------
 
-    def _conceal_red(self, russia: Country) -> None:
-        """Keep every Russian group off the F10 map, the planner and the datalink.
-
-        The player's picture of the enemy is the briefing plus what
-        `_draw_plan` chooses to show — never a stock unit icon.
-        """
-        conceal_country(russia)
-
     def _threat_rings(self, *, sa13_pos: Point) -> tuple[ThreatRing, ...]:
         """The convoy's SHORAD as an envelope, for the plan and the AI route.
 
@@ -1825,28 +1833,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         # 18 km, so it costs nothing to fly the sortie and everything to chase a
         # MiG onto its own runway.
         return hsd + sukhumi_ad.draw(plan)
-
-    def _load_cartridge(
-        self,
-        m: Mission,
-        scene: _Scene,
-        points: list[dtc.ThreatPoint],
-        *,
-        plan: PlanOverlay,
-    ) -> None:
-        """Load the briefed SHORAD as a pre-planned threat on the escort's cartridge.
-
-        The same point is recorded for the kneeboard's threat block, so the Hog
-        driver — who has no cartridge to load — reads the coordinates the Viper
-        sees as a ring.
-
-        The same cartridge carries the rest of the plan the F10 map shows: the
-        flight's own route and the plan's marks as steerpoints, its lines as the
-        HSD's GEO lines. The map and the cockpit are one briefing, drawn from
-        one set of positions.
-        """
-        dtc.arm_hsd_threats(m, points, overlay=scene.overlay.overlay)
-        dtc.arm_plan(m, plan, overlay=scene.overlay.overlay)
 
     # -- the imagery the briefing cites --------------------------------------
 
@@ -2410,30 +2396,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                 "treeline. Thanks for keeping them off us, Dodge."
             ),
         )
-
-    def _add_briefing(self, m: Mission) -> None:
-        """Wire the in-game description, side tasks, and sortie name."""
-        m.set_description_text(self._in_game_briefing())
-        m.set_description_bluetask_text(
-            "Escort Hawg 1-2 onto the Russian column north of Senaki, then stop "
-            "the fuel and ammunition detachment behind it before it reaches the "
-            "Senaki junction — the flight's GBU-12s and Pinpoint 1-1 on the laser are "
-            "what you have for that, and Pinpoint has to survive to give it to you. "
-            "Eagle owns the air-to-air fight: the Sukhumi alert pair is a threat "
-            "to beat and the Gudauta pair behind it is not your target list. "
-            "The detachment travels with air defence nobody located, so keep the "
-            "release at or above 6000 m. Not cleared to pursue over "
-            "Sukhumi-Babushara. RTB Batumi."
-        )
-        m.set_description_redtask_text(
-            "Push the column through the Inguri valley to the Senaki junction, "
-            "and get the fuel and ammunition detachment behind it through as "
-            "well — the column is worth nothing at the junction without it. "
-            "MiG-29S to intercept the USAF package; commit the Gudauta pair only "
-            "once the column is coming apart. Find the ground party doing the "
-            "lasing and send the gunships after it."
-        )
-        m.set_sortie_text(self.title)
 
 
 def main() -> None:

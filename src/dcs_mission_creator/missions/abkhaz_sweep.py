@@ -69,6 +69,7 @@ from dcs_mission_creator.core.map_draw import PlanOverlay
 from dcs_mission_creator.core.mission_builder import (
     MAX_PLAYERS,
     MIN_PLAYERS,
+    Assembled,
     MissionBuilder,
 )
 from dcs_mission_creator.core.mission_kit import (
@@ -80,10 +81,7 @@ from dcs_mission_creator.core.mission_kit import (
 from dcs_mission_creator.core.placement import load_scene
 from dcs_mission_creator.core.routing import ThreatRing, avoid_threats
 from dcs_mission_creator.core.tasking import apply_ai_difficulty
-from dcs_mission_creator.core.tts import VoiceSynth
-from dcs_mission_creator.core.visibility import conceal_country
 from dcs_mission_creator.core.weather import Weather, Wind
-from dcs_mission_creator.map_overlay.query import MapOverlay
 from dcs_mission_creator.map_overlay.scene import TacticalScene
 
 # -- force balance ------------------------------------------------------------
@@ -288,6 +286,27 @@ class AbkhazSweep(MissionBuilder):
     name = "abkhaz_sweep"
     title = "Abkhaz Sweep"
     difficulty = Difficulty.ACE
+    terrain = Caucasus
+
+    #: The two coalition task panels. Plain strings: nothing here needs
+    #: to compute one, and `blue_task_text` / `red_task_text` are there
+    #: for the mission that does.
+    blue_task = (
+        "Sweep the airspace off the Abkhaz coast between Sukhumi and "
+        "Gudauta. Break the Russian Su-27 element out of Sochi-Adler — "
+        "that element is the frag. The MiG-29S reinforcement out of "
+        "Gudauta is a threat to beat, not a required kill. Stay above "
+        "4500 m AGL over the AO — the SA-6 on the coastal ridge north "
+        "of Sukhumi denies the low block. RTB Batumi. No tanker, no "
+        "escort."
+    )
+
+    red_task = (
+        "Hold the Abkhaz coastal airspace. Su-27 from Sochi-Adler "
+        "intercept any USAF push up the coast; MiG-29S from Gudauta "
+        "reinforce once the Americans are committed. SA-6 on the coastal "
+        "ridge north of Sukhumi denies the low block."
+    )
 
     #: 05:30 map-local on 18 July 2026 — dawn, the wall clock DCS shows in-
     #: game.
@@ -308,8 +327,6 @@ class AbkhazSweep(MissionBuilder):
 
     def __init__(self, *, players: int = MIN_PLAYERS) -> None:
         super().__init__(players=players)
-        self._terrain = Caucasus()
-        self._voice = VoiceSynth()
         self._bandits = _plan_bandits(self.air_to_air_shots(_FITS))
 
     # -- in-game and README briefings ---------------------------------------
@@ -610,9 +627,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     # -- top-level orchestration --------------------------------------------
 
-    def _assemble(self, m: Mission) -> MapOverlay:
+    def _assemble(self, m: Mission, plan: PlanOverlay) -> Assembled:
         """Assemble the mission by calling each step in package order."""
-        plan = PlanOverlay(m, self.difficulty)
         scene = self._setup_airports(m)
         usa, russia = m.country("USA"), m.country("Russia")
 
@@ -627,13 +643,10 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self._add_end_triggers(m, su27s=su27s, mig29s=mig29s, dodge=dodge)
         sanc.announce(m, home, at_seconds=180, voice=self._voice)
         sanc.remark_all(m, home, sochi_ad)
-        self._conceal_red(russia)
         briefed_threats = self._draw_plan(
             m, scene, plan=plan, route=route, home=home, sochi_ad=sochi_ad
         )
-        self._load_cartridge(m, scene, briefed_threats, plan=plan)
-        self._add_briefing(m)
-        return scene.overlay.overlay
+        return Assembled(scene.overlay.overlay, briefed_threats)
 
     # -- airports ------------------------------------------------------------
 
@@ -983,14 +996,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     # -- F10 map briefing ---------------------------------------------------
 
-    def _conceal_red(self, russia: Country) -> None:
-        """Keep every Russian group off the F10 map, the planner and the datalink.
-
-        Ace: the player is given a vague threat area and nothing else, so a
-        stock icon on the SA-6 ridge would undo the whole reveal policy.
-        """
-        conceal_country(russia)
-
     def _threat_rings(self, *, sa6_pos: Point) -> tuple[ThreatRing, ...]:
         """The Kub's real envelope at its real position, for the flight plan.
 
@@ -1146,31 +1151,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         briefed += sochi_ad.draw(plan)
         return briefed
 
-    def _load_cartridge(
-        self,
-        m: Mission,
-        scene: _Scene,
-        points: list[dtc.ThreatPoint],
-        *,
-        plan: PlanOverlay,
-    ) -> None:
-        """Put the assessed Kub ring on `Dodge`'s HSD, at the position the map drew.
-
-        Ace used to load nothing, which sounded like the right answer for a
-        thin picture and was not: the player still got the position, just via a
-        steerpoint nobody had applied the reveal policy to. An approximate ring
-        in the cockpit is both more honest and more useful — it is the same
-        wrong-by-kilometres claim the F10 map makes, carried where the player
-        can see it heads-down.
-
-        The same cartridge carries the rest of the plan the F10 map shows: the
-        flight's own route and the plan's marks as steerpoints, its lines as the
-        HSD's GEO lines. The map and the cockpit are one briefing, drawn from
-        one set of positions.
-        """
-        dtc.arm_hsd_threats(m, points, overlay=scene.overlay.overlay)
-        dtc.arm_plan(m, plan, overlay=scene.overlay.overlay)
-
     # -- triggers and briefing ----------------------------------------------
 
     def _add_end_triggers(
@@ -1230,26 +1210,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             ),
             seconds=25,
         )
-
-    def _add_briefing(self, m: Mission) -> None:
-        """Wire the in-game description, side tasks, and sortie name."""
-        m.set_description_text(self._in_game_briefing())
-        m.set_description_bluetask_text(
-            "Sweep the airspace off the Abkhaz coast between Sukhumi and "
-            "Gudauta. Break the Russian Su-27 element out of Sochi-Adler — "
-            "that element is the frag. The MiG-29S reinforcement out of "
-            "Gudauta is a threat to beat, not a required kill. Stay above "
-            "4500 m AGL over the AO — the SA-6 on the coastal ridge north "
-            "of Sukhumi denies the low block. RTB Batumi. No tanker, no "
-            "escort."
-        )
-        m.set_description_redtask_text(
-            "Hold the Abkhaz coastal airspace. Su-27 from Sochi-Adler "
-            "intercept any USAF push up the coast; MiG-29S from Gudauta "
-            "reinforce once the Americans are committed. SA-6 on the coastal "
-            "ridge north of Sukhumi denies the low block."
-        )
-        m.set_sortie_text(self.title)
 
 
 def main() -> None:
