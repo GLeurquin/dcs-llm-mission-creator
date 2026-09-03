@@ -326,6 +326,22 @@ class IdlibGauntlet(MissionBuilder):
     title = "Idlib Gauntlet"
     difficulty = Difficulty.TRAINED
 
+    #: 08:40 map-local on 12 September 2026 — the wall clock DCS shows in-game.
+    start_time = datetime(2026, 9, 12, 8, 40, 0, tzinfo=timezone.utc)
+
+    #: Late-summer Levant haze: 30 C, light west wind, 25 km visibility.
+    weather = Weather(
+        name="Late summer haze",
+        season_temperature=30.0,
+        clouds_base=3000,
+        clouds_thickness=300,
+        clouds_density=2,
+        visibility_distance=25000,
+        wind_at_ground=Wind(270, 3),
+        wind_at_2000=Wind(280, 7),
+        wind_at_8000=Wind(290, 12),
+    )
+
     def __init__(self, *, players: int = MIN_PLAYERS) -> None:
         super().__init__(players=players)
         self._terrain = Syria()
@@ -807,8 +823,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     def _assemble(self, m: Mission) -> MapOverlay:
         """Assemble the mission by calling each step in package order."""
-        self._set_time(m)
-        self._set_weather(m)
         scene = self._setup_airports(m)
         usa = m.country("USA")
         russia, syria = m.country("Russia"), m.country("Syria")
@@ -911,29 +925,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self._add_briefing(m)
         return scene.overlay.overlay
 
-    # -- time, weather, airports --------------------------------------------
-
-    def _set_time(self, m: Mission) -> None:
-        """08:40 map-local on 12 September 2026 — the wall clock DCS shows in-game.
-
-        pydcs serialises the hour/minute verbatim and DCS reads the field as
-        map-local, so `tzinfo` is inert: write the local time you want.
-        """
-        m.start_time = datetime(2026, 9, 12, 8, 40, 0, tzinfo=timezone.utc)
-
-    def _set_weather(self, m: Mission) -> None:
-        """Late-summer Levant haze: 30 C, light west wind, 25 km visibility."""
-        Weather(
-            name="Late summer haze",
-            season_temperature=30.0,
-            clouds_base=3000,
-            clouds_thickness=300,
-            clouds_density=2,
-            visibility_distance=25000,
-            wind_at_ground=Wind(270, 3),
-            wind_at_2000=Wind(280, 7),
-            wind_at_8000=Wind(290, 12),
-        ).apply(m)
+    # -- airports ------------------------------------------------------------
 
     def _setup_airports(self, m: Mission) -> _Scene:
         """Claim the two blue fields, the Syrian fields for red, derive the AO axis.
@@ -2124,7 +2116,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             Chrome(
                 platform="MQ-9 / AN-APY-8 LYNX II",
                 mode="WAS-MTI  5 LOOK",
-                # Three hours before the mission clock (`_set_time`), so "this
+                # Three hours before the mission clock (`start_time`), so "this
                 # morning" in the briefing is arithmetic and not a turn of phrase.
                 taken_at="0540L  12 SEP 26",
                 classification="SECRET // REL FVEY",

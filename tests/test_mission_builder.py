@@ -8,6 +8,8 @@ player validation, difficulty resolution, and `generate`'s filesystem contract.
 
 from __future__ import annotations
 
+from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -15,6 +17,7 @@ from dcs.mission import Mission
 
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.mission_builder import MissionBuilder
+from dcs_mission_creator.core.weather import Weather, Wind
 
 
 class FakeBuilder(MissionBuilder):
@@ -127,6 +130,21 @@ class StubAssembler(MissionBuilder):
 
     name = "stub"
     title = "Stub"
+    #: Declared because the base has no default for either, on purpose: what
+    #: time a sortie flies and what the weather is are decisions, and a mission
+    #: that forgets one should fail rather than quietly ship mid-morning clear.
+    start_time = datetime(2026, 5, 15, 10, 0, 0, tzinfo=timezone.utc)
+    weather = Weather(
+        name="Stub clear",
+        season_temperature=15.0,
+        clouds_base=3000,
+        clouds_thickness=200,
+        clouds_density=0,
+        visibility_distance=80_000,
+        wind_at_ground=Wind(0, 0),
+        wind_at_2000=Wind(0, 0),
+        wind_at_8000=Wind(0, 0),
+    )
 
     def __init__(self, **kw) -> None:
         from dcs.terrain import Caucasus
@@ -141,6 +159,41 @@ class StubAssembler(MissionBuilder):
 
     def readme(self) -> str:
         return "stub"
+
+
+def test_the_base_applies_the_time_and_weather_the_mission_declared():
+    """Two class attributes, applied before `_assemble` sees the mission.
+
+    They were eight `_set_time` / `_set_weather` methods whose whole body was
+    one assignment, under a docstring whose long half was the same paragraph
+    about pydcs eight times over.
+    """
+    builder = StubAssembler()
+    m, _overlay = builder.assemble()
+    assert m.start_time == StubAssembler.start_time
+    assert m.weather.name == "Stub clear"
+    assert m.weather.wind_at_ground.speed == 0
+
+
+def test_a_mission_can_compute_its_time_and_weather_instead():
+    """The attribute is a shorthand, not the only way to answer.
+
+    A mission whose weather follows its difficulty, or whose start time comes
+    from a sunrise calculation, overrides the reader rather than being told what
+    shape its answer has to be.
+    """
+    moved = datetime(2030, 1, 2, 3, 4, 0, tzinfo=timezone.utc)
+
+    class Computed(StubAssembler):
+        def start_time_for(self, m):
+            return moved
+
+        def weather_for(self, m):
+            return replace(self.weather, name="Computed")
+
+    m, _overlay = Computed().assemble()
+    assert m.start_time == moved
+    assert m.weather.name == "Computed"
 
 
 def test_build_miz_assembles_and_saves(tmp_path: Path, monkeypatch):

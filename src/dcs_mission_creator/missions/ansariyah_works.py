@@ -397,6 +397,25 @@ class AnsariyahWorks(MissionBuilder):
     title = "Ansariyah Works"
     difficulty = Difficulty.VETERAN
 
+    #: 06:10 map-local on 3 April 2026 — the wall clock DCS shows in-game.
+    #:
+    #: Sunrise on this coast is about 06:25, which puts the deck run in the
+    #: last of the half-light and the run-in into a rising sun.
+    start_time = datetime(2026, 4, 3, 6, 10, 0, tzinfo=timezone.utc)
+
+    #: Spring first light: broken layer at 1,500 m, haze, light NW wind.
+    weather = Weather(
+        name="Spring first light",
+        season_temperature=14.0,
+        clouds_base=1500,
+        clouds_thickness=700,
+        clouds_density=6,
+        visibility_distance=20000,
+        wind_at_ground=Wind(300, 5),
+        wind_at_2000=Wind(290, 9),
+        wind_at_8000=Wind(280, 16),
+    )
+
     def __init__(self, *, players: int = MIN_PLAYERS) -> None:
         super().__init__(players=players)
         self._terrain = Syria()
@@ -792,8 +811,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     def _assemble(self, m: Mission) -> MapOverlay:
         """Assemble the mission by calling each step in package order."""
-        self._set_time(m)
-        self._set_weather(m)
         # The overlay is built before anything flies, because the *flight plan*
         # is derived from it: the letdown and climb points are where the briefed
         # Gammon ring begins, and the target steerpoint is where the plant is
@@ -848,30 +865,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         return scene.overlay.overlay
 
     # -- time, weather, geometry --------------------------------------------
-
-    def _set_time(self, m: Mission) -> None:
-        """06:10 map-local on 3 April 2026 — the wall clock DCS shows in-game.
-
-        pydcs serialises the hour/minute verbatim and DCS reads the field as
-        map-local, so `tzinfo` is inert: write the local time you want. Sunrise
-        on this coast is about 06:25, which puts the deck run in the last of the
-        half-light and the run-in into a rising sun.
-        """
-        m.start_time = datetime(2026, 4, 3, 6, 10, 0, tzinfo=timezone.utc)
-
-    def _set_weather(self, m: Mission) -> None:
-        """Spring first light: broken layer at 1,500 m, haze, light NW wind."""
-        Weather(
-            name="Spring first light",
-            season_temperature=14.0,
-            clouds_base=1500,
-            clouds_thickness=700,
-            clouds_density=6,
-            visibility_distance=20000,
-            wind_at_ground=Wind(300, 5),
-            wind_at_2000=Wind(290, 9),
-            wind_at_8000=Wind(280, 16),
-        ).apply(m)
 
     def _setup_airports(self, m: Mission) -> _Scene:
         """Claim Akrotiri and Paphos for blue, Hama for red, resolve the geometry.

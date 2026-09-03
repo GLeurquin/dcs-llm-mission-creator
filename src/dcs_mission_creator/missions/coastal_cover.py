@@ -313,6 +313,22 @@ class CoastalCover(MissionBuilder):
     title = "Coastal Cover"
     difficulty = Difficulty.TRAINED
 
+    #: 10:00 map-local on 15 May 2026 — the wall clock DCS shows in-game.
+    start_time = datetime(2026, 5, 15, 10, 0, 0, tzinfo=timezone.utc)
+
+    #: Spring scattered cumulus, light NW wind, 18 C, 80 km visibility.
+    weather = Weather(
+        name="Spring scattered",
+        season_temperature=18.0,
+        clouds_base=2400,
+        clouds_thickness=600,
+        clouds_density=4,
+        visibility_distance=80000,
+        wind_at_ground=Wind(300, 4),
+        wind_at_2000=Wind(290, 7),
+        wind_at_8000=Wind(280, 12),
+    )
+
     def __init__(self, *, players: int = MIN_PLAYERS) -> None:
         super().__init__(players=players)
         self._terrain = Caucasus()
@@ -664,8 +680,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     def _assemble(self, m: Mission) -> MapOverlay:
         """Assemble the mission by calling each step in package order."""
-        self._set_time(m)
-        self._set_weather(m)
         scene = self._setup_airports(m)
         self._scene = scene
         usa, russia = m.country("USA"), m.country("Russia")
@@ -749,29 +763,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self._add_briefing(m)
         return scene.overlay.overlay
 
-    # -- time, weather, airports --------------------------------------------
-
-    def _set_time(self, m: Mission) -> None:
-        """10:00 map-local on 15 May 2026 — the wall clock DCS shows in-game.
-
-        pydcs serialises the hour/minute verbatim and DCS reads the field as
-        map-local, so `tzinfo` is inert: write the local time you want.
-        """
-        m.start_time = datetime(2026, 5, 15, 10, 0, 0, tzinfo=timezone.utc)
-
-    def _set_weather(self, m: Mission) -> None:
-        """Spring scattered cumulus, light NW wind, 18 C, 80 km visibility."""
-        Weather(
-            name="Spring scattered",
-            season_temperature=18.0,
-            clouds_base=2400,
-            clouds_thickness=600,
-            clouds_density=4,
-            visibility_distance=80000,
-            wind_at_ground=Wind(300, 4),
-            wind_at_2000=Wind(290, 7),
-            wind_at_8000=Wind(280, 12),
-        ).apply(m)
+    # -- airports ------------------------------------------------------------
 
     def _setup_airports(self, m: Mission) -> _Scene:
         """Claim Batumi/Kutaisi for blue, Sukhumi and Gudauta for red, derive the AO.
@@ -1938,7 +1930,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             Chrome(
                 platform="MQ-9 / AN-APY-8 LYNX II",
                 mode="WAS-MTI  5 LOOK",
-                # 25 minutes before the mission clock (`_set_time`) — the last
+                # 25 minutes before the mission clock (`start_time`) — the last
                 # cut off a feed that has been up since first light, which is
                 # why the column is still where the picture has it.
                 taken_at="0935L  15 MAY 26",

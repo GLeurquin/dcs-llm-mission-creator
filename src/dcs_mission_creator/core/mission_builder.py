@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import random
 from abc import ABC, abstractmethod
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Sequence
 
@@ -37,6 +38,7 @@ from dcs_mission_creator.core import (
 from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.loadout import Loadout
 from dcs_mission_creator.core.recon import publish as recon
+from dcs_mission_creator.core.weather import Weather
 
 if TYPE_CHECKING:
     from dcs.terrain.terrain import Terrain
@@ -74,6 +76,17 @@ class MissionBuilder(ABC):
     #: The theater, set by the subclass `__init__`.
     _terrain: Terrain
 
+    #: When the mission starts, map-local. pydcs serialises the hour and minute
+    #: verbatim and DCS reads the field as map-local, so `tzinfo` is inert:
+    #: write the local time you want. Every mission had a `_set_time` method
+    #: whose entire body was this assignment and whose docstring was that
+    #: sentence, eight times.
+    start_time: datetime
+
+    #: The weather, as a record rather than fourteen assignments. `Weather` is
+    #: frozen and `apply` does not mutate it, so it is safe on the class.
+    weather: Weather
+
     #: The recon still this mission published, if it published one. A class
     #: attribute rather than an `__init__` line because `None` is immutable and
     #: three missions were writing the same line; `build_miz` is what actually
@@ -98,6 +111,20 @@ class MissionBuilder(ABC):
         Returns the overlay the mission's positions came from, which the base
         uses to put take-off and landing waypoints on the terrain.
         """
+
+    def start_time_for(self, m: Mission) -> datetime:
+        """When this mission starts. Override to compute it.
+
+        The attribute is the shorthand for the eight missions whose answer is a
+        literal; this is here so a mission whose time is derived — from a
+        sunrise calculation, from its difficulty — is still expressible without
+        the base telling it what shape the answer has to be.
+        """
+        return self.start_time
+
+    def weather_for(self, m: Mission) -> Weather:
+        """This mission's weather. Override to compute it, for the same reason."""
+        return self.weather
 
     def at(self, lat: float, lng: float) -> Point:
         """One `(lat, lng)` constant as a world `Point` on this mission's theater.
@@ -255,6 +282,8 @@ class MissionBuilder(ABC):
         self._seed_rng()
         m = Mission(self._terrain)
         self._permit_crash_recovery(m)
+        m.start_time = self.start_time_for(m)
+        self.weather_for(m).apply(m)
         overlay = self._assemble(m)
         self._remark_loadouts(m)
         join_up.hold_package_for_player(m)

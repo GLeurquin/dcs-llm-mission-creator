@@ -392,6 +392,27 @@ class KubanForge(MissionBuilder):
     title = "Kuban Forge"
     difficulty = Difficulty.ACE
 
+    #: 06:50 map-local on 18 October 2026 — twilight at the saddle.
+    #:
+    #: Sunrise is about 07:05 there in the third week of October, and the
+    #: sortie is fifty minutes to the target — so the crossing is flown in
+    #: first light and the run-in in daylight, which is what a targeting pod
+    #: and a laser actually want.
+    start_time = datetime(2026, 10, 18, 6, 50, 0, tzinfo=timezone.utc)
+
+    #: October first light: broken layer at 4500 m, light N wind, 6 C, 25 km.
+    weather = Weather(
+        name="October first light",
+        season_temperature=6.0,
+        clouds_base=4500,
+        clouds_thickness=1200,
+        clouds_density=6,
+        visibility_distance=25000,
+        wind_at_ground=Wind(0, 4),
+        wind_at_2000=Wind(10, 6),
+        wind_at_8000=Wind(350, 9),
+    )
+
     def __init__(self, *, players: int = MIN_PLAYERS) -> None:
         super().__init__(players=players)
         self._terrain = Caucasus()
@@ -788,8 +809,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     def _assemble(self, m: Mission) -> MapOverlay:
         """Assemble the mission by calling each step in package order."""
-        self._set_time(m)
-        self._set_weather(m)
         scene = self._setup_airports(m)
         usa, russia = m.country("USA"), m.country("Russia")
 
@@ -859,43 +878,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self._add_briefing(m)
         return scene.overlay.overlay
 
-    # -- time, weather, airports --------------------------------------------
-
-    def _set_time(self, m: Mission) -> None:
-        """06:50 map-local on 18 October 2026 — twilight at the saddle.
-
-        pydcs serialises the hour/minute verbatim and DCS reads the field as
-        map-local, so `tzinfo` is inert: write the local time you want. Sunrise
-        is about 07:05 there in the third week of October, and the sortie is
-        fifty minutes to the target — so the crossing is flown in first light
-        and the run-in in daylight, which is what a targeting pod and a laser
-        actually want.
-        """
-        m.start_time = datetime(2026, 10, 18, 6, 50, 0, tzinfo=timezone.utc)
-
-    def _set_weather(self, m: Mission) -> None:
-        """October first light: broken layer at 4500 m, light N wind, 6 C, 25 km.
-
-        The base is set off the route rather than chosen for the look. The
-        Klukhori crossing is flown at 3,936 m, so 4,500 leaves it six hundred
-        metres of clear air — a ceiling the ingress lives under rather than one
-        it has to thread. The egress climb goes straight through the layer at
-        about 5,000 m, which is the trade: the way out of that valley is IMC
-        over five-thousand-metre rock, and it is still the better of the two
-        ways out. The target area is clear either way — the works are at 800 m
-        — so the laser is never the problem.
-        """
-        Weather(
-            name="October first light",
-            season_temperature=6.0,
-            clouds_base=4500,
-            clouds_thickness=1200,
-            clouds_density=6,
-            visibility_distance=25000,
-            wind_at_ground=Wind(0, 4),
-            wind_at_2000=Wind(10, 6),
-            wind_at_8000=Wind(350, 9),
-        ).apply(m)
+    # -- airports ------------------------------------------------------------
 
     def _setup_airports(self, m: Mission) -> _Scene:
         """Claim the Georgian fields for blue, derive the works and the threats.

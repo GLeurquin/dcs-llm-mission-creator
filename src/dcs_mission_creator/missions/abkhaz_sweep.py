@@ -289,6 +289,23 @@ class AbkhazSweep(MissionBuilder):
     title = "Abkhaz Sweep"
     difficulty = Difficulty.ACE
 
+    #: 05:30 map-local on 18 July 2026 — dawn, the wall clock DCS shows in-
+    #: game.
+    start_time = datetime(2026, 7, 18, 5, 30, 0, tzinfo=timezone.utc)
+
+    #: Summer dawn, scattered cumulus 2400 m, light NW wind, 22 C, 24 km vis.
+    weather = Weather(
+        name="Summer dawn scattered",
+        season_temperature=22.0,
+        clouds_base=2400,
+        clouds_thickness=600,
+        clouds_density=4,
+        visibility_distance=24000,
+        wind_at_ground=Wind(310, 4),
+        wind_at_2000=Wind(305, 6),
+        wind_at_8000=Wind(295, 8),
+    )
+
     def __init__(self, *, players: int = MIN_PLAYERS) -> None:
         super().__init__(players=players)
         self._terrain = Caucasus()
@@ -595,8 +612,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     def _assemble(self, m: Mission) -> MapOverlay:
         """Assemble the mission by calling each step in package order."""
-        self._set_time(m)
-        self._set_weather(m)
         plan = PlanOverlay(m, self.difficulty)
         scene = self._setup_airports(m)
         usa, russia = m.country("USA"), m.country("Russia")
@@ -620,29 +635,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self._add_briefing(m)
         return scene.overlay.overlay
 
-    # -- time, weather, airports --------------------------------------------
-
-    def _set_time(self, m: Mission) -> None:
-        """05:30 map-local on 18 July 2026 — dawn, the wall clock DCS shows in-game.
-
-        pydcs serialises the hour/minute verbatim and DCS reads the field as
-        map-local, so `tzinfo` is inert: write the local time you want.
-        """
-        m.start_time = datetime(2026, 7, 18, 5, 30, 0, tzinfo=timezone.utc)
-
-    def _set_weather(self, m: Mission) -> None:
-        """Summer dawn, scattered cumulus 2400 m, light NW wind, 22 C, 24 km vis."""
-        Weather(
-            name="Summer dawn scattered",
-            season_temperature=22.0,
-            clouds_base=2400,
-            clouds_thickness=600,
-            clouds_density=4,
-            visibility_distance=24000,
-            wind_at_ground=Wind(310, 4),
-            wind_at_2000=Wind(305, 6),
-            wind_at_8000=Wind(295, 8),
-        ).apply(m)
+    # -- airports ------------------------------------------------------------
 
     def _setup_airports(self, m: Mission) -> _Scene:
         """Claim Batumi for blue, Sochi/Gudauta/Sukhumi for red, derive AO geometry."""

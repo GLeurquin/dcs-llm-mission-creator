@@ -170,6 +170,22 @@ class EasternShield(MissionBuilder):
     title = "Eastern Shield"
     difficulty = Difficulty.TRAINED
 
+    #: 09:00 map-local on 21 May 2026 — the wall clock DCS shows in-game.
+    start_time = datetime(2026, 5, 21, 9, 0, 0, tzinfo=timezone.utc)
+
+    #: Late-spring east-Med haze, light NW wind, 22 C, 40 km visibility.
+    weather = Weather(
+        name="Spring haze",
+        season_temperature=22.0,
+        clouds_base=2800,
+        clouds_thickness=400,
+        clouds_density=3,
+        visibility_distance=40000,
+        wind_at_ground=Wind(310, 3),
+        wind_at_2000=Wind(300, 6),
+        wind_at_8000=Wind(290, 10),
+    )
+
     def __init__(self, *, players: int = MIN_PLAYERS) -> None:
         super().__init__(players=players)
         self._terrain = Syria()
@@ -416,8 +432,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     def _assemble(self, m: Mission) -> MapOverlay:
         """Assemble the mission by calling each step in package order."""
-        self._set_time(m)
-        self._set_weather(m)
         scene = self._setup_airports(m)
         usa, russia = m.country("USA"), m.country("Russia")
 
@@ -480,29 +494,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self._add_briefing(m)
         return scene.overlay.overlay
 
-    # -- time, weather, airports --------------------------------------------
-
-    def _set_time(self, m: Mission) -> None:
-        """09:00 map-local on 21 May 2026 — the wall clock DCS shows in-game.
-
-        pydcs serialises the hour/minute verbatim and DCS reads the field as
-        map-local, so `tzinfo` is inert: write the local time you want.
-        """
-        m.start_time = datetime(2026, 5, 21, 9, 0, 0, tzinfo=timezone.utc)
-
-    def _set_weather(self, m: Mission) -> None:
-        """Late-spring east-Med haze, light NW wind, 22 C, 40 km visibility."""
-        Weather(
-            name="Spring haze",
-            season_temperature=22.0,
-            clouds_base=2800,
-            clouds_thickness=400,
-            clouds_density=3,
-            visibility_distance=40000,
-            wind_at_ground=Wind(310, 3),
-            wind_at_2000=Wind(300, 6),
-            wind_at_8000=Wind(290, 10),
-        ).apply(m)
+    # -- airports ------------------------------------------------------------
 
     def _setup_airports(self, m: Mission) -> _Scene:
         """Claim Incirlik for blue, Bassel/Kuweires for red, derive AO anchors."""
