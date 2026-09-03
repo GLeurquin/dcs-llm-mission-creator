@@ -1,16 +1,3 @@
-- **Count the magazine before you set the bandit count.** Numeric balance is the
-  one dial with an arithmetic ceiling. Two numbers do it: **six** air-to-air
-  stations on an F-16C with two wing tanks (4 and 6 take no missile at all), and
-  **two shots per kill** against `Skill.Excellent` crews. So a clean jet is worth
-  three kills and one carrying a HARM or a bomb on 3/7 is worth two. Sum it with
-  `MissionBuilder.air_to_air_shots(_FITS)`, never by multiplying a constant by
-  the slot count, and scale the opposition off the answer. Over it the mission is
-  not ace, it is arithmetically unwinnable. Three legitimate fixes — derive the
-  enemy count from the magazine, add friendly AI (but "no escort, no tanker" may
-  *be* the composition), or **task less than the airspace**: make the objective
-  the element that gates the campaign effect and let the rest be a threat to
-  survive rather than a required kill. The arithmetic and the trigger
-  consequences are in CLAUDE.md, *Force balance*.
 ---
 name: dcs-mission
 description: >
@@ -30,7 +17,8 @@ helpers, StartType, Skill enum, formation API, F10 drawings, gotchas) lives
 in [PYDCS_REFERENCE.md](PYDCS_REFERENCE.md) — consult it before guessing API
 shapes. Project conventions (package layout, the `VoiceSynth` / `PlanOverlay`
 helpers, script structure, lint / type-check) live in
-[CLAUDE.md](../../../CLAUDE.md).
+[CLAUDE.md](../../../CLAUDE.md). Where this file names a rule and CLAUDE.md
+names the call that enforces it, both are needed and neither restates the other.
 
 ## When to invoke
 
@@ -139,7 +127,9 @@ that precision.
 
 ## Realism checklist
 
-A "realistic" mission is more than spawning aircraft. Hit these before done:
+A "realistic" mission is more than spawning aircraft. Hit these before done.
+Where a bullet names a mechanism, CLAUDE.md has the call and its arguments —
+what is here is the *decision*.
 
 - **Time + threats match.** Night CAS → IR weapons + NVG airframes. High
   noon strike → LGB self-lase windows.
@@ -151,72 +141,47 @@ A "realistic" mission is more than spawning aircraft. Hit these before done:
   + AWACS, not a lone F-16 with bombs. Even small missions get AWACS or GCI.
 - **Loadouts match the task, and the flight splits them.** No Mavericks on
   SA-10 (use HARM); no F-15Cs with bombs. And no jet carrying both halves of a
-  two-part frag badly: **the minimum is two coop slots and they carry different
-  fits** — see *The flight splits its loadout*.
+  two-part frag badly — see *The flight splits its loadout*.
 - **Threats layered, not stacked.** One SA-6 + a few Shilkas reads harder
   than five SA-10s on one hill.
-- **The objective cannot be reached from any bearing.** Contested ground gets a
-  front line across the approach and rear-area coverage behind it, or the player
-  arcs wide and every threat you placed watches from behind. See *Front lines
-  and territory control*.
+- **The objective cannot be reached from any bearing.** See *Front lines and
+  territory control*.
 - **No air defence in the canopy or the water.** Positions off the placement
   helpers, `overlay` + `terrain` into the site builders, `snap_units_clear`
   after any scattered formation.
 - **Build whole SAM sites, not lone launchers.** A real site is search radar
-  + track/fire-control radar + command post + launchers. Use the site
-  builders — pydcs `VehicleTemplate` for SA-6/10/11/15 + Patriot/Hawk, project
-  `air_defense.build_*` for SA-2/3/5/8/13/19, NASAMS, IRIS-T, Roland, Rapier,
-  HQ-7 (CLAUDE.md) — not a bare TEL that can't track.
-- **Radar + launchers must share one `VehicleGroup`.** In DCS a launcher
-  only engages if its tracking/fire-control radar is in the **same** group —
-  split the 1S91 (SA-6) or 30H6/64H6E (SA-10) into a separate group from the
-  TELs and the launchers get no fire-control and **never shoot**. The site
-  builders keep everything in one group; if you hand-build, use one
+  + track/fire-control radar + command post + launchers. Use the site builders
+  (CLAUDE.md, *Air-defense builder*) — not a bare TEL that can't track.
+- **Radar + launchers must share one `VehicleGroup`.** In DCS a launcher only
+  engages if its tracking/fire-control radar is in the **same** group — split
+  the 1S91 (SA-6) or 30H6/64H6E (SA-10) into a separate group from the TELs and
+  the launchers get no fire-control and **never shoot**. The site builders keep
+  everything in one group; if you hand-build, use one
   `vehicle_group_platoon([radar, launcher, launcher, …])`. Exception:
-  self-contained SHORAD (SA-8/13/15/19, each TELAR has its own tracker) is
-  fine as one type. To make "kill the radar = suppressed" a win condition
-  **without** splitting the group, gate on `condition.UnitDead(radar_unit.id)`
-  (the radar is `group.units[0]`), not `GroupDead`.
-- **Waypoint altitudes match what the waypoint marks.** Ground-target
-  steerpoints and base (take-off / landing) waypoints sit on the terrain, not
-  at ingress altitude and not at pydcs's default 0; en-route waypoints clear
-  the terrain under them. See *Waypoints that mark the ground*.
-- **Waypoint speeds are km/h and the airframe can hold them.** Every pydcs
-  speed argument is km/h TAS; a knots-shaped number commands about half the
-  intended speed and puts the AI package in permanent afterburner. Check the
-  departure waypoint too — pydcs commands 108 kt there, below a loaded jet's
-  stall speed. See *Waypoint speeds are a flight profile*.
-- **JTAC for CAS.** A CAS or CAP-over-ground mission gets a ground or
-  airborne FAC that lases targets and talks the player on
-  (`tasking.fac_attack_group`). Brief its frequency + designation. Arm
-  `jtac.arm_jtac_coords` with it: the stock controller reads a military grid to
-  every airframe, so without it the coordinates a Viper or Hornet driver is
-  given are a kneeboard conversion before they are a steerpoint.
-- **Laser codes match, and the briefing states the bombs'.** One code per
-  mission, and it is 1688 unless every laser weapon in the package is on an
-  airframe whose code the mission file can write (AV-8B, JF-17, F-4E, F-15E) —
-  a DCS AI controller lases 1688 and nothing else. Call
-  `laser.set_code(flight, code)` on every flight carrying a laser-guided
-  weapon, and say the number for the bombs as well as for the spot. See *Laser
-  codes: one number*.
-- **Briefing exists.** `set_description_text`, `*_bluetask_text`,
-  `*_redtask_text` with bullseye, AO coords, ROE, callsigns, bingo fuel.
-- **Briefing reads like intel, not like the trigger list.** Sourced enemy
-  claims, intent instead of timers/percentages — see *Briefing craft*.
-- **Enemy groups hidden on the map.** Red never shows up as a unit icon on
-  F10, the mission planner, or the datalink — the player works off the
-  briefing and the drawn plan. See *What the player can see*.
+  self-contained SHORAD (SA-8/13/15/19, each TELAR has its own tracker) is fine
+  as one type. To make "kill the radar = suppressed" a win condition **without**
+  splitting the group, gate on `condition.UnitDead(radar_unit.id)`, not
+  `GroupDead`.
+- **Waypoint altitudes match what the waypoint marks**, and **waypoint speeds
+  are a profile the airframe can hold.** See *Waypoints that mark the ground*
+  and *Waypoint speeds*.
+- **JTAC for CAS.** A CAS or CAP-over-ground mission gets a ground or airborne
+  FAC that lases targets and talks the player on
+  (`tasking.fac_attack_group`). Brief its frequency + designation, and arm
+  `jtac.arm_jtac_coords` with it — the stock controller reads a military grid to
+  every airframe, so without it a Viper or Hornet driver is given a kneeboard
+  conversion before they are given a steerpoint.
+- **Laser codes match, and the briefing states the bombs'.** See *Laser codes*.
+- **Briefing exists** — `set_description_text`, `*_bluetask_text`,
+  `*_redtask_text` with bullseye, AO coords, ROE, callsigns, bingo fuel — and
+  **reads like intel, not like the trigger list** (*Briefing craft*).
+- **Enemy groups hidden on the map**, and the plan drawn back at the difficulty
+  the briefing claims. See *What the player can see*.
 - **Frequencies + nav aids** in the briefing — AWACS/tanker freqs + TACAN;
-  for carrier ops, the boat's TACAN + ICLS and a recovery tanker overhead.
-- **Kneeboard cards are automatic.** `MissionBuilder.build_miz` publishes a route
-  card and a comms card (`core/kneeboard`), both derived from the mission — so
-  "per kneeboard" in a briefing is now true, and nothing needs listing twice. Add
-  `kneeboard.remark(m, …)` only for a fact that is in no field pydcs writes: a
-  laser code, or where a radio request sits in the F10 menu. An airfield page is
-  added automatically for a field the theatre ships no chart of (Caucasus charts
-  all 21 of its fields, Syria charts three), so don't write one by hand either
-  way. Cards say nothing about the enemy: that stays with the F10 plan and the
-  cartridge, which carry the difficulty policy.
+  for carrier ops, the boat's TACAN + ICLS and a recovery tanker overhead. The
+  kneeboard cards are automatic and derived, so "per kneeboard" is true and
+  nothing needs listing twice; add `kneeboard.remark(m, …)` only for a fact in
+  no field pydcs writes (a laser code, where a radio request sits in F10).
 - **AI skill varied.** Don't set everything Excellent. Mix High / Average
   for ground; Excellent only for boss threats.
 - **Tell a story.** Mission context, scene-setting intro, dynamic reactions
@@ -282,7 +247,8 @@ Reinforcement waves can **scramble cold off the ramp** (alert-5) instead of
 appearing airborne: `tasking.scramble_on_trigger(m, flight, <condition>)`
 keeps the flight shut down until the player trips a zone/flag, so the reaction
 reads as *caused*, not scripted. Contrast `late_activation`, which pops a
-flight straight into the air. If the scenario fits, announce the scramble by voice (below).
+flight straight into the air. If the scenario fits, announce the scramble by
+voice (below).
 
 ### Patrol legs
 
@@ -356,31 +322,24 @@ texture beats a fingerprint.
   SA-10 + IMC + no support is unplayable, not ace. Back off the least
   thematic dial.
 - **Count the magazine before you set the bandit count, and scale both off
-  `--players`.** Numeric balance is the one dial with an arithmetic ceiling:
-  count the air-to-air stations the player's loadout actually leaves free
-  (an F-16C with two wing tanks has six, and stations 4/6 take no missile at
-  all), allow **two shots per kill** against `Skill.Excellent` crews, and that
-  is the whole kill budget — ~3 per jet, and **fewer on the jets carrying the
-  frag**, since a HARM or a bomb on 3/7 costs two of the six. Sum it with
-  `MissionBuilder.air_to_air_shots(_FITS)` rather than multiplying a constant by
-  the slot count. Over it the mission is not ace, it is
-  arithmetically unwinnable, which `abkhaz_sweep` was: six Excellent bandits
-  and a kill-them-all frag against one jet's six missiles, at every slot count.
-  Three legitimate fixes — derive the enemy count from the player count, add
-  friendly AI (but note that "no escort, no tanker" may *be* the composition),
-  or **task less than the airspace**: make the objective the element that gates
-  the campaign effect and let the rest be a threat to survive rather than a
-  required kill. The worked example, with the arithmetic and the trigger
-  consequences, is the "Force balance: the magazine is the budget" section of
-  CLAUDE.md.
+  `--players`.** Numeric balance is the one dial with an arithmetic ceiling —
+  the flight can only carry so many missiles, and past that the mission is not
+  ace, it is arithmetically unwinnable. Sum it with
+  `MissionBuilder.air_to_air_shots(_FITS)`, never by multiplying a constant by
+  the slot count. Three legitimate fixes: derive the enemy count from the
+  magazine, add friendly AI (but "no escort, no tanker" may *be* the
+  composition), or **task less than the airspace** — make the objective the
+  element that gates the campaign effect and let the rest be a threat to survive
+  rather than a required kill. The arithmetic, the levers and the trigger
+  consequences are CLAUDE.md's *Force balance: the magazine is the budget*.
 - **Make the label bite.** Ace means night/IMC + no support *actually
   applied*. Recruit means real support + clear weather, not just lowered
   skill.
 - **Set the AI's teeth, not just its aim.** `Skill` governs marksmanship;
   ROE and reaction-to-threat govern *behaviour*. Recruit enemies hold fire
   and don't defend; ace enemies are weapons-free, evade, and run ECM. Apply
-  per group with `tasking.apply_ai_difficulty(group, difficulty)` (CLAUDE.md)
-  — a distinct dial from raw skill.
+  per group with `tasking.apply_ai_difficulty(group, difficulty)` — a distinct
+  dial from raw skill.
 - **Document composition in the briefing** so the user sees what you built:
   > Difficulty: veteran. Excellent Flankers, bandits 1.5× player flight,
   > AIM-120/R-77, AWACS only, broken cloud layer.
@@ -398,9 +357,8 @@ success/failure) read as bugs or cheating. Text alone is missable in the
 cockpit; the WAV catches attention.
 
 Rule: every such trigger gets a `MessageToAll` / `MessageToCoalition` AND a
-matching `VoiceSynth.attach_to_*` call. Pass the **same string** to both so
-on-screen and audio match word-for-word. `VoiceSynth` API + wiring in
-CLAUDE.md (project-owned helper).
+matching `VoiceSynth.attach_to_*` call, with the **same string** passed to both
+(`core/triggers.py` is the wrapper that makes drift impossible — CLAUDE.md).
 
 ### When voice is required
 
@@ -452,15 +410,9 @@ mission set over contested ground — not a special scenario:
 
 ### The line
 
-Geometry comes from `core/frontline.py` (`plan_frontline`, see CLAUDE.md), which
-takes what the line stands in front of (`defends`, the AO), the side the threat
-comes from (`facing`, the player's field), how far short of the AO it sits
-(`standoff_m`), its frontage (`span_m`), how far the wings sweep back toward the
-player (`bow_m`), and the frontage left without a position on it (`seam_width_m`).
-It returns the trace, the sector positions, the two shoulders and the seam.
-
-What goes on it is force composition, so the mission decides — but the shape of
-the decision is always the same three prices:
+Geometry comes from `core/frontline.py` (`plan_frontline`, CLAUDE.md). What goes
+on it is force composition, so the mission decides — but the shape of the
+decision is always the same three prices:
 
 | Where | What | What it costs the player |
 |-------|------|--------------------------|
@@ -551,24 +503,22 @@ PYDCS_REFERENCE.md.
 ## Convoys always follow roads
 
 Any ground group that **moves between two places** — resupply column,
-counterattack reserve, retreating armor — is road-bound. A column that
-drives the straight line through fields, rivers and treelines reads as
-scripted, bogs down, and hands the player a target that never behaves like
-a convoy.
+counterattack reserve, retreating armor — is road-bound. A column that drives
+the straight line through fields, rivers and treelines reads as scripted, bogs
+down, and hands the player a target that never behaves like a convoy.
 
 So: **every waypoint of a moving ground group gets
-`move_formation=PointAction.OnRoad`, including the spawn waypoint.** The
-spawn one is the easy miss — pydcs creates waypoint 0 with `OffRoad` and a
-ground waypoint's action governs the leg *leaving* it, so `OnRoad` on the
-destination alone changes nothing about how the column drives there. Pass
-`move_formation=PointAction.OnRoad` to `vehicle_group*` at spawn **and** to
-each `add_waypoint`.
+`move_formation=PointAction.OnRoad`, including the spawn waypoint.** The spawn
+one is the easy miss — pydcs creates waypoint 0 with `OffRoad` and a ground
+waypoint's action governs the leg *leaving* it, so `OnRoad` on the destination
+alone changes nothing about how the column drives there. Pass it to
+`vehicle_group*` at spawn **and** to each `add_waypoint`.
 
 Two things follow from it:
-- Snap origin and destination onto real road with
-  `place_convoy_route` / `convoy_spawn` (see `core/placement.py`) — OnRoad
-  pathing off a seed point in the middle of a field just drives to whatever
-  road the engine finds first.
+
+- Snap origin and destination onto real road with `place_convoy_route` /
+  `convoy_spawn` (`core/placement.py`) — OnRoad pathing off a seed point in the
+  middle of a field just drives to whatever road the engine finds first.
 - Speed is road speed: 30–45 km/h for a mixed column. Faster and the column
   strings out and beats the player to the objective.
 
@@ -578,44 +528,28 @@ waypoints at all and is unaffected.
 ## Waypoints that mark the ground sit on the ground
 
 A waypoint altitude is not decoration: in the cockpit it **is** the steerpoint
-elevation the CCRP/CCIP solution, the HUD and the DED read. So a steerpoint
-that marks something on the surface must carry that surface's elevation, not
-the altitude the flight happens to cross it at.
+elevation the CCRP/CCIP solution, the HUD and the DED read. So a steerpoint that
+marks something on the surface must carry that surface's elevation, not the
+altitude the flight happens to cross it at. Two kinds are on the ground by
+definition: **ground-target steerpoints** (the convoy, the depot, the FOB, the
+SAM site, the JTAC's target box) and **base waypoints** (take-off and landing).
 
-Two kinds of waypoint are on the ground by definition:
+The design half is where the *other* altitudes go. The run-in altitude belongs
+on the **preceding IP / ingress waypoint**, which is a point in the air and stays
+there: PUSH and INGRESS legs at 6000–7000 m, IP at the pop altitude, then the
+target steerpoint on the deck. Same for the CAP station or the AWACS orbit —
+those are air points, leave them at altitude.
 
-- **Ground-target steerpoints** — the convoy, the depot, the FOB, the SAM
-  site, the JTAC's target box. Altitude = terrain elevation there.
-- **Base waypoints** — the take-off point and the landing point. pydcs writes
-  both as `alt = 0` (it has no height map), which buries them under any field
-  above sea level — Vaziani sits at 464 m, and the jet then aligns to a
-  steerpoint half a kilometre underground.
+**Client routes only** for ground-target steerpoints. An AI flight actually flies
+the altitudes on its route, so a deck-level turning point flies it into the
+terrain; give AI a sane crossing altitude and let its attack task handle the
+target. Base waypoints are safe for everyone, and are snapped by the base class,
+so they need no call at all.
 
-The run-in altitude belongs on the **preceding IP / ingress waypoint**, which
-is a point in the air and stays there: PUSH and INGRESS legs at 6000–7000 m,
-IP at the pop altitude, then the target steerpoint on the deck. Same for the
-CAP station or the AWACS orbit — those are air points, leave them at altitude.
-
-Mechanically (helpers in CLAUDE.md, API in PYDCS_REFERENCE.md §4.3):
-
-```python
-waypoints.add_ground_waypoint(player, scene.route_mid, overlay=ov,
-                              speed=750, name="CONVOY AO")
-```
-
-Base waypoints need no call at all: the base class snaps every flight's take-off
-and landing to field elevation after `_assemble` returns, so a flight added
-later cannot miss it.
-
-**Client routes only** for ground-target steerpoints. An AI flight actually
-flies the altitudes on its route, so a deck-level turning point flies it into
-the terrain; give AI a sane crossing altitude and let its attack task handle
-the target. Base waypoints are safe for everyone — take-off and landing are
-ground events already.
-
-While you are checking altitudes, check the *en-route* ones against the
-terrain too: a "valley run" waypoint at 800 m over ground that is 2600 m high
-is inside the mountain. `overlay.elevation_at(point)` is the check.
+While you are checking altitudes, check the *en-route* ones against the terrain
+too: a "valley run" waypoint at 800 m over ground that is 2600 m high is inside
+the mountain. `overlay.elevation_at(point)` is the check;
+`waypoints.clear_terrain` is the one that checks the legs as well (CLAUDE.md).
 
 ## Altitude is a threat parameter, and the numbers are in the game
 
@@ -630,19 +564,19 @@ for a briefing line. The S-200's `H_min = 300.0`, `D_min = 17e3`,
 `D_max = 240e3` is what `ansariyah_works` is built on: it reaches most of the way
 from Syria to Cyprus and it cannot bring a missile below three hundred metres, so
 that mission's hard deck is a number out of the game rather than a number that
-sounded right. Grep the table before promising the player anything about an
-envelope.
+sounded right. **Grep the table before promising the player anything about an
+envelope.**
 
 **DCS has no earth curvature, so there is no radar horizon over water.** A
 wave-top run across 250 km of open sea is *not* hidden from a coastal radar the
 way it would be in life — line of sight is terrain only, and there is no terrain
-out there. So a mission may promise a **floor** ("they cannot shoot you below
-three hundred metres") and may promise **terrain masking** (measurable against
-the elevation raster), and may not promise concealment over water. The useful
-move is to spend the detection rather than deny it: in `ansariyah_works` the
-coastal EWR *does* call the crossing, and that call is what rolls the target
-convoy and scrambles the alert pair, so the whole second half of the mission is
-caused by the player being exactly where he was briefed to be.
+out there. So a mission may promise a **floor** and may promise **terrain
+masking** (measurable against the elevation raster), and may not promise
+concealment over water. The useful move is to spend the detection rather than
+deny it: in `ansariyah_works` the coastal EWR *does* call the crossing, and that
+call is what rolls the target convoy and scrambles the alert pair, so the whole
+second half of the mission is caused by the player being exactly where he was
+briefed to be.
 
 **A transition waypoint carries the altitude it starts at, not the one it ends
 at.** DCS ramps linearly between waypoints, so a 6,500 m point followed by a 60 m
@@ -652,90 +586,70 @@ a climb needs a point at each end: `LETDOWN` at cruise and `DECK` at the deck,
 and on the way home `CLIMB` at the **deck**, with the climb on the leg after it.
 The same arithmetic decides whether the descent is flyable at all — a 6.8 % idle
 descent from 6,500 m needs about 95 km of run, which is what fixes where `DECK`
-goes. Where the geometry leaves no room, because the threat ring is wider than
-the distance available, say so in the briefing and price it rather than drawing a
-profile nobody can fly.
+goes. Where the geometry leaves no room, say so in the briefing and price it
+rather than drawing a profile nobody can fly.
 
 ## Waypoint speeds are a flight profile
 
-Every pydcs speed argument is **km/h true airspeed** (the unit rule and the
-sanity bound are in CLAUDE.md; the API detail in PYDCS_REFERENCE.md §4.2).
-Design-side, the number is a profile statement and each leg wants its own:
+Every pydcs speed argument is **km/h true airspeed**; the unit rule, the
+0.30–0.40 sanity band and the four places a wrong number hides are CLAUDE.md's
+*Every speed is km/h true airspeed*. Design-side, the number is a profile
+statement and each leg wants its own:
 
 - **Transit / ingress** — a jet cruises around Mach 0.7–0.8: 800 km/h at
   6000–8000 m. This is also the climb speed, so it is the one to get right.
 - **CAP or sweep station** — same order, a little slower for endurance
-  (780–800 km/h). An orbit's `OrbitAction` speed must match the speed on its
-  own waypoints or the flight fights itself.
+  (780–800 km/h). An orbit's `OrbitAction` speed must match the speed on its own
+  waypoints or the flight fights itself.
 - **AWACS / tanker orbit** — 740–750 km/h, ≈250–290 KIAS at FL215–FL295.
-- **Interceptor scramble** — faster than the package it is chasing:
-  900–920 km/h.
-- **Low-level run** — 630–700 km/h; the airframe is IAS-limited down there,
-  not Mach-limited.
+- **Interceptor scramble** — faster than the package it is chasing: 900–920 km/h.
+- **Low-level run** — 630–700 km/h; the airframe is IAS-limited down there, not
+  Mach-limited.
 - **Attack leg** — a touch below the ingress speed, not above it.
-- **A-10C and other slow movers** — 500–540 km/h. Its never-exceed is
-  720 km/h, so it does not scale with the fast jets.
+- **A-10C and other slow movers** — 500–540 km/h. Its never-exceed is 720 km/h,
+  so it does not scale with the fast jets.
 
-The **departure** waypoint is a third case and the easiest to miss, because
-pydcs writes it for you: `add_runway_waypoint` commands 108 kt at 300 m AGL and
-has no speed argument. That is below the stall speed of anything with a combat
-load, so the flight leaves the runway at max alpha in full afterburner. The
-project overwrites it with the flight's own climb-out speed for every mission
-(`waypoints.set_departure_speeds`, called from `build_miz`) — but if you are
-reading a route and it looks wrong off the deck, that is why.
+Two failure modes to check for, both silent. **Too slow**: a fighter ordered
+150 KIAS at FL260 is behind the drag curve, so the AI holds altitude on the
+throttle and flies the sortie in afterburner, arriving late and out of fuel; a
+heavy simply never reaches station. **Too fast**: above roughly 0.85 of
+`max_speed` the flight is in burner by definition and will not make its planned
+time on station.
 
-Two failure modes to check for, both silent:
-
-- **Too slow.** A fighter ordered 150 KIAS at FL260 is far below best-climb
-  speed and behind the drag curve; the AI holds altitude on the throttle and
-  flies the sortie in afterburner, arriving late and out of fuel. A heavy
-  (E-3A, KC-135) simply cannot make the lift and never reaches station.
-- **Too fast.** Above roughly 0.85 of `max_speed` the flight is in burner by
-  definition and will not make its planned time on station.
-
-**Speed is not the only reason an AI flight burns.** The DCS AI takes off and
-climbs at a high deck angle in afterburner as a matter of routine, and no
-waypoint reaches that. What a mission does control is **weight**: check gross
-against the sortie radius the way you check speed against the airframe. A jet at
-80 %+ of max gross rotates steeply and climbs in burner because the weight
-demands it. `idlib_gauntlet`'s Pontiac flew a 91 km radius carrying full
-internal fuel *and* two 330 gal wing tanks, with a tanker on station — a package
-tanker is the reason you do not launch heavy, not permission to. Where burner
-genuinely buys nothing — a bombed-up strike pair — set
-`tasking.apply_threat_reaction(..., restrict_afterburner=True)`, but never on a
-CAP or interceptor, which needs it in a merge, and only on a flight whose route
-already avoids the live rings.
-
-**Check the ratio per airframe, not the number.** On a supersonic fighter a
-cruise or orbit speed is **0.30–0.40** of `FlyingType.max_speed`; above ~0.40 it
-is holding the profile in afterburner, and subsonic types are exempt (an E-3A
-cruises at 0.86 of its own and has nothing to reach for). But the fast jets are
-not interchangeable: 800 km/h is 0.38 on an F-16C (2120) and 0.41 on an F/A-18C
-(1950), so a package that gives the whole flight "800" puts only the Hornet in
-burner. Weigh the loadout too — a jet with two bags and four LGBs belongs at the
-bottom of the band, a clean CAP at the top. The per-airframe figures are in
-PYDCS_REFERENCE.md §4.2; `dcs-mission-creator audit` checks both bounds.
+**Speed is not the only reason an AI flight burns**, and the other one is a
+design decision rather than a number: **weight**. The DCS AI takes off and climbs
+at a high deck angle in afterburner as a matter of routine, and no waypoint
+reaches that — but a jet at 80 %+ of max gross rotates steeply and climbs in
+burner because the weight demands it. Check gross against the sortie radius the
+way you check speed against the airframe: `idlib_gauntlet`'s Pontiac flew a 91 km
+radius carrying full internal fuel *and* two 330 gal wing tanks, with a tanker on
+station — a package tanker is the reason you do not launch heavy, not permission
+to.
 
 ## Laser codes: one number, and the briefing says it
 
-A mission that puts a laser-guided weapon on the jet is making two claims — the
-controller's spot is on code N, and the bombs will track it. **Both are 1688**,
-and neither is negotiable in the mission file: a DCS AI JTAC lases on that and
-nothing else, and the F-16C, F/A-18C and A-10C carry no laser-code property, so
-their seekers come up on it too. Use `laser.DEFAULT_CODE`, and call
+A mission that puts a laser-guided weapon on the jet makes two claims — the
+controller's spot is on code N, and the bombs will track it. **Both are 1688**
+and neither is negotiable in the mission file (why, and which four airframes are
+the exception, is CLAUDE.md *Laser codes*). Use `laser.DEFAULT_CODE` and call
 `laser.set_code(flight, code)` on **every** flight carrying a laser-guided
-weapon, the AI strike pair included — it refuses a code nothing in the package
-would be on. (Why, and which four airframes are the exception: CLAUDE.md
-*Laser codes*.)
+weapon, the AI strike pair included.
 
-**Then say the number out loud, on the bombs' side as well as the spot's.**
-"`Pinpoint 1-1` lases on 1688" tells the player half of what he needs; the other
-half — that his own GBU-12s and pod are on the same code, so there is nothing to
-arrange — belongs in the same sentence, in `readme()`, in the in-game briefing
-and in the `kneeboard.remark` (pydcs writes the code into no field a card could
-derive). A flight carrying nothing on a laser is worth one clause too, where the
-mission's controller is lasing for somebody else: `idlib_gauntlet`'s `Uzi` drops
+The design half is what the briefing has to say. **Say the number out loud, on
+the bombs' side as well as the spot's.** "`Pinpoint 1-1` lases on 1688" tells the
+player half of what he needs; the other half — that his own GBU-12s and pod are
+on the same code, so there is nothing to arrange — belongs in the same sentence,
+in `readme()`, in the in-game briefing and in the `kneeboard.remark`. A flight
+carrying nothing on a laser is worth one clause too, where the mission's
+controller is lasing for somebody else: `idlib_gauntlet`'s `Uzi` drops
 self-guided SFW and `Hammer`'s spot is `Pontiac`'s.
+
+**And say the spot is already up.** Where a *player* takes an AI controller's
+laser, `laser.arm_autolase` holds it on the target from mission start rather than
+waiting on a check-in the low route was built to deny — but a player who has been
+taught that a JTAC needs a radio conversation will spend his one pass having one
+unless the briefing says otherwise. Say that the net is there for the talk-on and
+the coordinates, not as a precondition for the laser.
 
 ## What the player can see (F10 map, planner, datalink)
 
@@ -759,15 +673,12 @@ late-activated reserve to forget. What matters design-side:
 
 ### Draw the plan
 
-Draw the **plan** on the F10 map so the player reads the sortie at a glance,
-not just from prose. Annotations complement the briefing text and voice
-check-ins — same intent, different channel. Put them on the `Blue` layer
-(player-facing side); never annotate the enemy's own layer. Drawing API
-(`m.drawings`, layers, `Rgba`, `StandardIcon`, `add_*`) in PYDCS_REFERENCE.md;
-the project-owned `PlanOverlay` wrapper is in CLAUDE.md.
+Draw the **plan** on the F10 map so the player reads the sortie at a glance, not
+just from prose. Annotations complement the briefing text and voice check-ins —
+same intent, different channel. The `PlanOverlay` wrapper and its API are
+CLAUDE.md's; what is here is what to draw.
 
-**Always draw (every difficulty)** — the friendly plan, which is never a
-secret:
+**Always draw (every difficulty)** — the friendly plan, which is never a secret:
 
 - AO / target area — a circle or labelled box around the objective.
 - Ingress / egress arrows or a route polyline from the departure field.
@@ -789,12 +700,10 @@ and it is a difficulty dial in its own right (SA on the enemy picture).
 | ace      | The same, further out — ~6 km off, wider again. The player is told the airspace is denied and not where the launchers are: the ring cannot be threaded, so the battery still has to be found on the RWR, the HTS and the tally. |
 
 **What scales is precision, not presence.** The higher labels used to draw
-nothing at all, and that turned out to leak *more*, not less. A mission still
-has to put steerpoints somewhere, and with no estimate to draw from it takes the
-site's true position: `daryal_run` concealed every icon, drew a vague area 4 km
-off, and wrote a `TARGET` steerpoint 170 m from the S-300, which the player
-reads off the DED on the ramp. So draw the ring, make it visibly an assessment,
-and build every other channel from that same estimate. The rule to hold onto:
+nothing at all, and that turned out to leak *more*, not less: a mission still has
+to put steerpoints somewhere, and with no estimate to draw from it takes the
+site's true position. So draw the ring, make it visibly an assessment, and build
+every other channel from that same estimate. The rule to hold onto:
 
 > **Every planned point that refers to an enemy site derives from the estimate,
 > never from the site.** Map ring, cartridge point, target steerpoint, IP,
@@ -802,9 +711,6 @@ and build every other channel from that same estimate. The rule to hold onto:
 > the briefing admits to, and a steerpoint that lands near the truth is luck
 > rather than a leak.
 
-`PlanOverlay.estimate(center, radius=…)` returns that claim without drawing, and
-memoises it on the true position, so a mission that needs it while laying its
-route builds the overlay **first** and passes it to `_draw_plan` at the end.
 `core/routing.py` is the deliberate exception: its rings keep the flight alive
 rather than telling the player anything, so they use the true position — bending
 a package around a ring known to be kilometres off would route it away from
@@ -819,19 +725,17 @@ Rules:
   fix draws a ring, the imagery draws an icon, the rumour draws an area.
 - **Mark estimates as estimates.** `PlanOverlay` does this for you — "(est.)"
   on trained, "(approx.)" and a dashed unfilled ring above it — and offsets the
-  mark from the true unit so a precise ring can't be reverse-engineered. Say the
-  same thing in the prose: a briefing that claims a fix while the map draws a
-  dashed guess reads as the map being broken.
+  mark from the true unit. Say the same thing in the prose: a briefing that
+  claims a fix while the map draws a dashed guess reads as the map being broken.
 - **Only emplaced systems get a ring.** A threat ring says the envelope *is
   there*. Air defence that moves — a convoy's organic SHORAD, a launcher on a
   road march, a mobile reserve — has driven out of any ring by the time the
   player arrives, and the ring is then worse than nothing: everywhere it no
   longer covers reads as clear. Mark those with an icon and a label
-  (`PlanOverlay.mobile_threat`, no circle) and let the prose carry the reach
-  ("the column's SHORAD holds anything inside 8 km at risk"). Rule of thumb: a
-  group with waypoints does not get a ring.
-- **Colour convention.** Enemy in red (`Rgba(255,0,0,·)`), friendly plan in
-  blue/cyan, notes/neutral in white — fills low-alpha, outlines opaque.
+  (`PlanOverlay.mobile_threat`, no circle) and let the prose carry the reach.
+  Rule of thumb: a group with waypoints does not get a ring.
+- **Colour convention.** Enemy in red, friendly plan in blue/cyan, notes in
+  white — fills low-alpha, outlines opaque.
 - **Don't clutter.** A handful of purposeful marks beats a busy map; if it
   wouldn't appear on a real kneeboard, leave it off.
 - **Honour overrides.** "Recruit but I want to find them myself" → pull the
@@ -869,47 +773,33 @@ entirely in the setup:
 
 ### Put the same plan in the cockpit
 
-A ring the player can only see on the F10 map is a ring they lose the moment
-they are heads-down in the jet. An F-16C reads pre-planned threats off its data
-cartridge and draws them on the HSD and the HAD, so a briefed belt belongs
-there too — `core/dtc.py`, wired from the `_load_cartridge` step (see
-CLAUDE.md). The rest of what the map shows goes with it: the cartridge also
-carries the flight's route and the plan's marks as **steerpoints**, and the
-plan's lines as the HSD's **GEO lines**, read straight off the `PlanOverlay` so
-neither channel can drift from the other.
-
-The rules are the ones above, unchanged, because it is the *same* claim in a
-second channel:
+A ring the player can only see on the F10 map is a ring they lose the moment they
+are heads-down in the jet. An F-16C reads pre-planned threats off its data
+cartridge and draws them on the HSD and the HAD, and the cartridge also carries
+the flight's route and the plan's marks as **steerpoints** and the plan's lines
+as **GEO lines**, read straight off the `PlanOverlay` (the mechanics and the tab
+budgets are CLAUDE.md's *Data-cartridge helper*). The rules are the ones above,
+unchanged, because it is the *same* claim in a second channel:
 
 - Load what the map drew — the coarsened, offset estimate — not the site's true
-  position. `PlanOverlay.threat` hands its estimate back for exactly this. It
-  matters more here than on the map: a pre-planned threat **is** a steerpoint,
-  so a point on the truth is coordinates the player reads out of the DED, and it
-  would undo the reveal the F10 map had just applied. Every difficulty produces
-  an estimate, so a hard mission gets a cartridge like any other — its rings are
-  simply wider and further from the launchers.
+  position. It matters more here than on the map: a pre-planned threat **is** a
+  steerpoint, so a point on the truth is coordinates the player reads out of the
+  DED, and it would undo the reveal the F10 map had just applied.
 - Only systems the briefing names, and only ones with an envelope: an EWR, a
   convoy or an armor reserve is not a ring. The jet holds fifteen points, and
   they are better spent on belts than on every MANPADS in the AO.
 - **A pre-planned point is a static claim, so mobile air defence never gets
-  one.** A cartridge ring cannot be updated in flight: load the convoy's 2S6
-  and the player flies a picture that was wrong from the first road mile, and
-  is most wrong exactly where the column has driven to. Sites only; a moving
-  SHORAD threat belongs in the prose and in the AWACS calls, and on the map as
-  a mark with no envelope.
-
-For the other two tabs, one design rule matters and the rest is budget:
-
-- **A front line is what the GEO lines are for.** The jet draws four polylines
-  from twenty-five shared vertices, and a front line is the one piece of enemy
-  geometry with a shape that nothing else in the cockpit carries — the same
-  argument that makes it the one red drawing painted precisely at every
-  difficulty. It goes first and can never be the line that loses; an orbit takes
-  a line only after it, and only because most missions have one to spare. Every
-  race-track becomes a steerpoint at its midpoint regardless, since a range and
-  a bearing to the station is what a pilot actually asks for.
-- **Do not draw the flight's own corridor twice.** The steerpoints already
-  trace it. A route line earns a GEO line only when somebody else flies it.
+  one.** A cartridge ring cannot be updated in flight: load the convoy's 2S6 and
+  the player flies a picture that was wrong from the first road mile, and is
+  most wrong exactly where the column has driven to. A moving SHORAD threat
+  belongs in the prose and in the AWACS calls, and on the map as a mark with no
+  envelope.
+- **A front line is what the GEO lines are for**, and it goes first: it is the
+  one piece of enemy geometry with a shape nothing else in the cockpit carries —
+  the same argument that makes it the one red drawing painted precisely at every
+  difficulty. **Do not draw the flight's own corridor twice**; the steerpoints
+  already trace it, so a route line earns a GEO line only when somebody else
+  flies it.
 
 ### Recon stills — imagery the briefing already claims
 
@@ -920,8 +810,7 @@ one when the prose already claims imagery of the target; do not add one to
 justify new intel.
 
 - **It is a radar product, not a photograph.** The terrain data is 50 m posts, so
-  a frame tight enough to show trucks would be ~95 % invented. The frame is
-  25 km across and a vehicle is a fifth of a pixel — which is why the movers are
+  a frame tight enough to show trucks would be ~95 % invented. The movers are
   drawn as brackets *over* the image rather than as shapes *in* it.
 - **The caption states the resolution.** "The base is a 50 m radar mosaic and the
   brackets are moving-target returns, not imagery — count them for the size of
@@ -934,6 +823,9 @@ justify new intel.
   `PlanOverlay.detections` and nothing else; at `veteran`/`ace` that returns
   nothing and the mission publishes no still. A frame of empty ground is not a
   substitute — silence is.
+- **The overlay has to be able to carry the subject.** It knows roads, buildings
+  and water; it does not know aprons, so a frame centred on one renders farmland
+  with a bracket in the middle of it. Measure before promising a still.
 - **Say where it is.** The in-game briefing is plain text, so it can only point
   at the picture ("Hammer's radar cut is on the briefing screen"); the README
   embeds it. Without that line the player may never look.
@@ -972,27 +864,26 @@ each unit's `skill = Skill.Client` (PYDCS_REFERENCE.md covers the API).
 
 Rules:
 
-- `group_size` on the player flight = requested player count, **minimum two**
-  (`MissionBuilder.MIN_PLAYERS`), and above four it is more than one group —
-  always `mission_kit.player_flight`, never a raw `group_size`.
-- **The opposition scales with it, and so does what is tasked.** A fixed
-  enemy count means the mission is balanced for at most one value of
-  `--players`; derive both from `self.players` and check the result against
-  the flight's magazine (see *Difficulty → Guidelines*).
+- Player count is **minimum two** (`MissionBuilder.MIN_PLAYERS`), and above four
+  it is more than one group — always `mission_kit.player_flight`, never a raw
+  `group_size`.
+- **The opposition scales with it, and so does what is tasked.** A fixed enemy
+  count means the mission is balanced for at most one value of `--players`;
+  derive both from `self.players` and check the result against the flight's
+  magazine (see *Difficulty → Guidelines*).
 - **The slots carry different loadouts.** Declare the flight's fit table as a
-  module constant and pass it as `loadouts=`; see *The flight splits its
-  loadout* below.
-- **All** units in the flight get `Skill.Client`. Empty Client slots appear
-  as unoccupied seats in MP UI; DCS leaves them parked if nobody joins.
-- Default `start_type=StartType.Warm` (hot ramp). Cold only when the user
-  asks for a startup-procedure rep. There is no `StartType.Hot`.
-- One player flight per group. Two distinct human flights (F-16s + A-10s) =
-  two groups, each with its own clients.
-- Callsigns: `Dodge` / `Springfield` / `Uzi` for USA-NATO; `Boris` / `Ivan`
-  for Russian. Don't reuse AI callsigns (`Magic`, `Hawg`, `Eagle`, `Texaco`).
+  module constant and pass it as `loadouts=`; see below.
+- **All** units in the flight get `Skill.Client`. Empty Client slots appear as
+  unoccupied seats in MP UI; DCS leaves them parked if nobody joins.
+- Default `start_type=StartType.Warm` (hot ramp). Cold only when the user asks
+  for a startup-procedure rep. There is no `StartType.Hot`.
+- One player flight per group. Two distinct human flights (F-16s + A-10s) = two
+  groups, each with its own clients.
+- Callsigns: `Dodge` / `Springfield` / `Uzi` for USA-NATO; `Boris` / `Ivan` for
+  Russian. Don't reuse AI callsigns (`Magic`, `Hawg`, `Eagle`, `Texaco`).
 - Two-seat modules (F-14B, AH-64D): pydcs still spawns one unit per
-  `group_size`. The second seat is occupied via a separate MP slot in-game,
-  not via pydcs.
+  `group_size`. The second seat is occupied via a separate MP slot in-game, not
+  via pydcs.
 
 ## Buildings as objectives, and the spacing that makes them one
 
@@ -1013,17 +904,10 @@ compound must be concealed — are in CLAUDE.md.
 ## The flight splits its loadout
 
 **Two coop slots is the floor, and the two jets do not carry the same thing.**
-The mechanics are in CLAUDE.md (`core/loadout.py`, `loadout.Loadout`,
-`loadouts=` on `player_flight`, `self.loadout_table` / `self.loadout_brief`);
-what belongs here is how to *choose* the split.
-
-Start from the arithmetic, because it is what makes the split necessary rather
-than decorative. An F-16C-50 with two bags, a jammer and two pods has six
-stations left, and only **three of them** — 3, 7 and the 2/8 pair — take
-anything but an air-to-air missile. So a jet that hangs HARMs on 3/7 has no
-bomb, a jet that hangs bombs there has no HARM, and both fly with four missiles
-instead of six. One jet cannot hold a two-part frag; a pair can, and each half
-is then flown properly instead of compromised.
+The mechanics are in CLAUDE.md (`core/loadout.py`, `loadouts=` on
+`player_flight`, the three views, the cycling rule, and the station arithmetic
+that makes the split necessary rather than decorative); what belongs here is how
+to *choose* it.
 
 **Ask what the mission already contains, and give the second jet the half the
 first one had to drop.** Four patterns cover everything in this project:
@@ -1044,29 +928,27 @@ Rules that decide which one:
   is air-to-air. If a TARCAP is on station before the push, spend the second jet
   on the ground instead.
 - **Never re-price a scarcity the mission was designed around.** If the sortie's
-  tension is "two bombs, three aimpoints" or "four bombs across two halls and a
-  shipment", the wingman carries **no bomb at all** — otherwise a second pilot
-  showing up deletes the decision the mission is about. Then say in the briefing
-  what a pair still has to choose and what four slots change.
+  tension is "two bombs, three aimpoints", the wingman carries **no bomb at all**
+  — otherwise a second pilot showing up deletes the decision the mission is
+  about. Then say in the briefing what a pair still has to choose and what four
+  slots change.
 - **Both fits should be ED payloads, station for station.** Grep
   `<DCS>/CoreMods/aircraft/<module>/UnitPayloads/*.lua` for the weapon and read
-  the stations off the payload that carries it, exactly as for a single fit.
-  "Legal in pydcs" and "a fit somebody flies" are still different tests.
+  the stations off the payload that carries it. "Legal in pydcs" and "a fit
+  somebody flies" are different tests, and `core/loadout_check` is the mechanical
+  half of it.
 - **Name the role after the weapon**, not the doctrine word: `HARM/HTS`,
   `GBU-12*4`, `AIM-120C*6`. It is a dozen characters on a kneeboard card, and it
   has to tell a pilot what his wingman can do.
-- **Count the whole flight's magazine** before setting the bandit count.
-  `MissionBuilder.air_to_air_shots(_FITS)` reads it off the loaded rails, and a
-  split flight is *not* six shots a jet — the jet with the bombs has four.
+- **Count the whole flight's magazine** before setting the bandit count. A split
+  flight is *not* six shots a jet — the jet with the bombs has four.
 - **More slots repeat the pair.** The table cycles, so four slots are two
   elements each carrying the same split. Declare a third fit only when the
   mission has a genuine third job at that size.
 
-Then put the table in all three views — README (`loadout_table`), in-game
-briefing (`loadout_brief`) and the kneeboard, which the base class writes for
-you. The briefing must say **which slot** carries the frag-critical stores,
-because a player picking a jet on the slot-selection screen is choosing a role
-without knowing it otherwise.
+The briefing must say **which slot** carries the frag-critical stores, because a
+player picking a jet on the slot-selection screen is choosing a role without
+knowing it otherwise.
 
 ## After generating
 
