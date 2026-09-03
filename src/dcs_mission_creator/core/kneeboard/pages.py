@@ -40,6 +40,26 @@ is doing the join the card should have done. The coordinates moved into the rout
 table and the second one went away, which cost the cumulative-distance column
 (the sortie block has the route total) and the true-track column (the page prints
 the theatre variation, so it is a subtraction away).
+
+**A kneeboard column earns its place by being unrecoverable in the cockpit.**
+The route card used to print the legs and then repeat the same points as a
+`STEERPOINTS` list purely to give their coordinates — a pilot reading his
+position off one table and his timing off another, four inches apart, doing by
+hand the join the card should have done. The coordinates moved into the route
+table and the second one went away. Two columns paid for the 25 characters that
+took, and both are recoverable from what is still on the page: cumulative
+distance (the sortie block prints the route total) and true track (the page
+prints the theatre variation beside the magnetic ones, so it is one subtraction).
+
+That trade is also the whole argument *for* the threat block. The F-16C is the
+only module in DCS that draws a pre-planned threat ring, so for every other
+airframe the briefed coordinates exist nowhere but here — and even in the Viper
+an HSD ring is a shape on a scope with no numbers to read off it. It is not a
+fourth reveal channel: it prints `dtc.briefed_threats(m)`, the same estimates the
+cartridge was loaded from, so a harder mission's block prints rings that are
+wider and in the wrong place rather than no block at all. Sites briefed under one
+name — a pair of SA-13s — are numbered apart, because otherwise the coordinates
+are the only thing telling them apart in a radio call.
 """
 
 from __future__ import annotations

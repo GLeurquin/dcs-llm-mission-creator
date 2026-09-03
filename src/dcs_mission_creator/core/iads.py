@@ -111,6 +111,44 @@ the whole column hold fire on every HARM shot.
 Design rule (mirrors `core/air_defense.py` / `core/tasking.py`): built pydcs
 groups in, triggers out. The mission owns the wording of the radio calls; pass a
 `VoiceSynth` to get them spoken as well as printed.
+
+**Nobody reports intel nobody collected**, which is why `listeners` exists and
+why declaring none leaves the net silent. A radar going off or back on the air is
+an ESM observation, so a call is made only while a named collector is alive,
+inside its own `range_m` and in line of sight of the emitter — a battery masked
+behind a ridge from the AWACS track goes quiet without a word, and shooting the
+collector down ends the reporting for the sortie. Without a collector, "the SA-6
+has ceased emissions" is the mission reading its own trigger state out to the
+player. The default 250 km reach is because a passive receiver against a megawatt
+search radar is horizon-limited rather than power-limited, so terrain and
+survival are what actually decide it. The briefing has to say whose picture it is,
+or a call that never comes reads as a bug.
+
+Which calls are made, and why the silent cases are silent: a site coming up for
+the **first** time says nothing, because the player's RWR is that call and
+announcing it would give away a battery the briefing deliberately left off the
+map. One coming *back* after being shot off the air is news. One going quiet
+because the package left is silent, because `down_call` means "SEAD worked" and
+must not be borrowed. And a site whose **radars** are dead is destroyed rather
+than suppressed and drops out entirely — the gate is a live radar unit, because
+DCS keeps the group alive while one launcher stands, and gating on the group had
+a site the player had just killed report that it was going dark and then that it
+was radiating again.
+
+**The vendored framework.** `core/lua/vendor/` holds Skynet 3.3.0 verbatim
+(Apache-2.0) plus its licence and a README covering provenance. There is no MIST,
+although Skynet documents it as a prerequisite: MIST is GPL-3.0, and putting a
+copyleft library inside every generated mission is not a decision this project
+makes on a user's behalf. Skynet calls exactly thirteen MIST functions — a
+scheduler pair, seven conversions and vector helpers, `mist.random`,
+`mist.getHeading`, and two name-lookup tables only the `*ByPrefix` registration
+paths use, which this project does not — so `core/lua/mist_shim.lua` is a
+first-party implementation of that surface. `tests/test_iads.py` and
+`tests/test_iads_runtime.py` are what make a version bump safe: the first asserts
+every Skynet symbol the generated setup touches exists in the pinned build and
+that the shim covers every `mist.*` it calls, the second runs the whole stack
+under an embedded Lua against a stub of the DCS scripting environment and drives
+the clock. Run both if a new build is dropped in.
 """
 
 from __future__ import annotations

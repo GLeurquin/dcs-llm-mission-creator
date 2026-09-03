@@ -25,6 +25,23 @@ approach gate every mission puts 7 km off the field) writes `alt_type="RADIO"`,
 i.e. an *AGL* altitude, while every other waypoint is `BARO`. Printing both as
 MSL would put the gate 1000 ft below the terrain it is over, so an AGL altitude
 is flagged in its own column rather than silently converted.
+
+**Timings are zero-wind, and the card says so.** The mission file's wind `dir`
+is one number with two readings — the direction the wind comes *from*, or the
+direction it blows *to* — and DCS's editor labels it only `DIR`. A
+wind-corrected heading printed off the wrong reading is out by twice the drift
+angle and looks authoritative. The wind profile is printed as its own block
+instead: at 400 kt against the winds these missions set the ETE error is under
+six per cent, which is smaller than that mistake would be.
+
+**A magnetic track comes from a per-theater table** (`VARIATION_DEG_EAST`),
+printed on the page beside the number so it can be checked; a theater the table
+does not cover prints true tracks only, which is why it is a lookup and not a
+default of zero. DCS models one declination per map and pydcs carries it nowhere.
+Note that a **runway designator is not a heading you may convert**:
+`RunwayApproach.heading` is the designator times ten, the number painted on the
+threshold, which DCS carries over from real-world charts — applying a variation
+to it introduces an error rather than removing one.
 """
 
 from __future__ import annotations
