@@ -18,6 +18,14 @@ scales with it too: the frag is the Sochi element, and the Gudauta
 reinforcement is a threat to beat rather than a target list, so the mission
 never asks for more kills than the flight is carrying missiles for.
 
+This mission is the reason that rule is written down. It shipped with a fixed
+six bandits — four Su-27 and a MiG-29S pair, all `Skill.Excellent` — against a
+win condition of "both flights dead", whatever `--players` said. A single-slot
+`Dodge` therefore launched with six air-to-air missiles against six of the best
+crews in the game, with no tanker and no rearm, and four slots faced the same
+six. At two shots per kill that is not an ace mission, it is an arithmetically
+unwinnable one.
+
 Composition (difficulty: ace, sized per player slot):
   - 2x Russian Su-27 per player jet (one four-ship, plus elements as slots
     are added), Skill Excellent, R-27ER class, Sochi-Adler, intercept on an

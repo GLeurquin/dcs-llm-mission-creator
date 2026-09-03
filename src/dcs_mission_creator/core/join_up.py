@@ -47,6 +47,25 @@ airborne at all (a server with nobody slotted, a mission opened to look at) the
 package would otherwise sit on the ramp for the whole sortie, so a `TimeAfter`
 is OR'd in and the flight launches on its own after `fallback_s`.
 
+What is left after the exclusions is exactly the flight the player was briefed
+to fly *with*, and across this project that is three: `coastal_cover`'s `Hawg`,
+`kodori_strike`'s `Weasel` and `eastern_shield`'s `Hawg`. The rest hold nothing
+and each for a reason the mission already had — a mission-owned reserve, an
+airborne spotter, or a package that is only an AWACS and a tanker.
+
+All three briefings read *better* afterwards, which is the check worth running
+on any package this touches. Measured on the built routes, from each flight's
+own take-off: `coastal_cover`'s `Hawg` was attacking the column at what is now
+the player's T-3 — its run was over before the player was airborne, under a
+briefing that says "escort `Hawg` onto the column" — and now rolls in at about
+T+9 against the player's T+10 on station. `kodori_strike`'s "`Weasel` rolls back
+the SA-6 ahead of you" stops being a ten-minute head start, which was long
+enough for the belt to re-radiate before the strike arrived (`core/iads.py`'s
+`shutdown_s` is minutes), and becomes the two or three minutes its own taxi
+costs: the HARM lands at about T+11 against `Dodge`'s T+11 on target.
+`eastern_shield`'s `Hawg` is briefed to hold west of the AO until the SEAD is
+done, so a later launch is the same plan with less loiter.
+
 Missions never call this — `MissionBuilder.build_miz` does, for the same reason
 as `waypoints.snap_base_waypoints`: a flight added after the call site was
 written cannot miss it.
