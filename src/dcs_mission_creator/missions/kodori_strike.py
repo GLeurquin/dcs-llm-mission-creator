@@ -76,7 +76,6 @@ from dcs_mission_creator.core.recon import (
     Chrome,
     Frame,
     Mark,
-    ReconStill,
     landmark_marks,
     publish as recon,
 )
@@ -202,8 +201,6 @@ class KodoriStrike(MissionBuilder):
         super().__init__(players=players)
         self._terrain = Caucasus()
         self._voice = VoiceSynth()
-        #: Set by `_render_recon`; `readme` degrades to no figure without it.
-        self._still: ReconStill | None = None
 
     # -- in-game and README briefings ---------------------------------------
 
@@ -308,14 +305,6 @@ FREQUENCIES
   Kutaisi tower : per kneeboard
 """
 
-    def _recon_figure_md(self) -> str:
-        """The radar-still figure block, or nothing if no still was published.
-
-        Empty rather than raising, so `readme()` still works on a builder whose
-        `_assemble` has not run and at difficulties that withhold the imagery.
-        """
-        return "" if self._still is None else self._still.markdown()
-
     def readme(self) -> str:
         bx, by = self._terrain.bullseye_blue["x"], self._terrain.bullseye_blue["y"]
         return f"""# Kodori Strike
@@ -393,7 +382,7 @@ are drawn as estimates for that reason. The base itself is the one thing that
 has been watched long enough to be pinned, and the frame below is yesterday's
 pass over it.
 
-{self._recon_figure_md()}
+{self.recon_figure_md()}
 
 - **Air:** Gudauta holds a Su-27 pair ready — current missiles, experienced
   crews — launched against any package that crosses the Inguri and vectored by
@@ -508,7 +497,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         )
 
         self._add_end_triggers(m, fob=fob, sa6=sa6, weasel=weasel)
-        self._add_sanctuary_checkin(m, home)
+        sanc.announce(m, home, at_seconds=180, voice=self._voice)
         sanc.remark_all(m, home, gudauta_ad)
         self._conceal_red(russia)
         # One overlay for every reveal channel: the F10 plan, the cockpit
@@ -1228,21 +1217,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             terrain=self._terrain,
         )
         return home, gudauta_ad
-
-    def _add_sanctuary_checkin(self, m: Mission, home: sanc.Sanctuary) -> None:
-        """Read the umbrella out once, on the climb-out.
-
-        Without it the feature is invisible: a cyan ring on the F10 map reads as
-        decoration, and nobody opens the map again after push. Same argument as
-        `core/jtac`'s `push_at_s`.
-        """
-        mission_triggers.checkin(
-            m,
-            at_seconds=180,
-            comment="CASTLE umbrella check-in",
-            voice=self._voice,
-            text=sanc.checkin_text(home, controller="Magic"),
-        )
 
     # -- F10 map briefing ---------------------------------------------------
 

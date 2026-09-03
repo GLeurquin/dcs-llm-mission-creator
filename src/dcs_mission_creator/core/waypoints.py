@@ -35,6 +35,7 @@ landing points are ground events already.
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import structlog
@@ -59,6 +60,11 @@ log = structlog.get_logger(__name__)
 #: airfield event", which `core/audit.py` has to ask before it complains about
 #: an altitude or a speed: the take-off and landing points carry the field's
 #: elevation and pydcs's hard-coded 108 kt, and neither is a defect.
+#: Default air under a route, in metres. It is what `clear_terrain` and
+#: `leg_violation` have both always used; naming it is so `agl_profile` can
+#: default to the same number rather than to a third literal.
+CLEARANCE_M = 150.0
+
 BASE_POINT_TYPES = frozenset(
     {
         "TakeOff",
@@ -195,12 +201,72 @@ def _set_group_departure_speed(group: FlyingGroup) -> int:
     return 1
 
 
+@dataclass(frozen=True)
+class Leg:
+    """One en-route point, and how far above the ground it is meant to be flown.
+
+    The unit is what makes it worth having: every pydcs altitude is metres
+    **AMSL**, so a mission that types "700 m through the valley" has said seven
+    hundred metres above the *sea*, and on a mountain map that is a number
+    somewhere inside the rock. `daryal_run` shipped exactly that, twice, one of
+    them by 2.7 km. Stating the height above the ground and letting
+    `agl_profile` read the elevation under each point is the half of the fix
+    that is obvious; the other half is that the *legs between* the points have
+    to clear as well.
+
+    `speed_kph` is optional because only a route that varies its speed by leg
+    needs it — and it is km/h true airspeed like every other pydcs speed.
+    """
+
+    name: str
+    position: Point
+    agl_m: float
+    speed_kph: float | None = None
+
+
+def agl_profile(
+    legs: Sequence[Leg],
+    overlay: MapOverlay,
+    *,
+    clearance_m: float = CLEARANCE_M,
+    ground_floor_m: float | None = None,
+) -> list[tuple[Leg, float]]:
+    """Each leg paired with the AMSL altitude that actually clears the ground.
+
+    `clear_terrain` under the elevation raster, so the answer accounts for the
+    chord between two waypoints and not only the waypoints: DCS ramps linearly
+    between them, and two points that each clear their own valley floor still
+    draw a straight line through the spur the river bends around. It only ever
+    raises, so the mission's own `agl_m` is a floor.
+
+    `clearance_m` is a parameter rather than a constant because the missions
+    that fly this way pass different values — how much air a route wants under
+    it is a decision about that route, not about the terrain.
+
+    `ground_floor_m` raises any ground below it to it, and the case is the same
+    one `leg_violation` has it for: **water**. The elevation layer holds depth
+    below datum out at sea, so a leg briefed at sixty metres over the
+    Mediterranean would come out thirty. Pass `0.0` for a route with water under
+    it and the briefed height is what it flies.
+    """
+    grounds = [ground_elevation_m(overlay, leg.position) for leg in legs]
+    if ground_floor_m is not None:
+        grounds = [max(ground_floor_m, g) for g in grounds]
+    altitudes = clear_terrain(
+        [leg.position for leg in legs],
+        [ground + leg.agl_m for leg, ground in zip(legs, grounds)],
+        overlay=overlay,
+        clearance_m=clearance_m,
+    )
+    return list(zip(legs, altitudes))
+
+
 def clear_terrain(
     route: Sequence[Point],
     altitudes: Sequence[float],
     *,
     overlay: MapOverlay,
-    clearance_m: float = 150.0,
+    clearance_m: float = CLEARANCE_M,
     sample_m: float = 50.0,
 ) -> list[float]:
     """Raise `altitudes` until nothing on the route is inside the terrain.
@@ -287,7 +353,7 @@ def leg_violation(
     alt_b: float,
     overlay: MapOverlay,
     *,
-    clearance_m: float = 150.0,
+    clearance_m: float = CLEARANCE_M,
     sample_m: float = 50.0,
     floor_m: float | None = None,
 ) -> tuple[float, float]:

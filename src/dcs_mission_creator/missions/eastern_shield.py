@@ -1228,13 +1228,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         the cyan ring is easy to take for decoration and nobody opens the F10
         map again after push. Same argument as `core/jtac`'s `push_at_s`.
         """
-        mission_triggers.checkin(
-            m,
-            voice=self._voice,
-            at_seconds=120,
-            comment="REDOUBT umbrella check-in",
-            text=sanc.checkin_text(home, controller="Magic"),
-        )
+        sanc.announce(m, home, at_seconds=120, voice=self._voice)
         mission_triggers.checkin(
             m,
             voice=self._voice,

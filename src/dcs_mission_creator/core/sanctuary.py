@@ -99,6 +99,7 @@ if TYPE_CHECKING:
     from dcs.unittype import VehicleType
 
     from dcs_mission_creator.core.map_draw import PlanOverlay
+    from dcs_mission_creator.core.tts import VoiceSynth
     from dcs_mission_creator.map_overlay.query import MapOverlay
 
 log = structlog.get_logger(__name__)
@@ -769,6 +770,40 @@ def remark_all(m: "Mission", *sanctuaries: Sanctuary) -> None:
     for s in sanctuaries:
         for line in s.remarks():
             kneeboard.remark(m, line)
+
+
+def announce(
+    m: "Mission",
+    sanctuary: Sanctuary,
+    *,
+    at_seconds: int,
+    voice: "VoiceSynth | None" = None,
+    controller: str = "Magic",
+    comment: str | None = None,
+) -> None:
+    """Read the umbrella out on the clock, once, early enough to be heard.
+
+    Every mission wrote this call and every one wrote it the same way, down to
+    the controller and the comment string; what actually differed was
+    `at_seconds`, which is a pacing decision and stays a required argument.
+
+    It is not decoration, and that is the reason it exists at all rather than
+    being left to the F10 map: a cyan ring reads as scenery, and nobody opens
+    the map again after push. Same argument as `core/jtac`'s `push_at_s`.
+
+    `controller` is who says it — the AWACS in every mission here so far, but a
+    package with a different agency should say so — and `comment` is the trigger
+    label in the editor, which defaults to naming the sanctuary.
+    """
+    from dcs_mission_creator.core import triggers as mission_triggers
+
+    mission_triggers.checkin(
+        m,
+        at_seconds=at_seconds,
+        comment=comment or f"{sanctuary.callsign} umbrella check-in",
+        voice=voice,
+        text=checkin_text(sanctuary, controller=controller),
+    )
 
 
 def checkin_text(sanctuary: Sanctuary, *, controller: str) -> str:

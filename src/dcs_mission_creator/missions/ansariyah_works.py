@@ -96,7 +96,7 @@ from dcs import (
 )
 from dcs.country import Country
 from dcs.drawing.icon import StandardIcon
-from dcs.mapping import LatLng, Point
+from dcs.mapping import Point
 from dcs.mission import Mission, StartType
 from dcs.point import PointAction
 from dcs.terrain.syria.syria import Syria
@@ -135,6 +135,7 @@ from dcs_mission_creator.core.tasking import (
 )
 from dcs_mission_creator.core.tts import VoiceSynth
 from dcs_mission_creator.core.visibility import conceal_country
+from dcs_mission_creator.core.waypoints import Leg
 from dcs_mission_creator.core.weather import Weather, Wind
 from dcs_mission_creator.map_overlay.query import MapOverlay
 from dcs_mission_creator.map_overlay.scene import TacticalScene
@@ -269,15 +270,6 @@ _EGRESS = (
 )
 
 
-@dataclass(frozen=True)
-class _Leg:
-    """One en-route point and how far above the ground it is to be flown."""
-
-    name: str
-    position: Point
-    agl_m: float
-
-
 @dataclass
 class _Scene:
     """Resolved airports + the whole fixed geometry, shared by every spawn step."""
@@ -293,8 +285,8 @@ class _Scene:
     sa8_pos: Point
     sa11_pos: Point
     portal: Point
-    ingress: tuple[_Leg, ...]
-    egress: tuple[_Leg, ...]
+    ingress: tuple[Leg, ...]
+    egress: tuple[Leg, ...]
     overlay: TacticalScene
 
     @property
@@ -832,7 +824,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self._add_iads(m, magic=magic, red=red, hama_ad=hama_ad)
         self._add_intro_voice(m)
         self._add_support_checkins(m)
-        self._add_sanctuary_checkin(m, home)
+        sanc.announce(m, home, at_seconds=_SANCTUARY_CHECKIN_S, voice=self._voice)
         self._add_coast_crossing_triggers(
             m, scene, colt=colt, migs=migs, column=red.column
         )
@@ -907,38 +899,34 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         hama.set_red()
 
         overlay = load_scene("syria")
-        plant = self._at(*_PLANT_LATLNG)
+        plant = self.at(*_PLANT_LATLNG)
         return _Scene(
             akrotiri=akrotiri,
             paphos=paphos,
             hama=hama,
             plant=plant,
-            sa5_pos=self._at(*_SA5_LATLNG),
-            sa3_north=self._at(*_SA3_NORTH_LATLNG),
-            sa3_south=self._at(*_SA3_SOUTH_LATLNG),
-            ewr_pos=self._at(*_EWR_LATLNG),
+            sa5_pos=self.at(*_SA5_LATLNG),
+            sa3_north=self.at(*_SA3_NORTH_LATLNG),
+            sa3_south=self.at(*_SA3_SOUTH_LATLNG),
+            ewr_pos=self.at(*_EWR_LATLNG),
             # The Osa sits on the seaward lip of the basin, which is the side
             # every briefed approach comes from and the side the guns cannot
             # cover on their own.
             sa8_pos=offset(plant, east_m=-1_600, north_m=-900),
-            sa11_pos=self._at(*_SA11_LATLNG),
+            sa11_pos=self.at(*_SA11_LATLNG),
             portal=overlay.overlay.find_road_spawn(
-                self._at(*_PORTAL_SEED_LATLNG),
+                self.at(*_PORTAL_SEED_LATLNG),
                 radius_m=6_000.0,
                 min_distance_to_built_up_m=200.0,
             ),
             ingress=tuple(
-                _Leg(name, self._at(lat, lng), agl) for name, lat, lng, agl in _CORRIDOR
+                Leg(name, self.at(lat, lng), agl) for name, lat, lng, agl in _CORRIDOR
             ),
             egress=tuple(
-                _Leg(name, self._at(lat, lng), agl) for name, lat, lng, agl in _EGRESS
+                Leg(name, self.at(lat, lng), agl) for name, lat, lng, agl in _EGRESS
             ),
             overlay=overlay,
         )
-
-    def _at(self, lat: float, lng: float) -> Point:
-        """One `(lat, lng)` constant as a world `Point` on this theater."""
-        return Point.from_latlng(LatLng(lat, lng), self._terrain)
 
     @staticmethod
     def _ring_edge(
@@ -1662,7 +1650,12 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                 speed=_SEA_DECK_SPEED_KPH,
                 name=f"OVERWATER-{i}",
             )
-        for leg, altitude in self._low_route(scene, scene.ingress):
+        for leg, altitude in waypoints.agl_profile(
+            scene.ingress,
+            scene.overlay.overlay,
+            clearance_m=_LEG_CLEARANCE_M,
+            ground_floor_m=0.0,
+        ):
             chevy.add_waypoint(
                 leg.position,
                 altitude=altitude,
@@ -1687,7 +1680,12 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                 expend=task.Expend.All,
             )
         )
-        for leg, altitude in self._low_route(scene, scene.egress):
+        for leg, altitude in waypoints.agl_profile(
+            scene.egress,
+            scene.overlay.overlay,
+            clearance_m=_LEG_CLEARANCE_M,
+            ground_floor_m=0.0,
+        ):
             chevy.add_waypoint(
                 leg.position, altitude=altitude, speed=_EGRESS_SPEED_KPH, name=leg.name
             )
@@ -1768,8 +1766,18 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         # steerpoint on the hall would hand him a survey the briefing spent three
         # paragraphs saying nobody has.
         target, _ = plan.estimate(scene.plant, radius=_SA8_RING_M)
-        ingress = self._low_route(scene, scene.ingress)
-        egress = self._low_route(scene, scene.egress)
+        ingress = waypoints.agl_profile(
+            scene.ingress,
+            scene.overlay.overlay,
+            clearance_m=_LEG_CLEARANCE_M,
+            ground_floor_m=0.0,
+        )
+        egress = waypoints.agl_profile(
+            scene.egress,
+            scene.overlay.overlay,
+            clearance_m=_LEG_CLEARANCE_M,
+            ground_floor_m=0.0,
+        )
         for section in sections:
             self._route_colt(
                 section,
@@ -1798,8 +1806,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self,
         player: FlyingGroup,
         scene: _Scene,
-        ingress: Sequence[tuple[_Leg, float]],
-        egress: Sequence[tuple[_Leg, float]],
+        ingress: Sequence[tuple[Leg, float]],
+        egress: Sequence[tuple[Leg, float]],
         *,
         letdown: Point,
         climb: Point,
@@ -1894,49 +1902,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         akrotiri = scene.akrotiri.position
         return akrotiri.point_from_heading(
             akrotiri.heading_between_point(scene.egress[-1].position), 35_000.0
-        )
-
-    def _low_route(
-        self, scene: _Scene, legs: tuple[_Leg, ...]
-    ) -> list[tuple[_Leg, float]]:
-        """Turn each leg's height above the ground into an altitude that clears it.
-
-        Every pydcs altitude is metres AMSL, and on a coast that goes from the
-        sea to 570 m in fifteen kilometres that is the whole difficulty — the
-        same trap `daryal_run` shipped with two waypoints inside a mountainside.
-        Stating the height above the ground and reading the elevation under each
-        point is the obvious half.
-
-        The other half is that DCS ramps linearly between waypoints, so two
-        points that each clear their own ground still draw a chord through the
-        spur between them, and this corridor turns twice inside fifteen
-        kilometres. `waypoints.clear_terrain` samples the legs as well as the
-        points and lifts the cheaper end of any that would hit; it only ever
-        raises, so the numbers in `_CORRIDOR` are a floor.
-
-        The sea points are floored at their own briefed height rather than at the
-        raster, because the raster over water is negative and `_SEA_DECK_M` is a
-        number the ROE quotes.
-        """
-        overlay = scene.overlay.overlay
-        positions = [leg.position for leg in legs]
-        wanted = [
-            max(
-                leg.agl_m,
-                waypoints.ground_elevation_m(overlay, leg.position) + leg.agl_m,
-            )
-            for leg in legs
-        ]
-        return list(
-            zip(
-                legs,
-                waypoints.clear_terrain(
-                    positions,
-                    wanted,
-                    overlay=overlay,
-                    clearance_m=_LEG_CLEARANCE_M,
-                ),
-            )
         )
 
     # -- somewhere to fall back to ------------------------------------------
@@ -2319,21 +2284,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                 "Colt, take everything you can carry — it is a long way to the "
                 "beach and I will be here when you come back."
             ),
-        )
-
-    def _add_sanctuary_checkin(self, m: Mission, home: sanc.Sanctuary) -> None:
-        """Read the umbrella out once, on the climb, before anyone is busy.
-
-        Without it the feature is invisible: a cyan ring on the F10 map reads as
-        decoration, and on this route nobody opens the map again after the
-        letdown.
-        """
-        mission_triggers.checkin(
-            m,
-            at_seconds=_SANCTUARY_CHECKIN_S,
-            comment="BULWARK umbrella check-in",
-            voice=self._voice,
-            text=sanc.checkin_text(home, controller="Magic"),
         )
 
     def _add_coast_crossing_triggers(

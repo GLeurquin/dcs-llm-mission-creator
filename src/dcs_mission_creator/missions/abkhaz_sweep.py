@@ -610,7 +610,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         home, sochi_ad = self._spawn_sanctuaries(m, usa, russia, scene, route=route)
 
         self._add_end_triggers(m, su27s=su27s, mig29s=mig29s, dodge=dodge)
-        self._add_sanctuary_checkin(m, home)
+        sanc.announce(m, home, at_seconds=180, voice=self._voice)
         sanc.remark_all(m, home, sochi_ad)
         self._conceal_red(russia)
         briefed_threats = self._draw_plan(
@@ -1087,20 +1087,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             terrain=self._terrain,
         )
         return home, sochi_ad
-
-    def _add_sanctuary_checkin(self, m: Mission, home: sanc.Sanctuary) -> None:
-        """Read the umbrella out once, on the climb-out.
-
-        Without it the feature is invisible: a cyan ring on the F10 map reads as
-        decoration, and nobody opens the map again after push.
-        """
-        mission_triggers.checkin(
-            m,
-            at_seconds=180,
-            comment="BASTION umbrella check-in",
-            voice=self._voice,
-            text=sanc.checkin_text(home, controller="Magic"),
-        )
 
     def _draw_plan(
         self,

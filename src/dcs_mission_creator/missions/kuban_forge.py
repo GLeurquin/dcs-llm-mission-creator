@@ -13,7 +13,7 @@ the Kodori valley system, over the **Klukhori Pass** onto the northern slope,
 down the Teberda and out into the Kuban. Measured against the elevation raster,
 the whole corridor is masked from the Buk and from both early-warning radars
 until `KARACHAY`, where the Teberda turns toward the Kuban 34 km short of the
-battery (`_CORRIDOR`, `_route_altitudes`). Egress inverts the profile: the
+battery (`_CORRIDOR`, `waypoints.agl_profile`). Egress inverts the profile: the
 valley bought surprise and the halls spend it, so the way home is a hard climb
 south-west over the range and feet wet past the Abkhaz coast.
 
@@ -64,7 +64,7 @@ from typing import Sequence, cast
 from dcs import action, condition, planes, statics, task, templates, triggers, vehicles
 from dcs.country import Country
 from dcs.drawing.icon import StandardIcon
-from dcs.mapping import LatLng, Point
+from dcs.mapping import Point
 from dcs.mission import Mission, StartType
 from dcs.point import PointAction
 from dcs.terrain.caucasus.caucasus import Caucasus
@@ -112,6 +112,7 @@ from dcs_mission_creator.core.tasking import (
 )
 from dcs_mission_creator.core.tts import VoiceSynth
 from dcs_mission_creator.core.visibility import conceal_country
+from dcs_mission_creator.core.waypoints import Leg
 from dcs_mission_creator.core.weather import Weather, Wind
 from dcs_mission_creator.map_overlay.placement import Placement, Vegetation
 from dcs_mission_creator.map_overlay.query import MapOverlay
@@ -282,16 +283,6 @@ _SANCTUARY_BATTERY = sanc.HAWK
 
 
 @dataclass(frozen=True)
-class _Leg:
-    """One en-route point and how far above the ground it is to be flown."""
-
-    name: str
-    position: Point
-    agl_m: float
-    speed_kph: float
-
-
-@dataclass(frozen=True)
 class _Plant:
     """The works, as the trigger layer sees it: two halls and everything else.
 
@@ -323,8 +314,8 @@ class _Scene:
     shipment_destination: Point
     shipment_watch: tuple[Point, ...]
     recon_post: Point
-    ingress: tuple[_Leg, ...]
-    egress: tuple[_Leg, ...]
+    ingress: tuple[Leg, ...]
+    egress: tuple[Leg, ...]
     overlay: TacticalScene
 
     @property
@@ -929,7 +920,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         ov = scene.overlay
         works = find_clear_spot(
             ov,
-            self._at(*_WORKS_ANCHOR),
+            self.at(*_WORKS_ANCHOR),
             t,
             radius_m=1_500,
             require=Placement(
@@ -970,32 +961,32 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         ewr_positions = (
             ewr_high_ground(
                 scene,
-                self._at(*_EWR_PLAIN_ANCHOR),
+                self.at(*_EWR_PLAIN_ANCHOR),
                 radius_m=15_000,
                 min_elevation_m=600,
                 min_prominence_m=40,
             ),
             ewr_high_ground(
                 scene,
-                self._at(*_EWR_WEST_ANCHOR),
+                self.at(*_EWR_WEST_ANCHOR),
                 radius_m=15_000,
                 min_elevation_m=700,
                 min_prominence_m=40,
             ),
         )
         manpads_positions = (
-            manpads_in_valley(scene, self._at(43.50, 41.77), radius_m=6_000),
-            manpads_in_valley(scene, self._at(43.66, 41.885), radius_m=6_000),
+            manpads_in_valley(scene, self.at(43.50, 41.77), radius_m=6_000),
+            manpads_in_valley(scene, self.at(43.66, 41.885), radius_m=6_000),
         )
         unfixed_pos = find_clear_spot(
-            ov, self._at(*_UNFIXED_SAM_ANCHOR), t, radius_m=6_000
+            ov, self.at(*_UNFIXED_SAM_ANCHOR), t, radius_m=6_000
         )
 
         shipment_origin = convoy_spawn(
             scene, offset(works, north_m=700), radius_m=4_000
         )
         shipment_destination = convoy_spawn(
-            scene, self._at(*_SHIPMENT_DESTINATION), radius_m=8_000
+            scene, self.at(*_SHIPMENT_DESTINATION), radius_m=8_000
         )
         # Two points on the road eight kilometres apart, plus the works. One
         # watch point is satisfied by any hollow that can see one watch point;
@@ -1037,19 +1028,15 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             shipment_watch=shipment_watch,
             recon_post=recon_post,
             ingress=tuple(
-                _Leg(name, self._at(lat, lng), agl, speed)
+                Leg(name, self.at(lat, lng), agl, speed)
                 for name, lat, lng, agl, speed in _CORRIDOR
             ),
             egress=tuple(
-                _Leg(name, self._at(lat, lng), agl, speed)
+                Leg(name, self.at(lat, lng), agl, speed)
                 for name, lat, lng, agl, speed in _EGRESS
             ),
             overlay=scene,
         )
-
-    def _at(self, lat: float, lng: float) -> Point:
-        """A world point from degrees — the units every real place is written in."""
-        return Point.from_latlng(LatLng(lat, lng), self._terrain)
 
     # -- red side: the target -----------------------------------------------
 
@@ -1569,8 +1556,12 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         for section in sections:
             laser.set_code(section, _LASER_CODE)
         overlay = scene.overlay.overlay
-        ingress = self._route_altitudes(scene.ingress, overlay)
-        egress = self._route_altitudes(scene.egress, overlay)
+        ingress = waypoints.agl_profile(
+            scene.ingress, overlay, clearance_m=_LEG_CLEARANCE_M
+        )
+        egress = waypoints.agl_profile(
+            scene.egress, overlay, clearance_m=_LEG_CLEARANCE_M
+        )
         for player in sections:
             self._route_colt(player, scene, ingress, egress)
         route = [
@@ -1584,8 +1575,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self,
         player: FlyingGroup,
         scene: _Scene,
-        ingress: Sequence[tuple[_Leg, float]],
-        egress: Sequence[tuple[_Leg, float]],
+        ingress: Sequence[tuple[Leg, float]],
+        egress: Sequence[tuple[Leg, float]],
     ) -> None:
         """Senaki → the Kodori → Klukhori → TARGET → over the range → Senaki.
 
@@ -1623,39 +1614,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             )
         player.add_runway_waypoint(scene.senaki)
         player.land_at(scene.senaki)
-
-    def _route_altitudes(
-        self, legs: tuple[_Leg, ...], overlay: MapOverlay
-    ) -> list[tuple[_Leg, float]]:
-        """Turn each leg's height-above-ground into an altitude that clears rock.
-
-        pydcs waypoint altitudes are metres **AMSL**, and on this route that is
-        the whole difficulty: the Kodori floor is 700 m, the Klukhori saddle is
-        3,000 and the walls either side run past 3,400, so a plausible-looking
-        "600 m through the valley" is two and a half kilometres of mountain.
-        Stating the height above the ground and reading the elevation under each
-        point is the obvious half of the fix.
-
-        The other half is that DCS ramps linearly between two waypoints, so two
-        points that each clear their own valley floor still draw a chord through
-        the spur the river bends around — which is what both of these rivers do
-        repeatedly. `waypoints.clear_terrain` checks the legs as well as the
-        points and lifts the cheaper end of any that would hit, which on a climb
-        to a pass is the pass end: the low run up the Kodori stays low and only
-        the ramp over the watershed moves. Across this route it lifts exactly
-        one point, by 180 m, on the spur the Teberda bends around.
-        """
-        positions = [leg.position for leg in legs]
-        altitudes = waypoints.clear_terrain(
-            positions,
-            [
-                waypoints.ground_elevation_m(overlay, leg.position) + leg.agl_m
-                for leg in legs
-            ],
-            overlay=overlay,
-            clearance_m=_LEG_CLEARANCE_M,
-        )
-        return list(zip(legs, altitudes))
 
     def _spawn_sanctuaries(
         self,
@@ -1882,13 +1840,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                 "gas before you turn north-west. You will not see me again."
             ),
         )
-        mission_triggers.checkin(
-            m,
-            at_seconds=_SANCTUARY_CHECKIN_S,
-            comment="PALISADE umbrella check-in",
-            voice=self._voice,
-            text=sanc.checkin_text(home, controller="Magic"),
-        )
+        sanc.announce(m, home, at_seconds=_SANCTUARY_CHECKIN_S, voice=self._voice)
         mission_triggers.checkin(
             m,
             at_seconds=_RECON_CHECKIN_S,
@@ -1989,7 +1941,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         Ferret is 53 km from this one.
         """
         zone = m.triggers.add_triggerzone(
-            position=self._at(*_TEBERDA_ZONE),
+            position=self.at(*_TEBERDA_ZONE),
             radius=_TEBERDA_ZONE_R,
             hidden=True,
             name="Teberda ingress",
@@ -2021,7 +1973,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         is standing inside it at mission start.
         """
         zone = m.triggers.add_triggerzone(
-            position=self._at(*_NORTH_ZONE),
+            position=self.at(*_NORTH_ZONE),
             radius=_NORTH_ZONE_R,
             hidden=True,
             name="North of the bend",

@@ -20,6 +20,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, Sequence
 
+from dcs.mapping import LatLng, Point
 from dcs.mission import Mission
 
 from dcs_mission_creator.core import (
@@ -40,6 +41,7 @@ from dcs_mission_creator.core.recon import publish as recon
 if TYPE_CHECKING:
     from dcs.terrain.terrain import Terrain
 
+    from dcs_mission_creator.core.recon import ReconStill
     from dcs_mission_creator.map_overlay.query import MapOverlay
 
 
@@ -72,6 +74,12 @@ class MissionBuilder(ABC):
     #: The theater, set by the subclass `__init__`.
     _terrain: Terrain
 
+    #: The recon still this mission published, if it published one. A class
+    #: attribute rather than an `__init__` line because `None` is immutable and
+    #: three missions were writing the same line; `build_miz` is what actually
+    #: ships it, via `recon.publish_stills`.
+    _still: ReconStill | None = None
+
     def __init__(self, *, players: int = MIN_PLAYERS) -> None:
         if players < MIN_PLAYERS or players > MAX_PLAYERS:
             raise ValueError(
@@ -90,6 +98,26 @@ class MissionBuilder(ABC):
         Returns the overlay the mission's positions came from, which the base
         uses to put take-off and landing waypoints on the terrain.
         """
+
+    def at(self, lat: float, lng: float) -> Point:
+        """One `(lat, lng)` constant as a world `Point` on this mission's theater.
+
+        Public and on the base because a mission's fixed positions should be
+        written in degrees: `daryal_run` shipped two waypoints inside a mountain
+        as raw DCS metres, and there is no way to read `Point(-200000, 863000)`
+        and see a mountain. A `(name, lat, lng, agl)` table can be checked
+        against a chart.
+        """
+        return Point.from_latlng(LatLng(lat, lng), self._terrain)
+
+    def recon_figure_md(self) -> str:
+        """The recon-still figure block for `readme()`, or nothing.
+
+        Empty rather than raising, so `readme()` still works on a builder whose
+        `_assemble` has not run, and at the difficulties whose reveal policy
+        withholds the imagery entirely.
+        """
+        return "" if self._still is None else self._still.markdown()
 
     def slot_summary(self, flight: str) -> str:
         """The `**Players:**` line: how many slots, and what flight they are in.

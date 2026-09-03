@@ -9,7 +9,7 @@ Pass, then down the Terek through the Daryal Gorge between Mt Kazbek
 until the gorge ends about 16 km short of the battery and the player pops
 for the HARM shot. Egress is west across the plain and south up the Ardon
 over the Roki Pass; the whole route is checked against the elevation
-raster (`_CORRIDOR`, `_route_altitudes`). AWACS `Magic` holds a southern
+raster (`_CORRIDOR`, `waypoints.agl_profile`). AWACS `Magic` holds a southern
 race-track. No tanker, no escort, no SEAD support.
 
 Composition (difficulty: ace):
@@ -64,6 +64,7 @@ from dcs_mission_creator.core.placement import load_scene
 from dcs_mission_creator.core.tasking import apply_ai_difficulty
 from dcs_mission_creator.core.tts import VoiceSynth
 from dcs_mission_creator.core.visibility import conceal_country
+from dcs_mission_creator.core.waypoints import Leg
 from dcs_mission_creator.core.weather import Weather, Wind
 from dcs_mission_creator.map_overlay.query import MapOverlay
 from dcs_mission_creator.map_overlay.scene import TacticalScene
@@ -87,7 +88,7 @@ _EGRESS_SPEED_KPH = 800.0
 
 #: How far above the ground the whole flown route has to stay, both at a
 #: waypoint and along the straight leg between two of them. `core/waypoints.py`
-#: enforces it; see `_route_altitudes` for why a mission on this map cannot
+#: enforces it; see `waypoints.agl_profile` for why a mission on this map cannot
 #: write altitudes by hand.
 _LEG_CLEARANCE_M = 150.0
 
@@ -149,15 +150,6 @@ _EGRESS = (
 )
 
 
-@dataclass(frozen=True)
-class _Leg:
-    """One en-route point and how far above the ground it is to be flown."""
-
-    name: str
-    position: Point
-    agl_m: float
-
-
 @dataclass
 class _Scene:
     """Resolved airports + key positions used by every spawn step."""
@@ -169,8 +161,8 @@ class _Scene:
     sa10_site: Point
     shorad: Point
     ewr_pos: Point
-    ingress: tuple[_Leg, ...]
-    egress: tuple[_Leg, ...]
+    ingress: tuple[Leg, ...]
+    egress: tuple[Leg, ...]
     awacs_anchor: Point
     intrusion_center: Point
     overlay: TacticalScene
@@ -592,7 +584,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         home, mozdok_ad = self._spawn_sanctuaries(m, usa, russia, scene, route=route)
 
         self._add_end_triggers(m, sa10=sa10, dodge=dodge)
-        self._add_sanctuary_checkin(m, home)
+        sanc.announce(m, home, at_seconds=200, voice=self._voice)
         sanc.remark_all(m, home, mozdok_ad)
         self._conceal_red(russia)
         briefed_threats = self._draw_plan(
@@ -653,11 +645,11 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         # IP lands at the gorge mouth because that is where the masking stops,
         # not because it is a chosen distance from the site.
         ingress = tuple(
-            _Leg(name, Point.from_latlng(LatLng(lat, lng), t), agl)
+            Leg(name, Point.from_latlng(LatLng(lat, lng), t), agl)
             for name, lat, lng, agl in _CORRIDOR
         )
         egress = tuple(
-            _Leg(name, Point.from_latlng(LatLng(lat, lng), t), agl)
+            Leg(name, Point.from_latlng(LatLng(lat, lng), t), agl)
             for name, lat, lng, agl in _EGRESS
         )
 
@@ -843,8 +835,12 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         )
 
         overlay = scene.overlay.overlay
-        ingress = self._route_altitudes(scene.ingress, overlay)
-        egress = self._route_altitudes(scene.egress, overlay)
+        ingress = waypoints.agl_profile(
+            scene.ingress, overlay, clearance_m=_LEG_CLEARANCE_M
+        )
+        egress = waypoints.agl_profile(
+            scene.egress, overlay, clearance_m=_LEG_CLEARANCE_M
+        )
         # The target steerpoint marks where the battery is *assessed* to be —
         # `plan.estimate`, the same point the map rings and the HSD carries —
         # not where it is. This mission hid every Russian icon, drew its S-300
@@ -867,8 +863,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         self,
         player: FlyingGroup,
         scene: _Scene,
-        ingress: Sequence[tuple[_Leg, float]],
-        egress: Sequence[tuple[_Leg, float]],
+        ingress: Sequence[tuple[Leg, float]],
+        egress: Sequence[tuple[Leg, float]],
         target: Point,
     ) -> None:
         """Vaziani → the gorge → TARGET → the Ardon → Vaziani, per section.
@@ -902,37 +898,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             )
         player.add_runway_waypoint(scene.vaziani)
         player.land_at(scene.vaziani)
-
-    def _route_altitudes(
-        self, legs: tuple[_Leg, ...], overlay: MapOverlay
-    ) -> list[tuple[_Leg, float]]:
-        """Turn each leg's height-above-ground into an altitude that clears rock.
-
-        pydcs waypoint altitudes are metres **AMSL**, and on this map that is
-        the whole difficulty: the gorge floor is 800–2400 m and the walls run to
-        3700, so a plausible-looking "700 m through the valley" is two and a
-        half kilometres of mountain. This mission shipped exactly that. Stating
-        the height above the ground and reading the elevation under each point
-        is the half of the fix that is obvious.
-
-        The other half is that DCS ramps linearly between two waypoints, so two
-        points that each clear their own valley floor still draw a chord through
-        the spur the river bends around — which is what the Terek does four
-        times between Kobi and Balta. `waypoints.clear_terrain` checks the legs
-        as well as the points and lifts the cheaper end of any that would hit,
-        so the descent stays a descent and only the ramps that needed it move.
-        """
-        positions = [leg.position for leg in legs]
-        altitudes = waypoints.clear_terrain(
-            positions,
-            [
-                waypoints.ground_elevation_m(overlay, leg.position) + leg.agl_m
-                for leg in legs
-            ],
-            overlay=overlay,
-            clearance_m=_LEG_CLEARANCE_M,
-        )
-        return list(zip(legs, altitudes))
 
     # -- F10 map briefing ---------------------------------------------------
 
@@ -1004,20 +969,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             terrain=self._terrain,
         )
         return home, mozdok_ad
-
-    def _add_sanctuary_checkin(self, m: Mission, home: sanc.Sanctuary) -> None:
-        """Read the umbrella out once, on the climb-out up the Aragvi.
-
-        Without it the feature is invisible: a cyan ring on the F10 map reads as
-        decoration, and on this route nobody opens the map again after Pasanauri.
-        """
-        mission_triggers.checkin(
-            m,
-            at_seconds=200,
-            comment="RAMPART umbrella check-in",
-            voice=self._voice,
-            text=sanc.checkin_text(home, controller="Magic"),
-        )
 
     def _draw_plan(
         self,

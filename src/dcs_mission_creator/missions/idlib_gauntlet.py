@@ -114,7 +114,6 @@ from dcs_mission_creator.core.recon import (
     Chrome,
     Frame,
     Mark,
-    ReconStill,
     landmark_marks,
     publish as recon,
     road_column,
@@ -331,8 +330,6 @@ class IdlibGauntlet(MissionBuilder):
         super().__init__(players=players)
         self._terrain = Syria()
         self._voice = VoiceSynth()
-        #: Set by `_render_recon`; `readme` degrades to no figure without it.
-        self._still: ReconStill | None = None
 
     # -- in-game and README briefings ---------------------------------------
 
@@ -530,14 +527,6 @@ FREQUENCIES
   from check-in will be stale.
 """
 
-    def _recon_figure_md(self) -> str:
-        """The radar-still figure block, or nothing if no still was published.
-
-        Empty rather than raising, so `readme()` still works on a builder whose
-        `_assemble` has not run and at difficulties that withhold the imagery.
-        """
-        return "" if self._still is None else self._still.markdown()
-
     def readme(self) -> str:
         bx, by = self._terrain.bullseye_blue["x"], self._terrain.bullseye_blue["y"]
         return f"""# Idlib Gauntlet
@@ -664,7 +653,7 @@ Reaper feed — the belts are located to a few kilometres, not to the metre, and
 the map rings are marked as estimates for that reason. It is not a complete
 picture, and the last bullet is there to say where it is thin.
 
-{self._recon_figure_md()}
+{self.recon_figure_md()}
 
 - **The line:** partner-force units are in contact along the whole frontage, so
   the trace on your map is good. Armour, 23 mm guns and Igla teams hold the
@@ -2398,13 +2387,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         the cyan ring is easy to take for decoration and nobody opens the F10
         map again after push. Same argument as `core/jtac`'s `push_at_s`.
         """
-        mission_triggers.checkin(
-            m,
-            voice=self._voice,
-            at_seconds=120,
-            comment="KEEPER umbrella check-in",
-            text=sanc.checkin_text(home, controller="Magic"),
-        )
+        sanc.announce(m, home, at_seconds=120, voice=self._voice)
         mission_triggers.checkin(
             m,
             voice=self._voice,

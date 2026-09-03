@@ -110,7 +110,6 @@ from dcs_mission_creator.core.recon import (
     Chrome,
     Frame,
     Mark,
-    ReconStill,
     landmark_marks,
     publish as recon,
     road_column,
@@ -318,8 +317,6 @@ class CoastalCover(MissionBuilder):
         super().__init__(players=players)
         self._terrain = Caucasus()
         self._voice = VoiceSynth()
-        #: Set by `_render_recon`; `readme` degrades to no figure without it.
-        self._still: ReconStill | None = None
 
     # -- in-game and README briefings ---------------------------------------
 
@@ -459,14 +456,6 @@ FREQUENCIES
   Batumi tower  : per kneeboard
 """
 
-    def _recon_figure_md(self) -> str:
-        """The radar-still figure block, or nothing if no still was published.
-
-        Empty rather than raising, so `readme()` still works on a builder whose
-        `_assemble` has not run and at difficulties that withhold the imagery.
-        """
-        return "" if self._still is None else self._still.markdown()
-
     def readme(self) -> str:
         bx, by = self._terrain.bullseye_blue["x"], self._terrain.bullseye_blue["y"]
         return f"""# Coastal Cover
@@ -557,7 +546,7 @@ as estimates. The air and radar picture is not from the feed at all: that is
 overnight signals work, and the reserve is partner-force reporting nobody has
 confirmed.
 
-{self._recon_figure_md()}
+{self.recon_figure_md()}
 
 - **Air:** Sukhumi-Babushara holds a MiG-29S pair on alert, current-generation
   missiles, flown by an experienced crew. They will come once we are committed
@@ -722,7 +711,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
         self._add_intro_voice(m)
         self._add_support_checkins(m)
-        self._add_sanctuary_checkin(m, home)
+        sanc.announce(m, home, at_seconds=150, voice=self._voice)
         sanc.remark_all(m, home, sukhumi_ad)
         self._add_tacp_readout(m, target=red.pol)
         self._arm_tacp_laser(m, tacp=tacp, target=red.pol)
@@ -1744,21 +1733,6 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             terrain=self._terrain,
         )
         return home, sukhumi_ad
-
-    def _add_sanctuary_checkin(self, m: Mission, home: sanc.Sanctuary) -> None:
-        """Tell the player the umbrella is there, once, on the climb-out.
-
-        Without this the feature is invisible: a cyan ring on the F10 map is
-        easy to read as decoration, and nobody opens the map again after push.
-        Same argument as `core/jtac`'s `push_at_s`.
-        """
-        mission_triggers.checkin(
-            m,
-            at_seconds=150,
-            comment="BULLDOG umbrella check-in",
-            voice=self._voice,
-            text=sanc.checkin_text(home, controller="Magic"),
-        )
 
     # -- F10 map briefing ---------------------------------------------------
 
