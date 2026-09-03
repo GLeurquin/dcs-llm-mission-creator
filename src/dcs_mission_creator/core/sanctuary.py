@@ -69,6 +69,48 @@ cartridge is written from, so nobody re-types a range) and `build_sanctuary`
 names as having to stay in play. Pick the system to fit the geometry; do not
 pick the biggest one and hope.
 
+**`keep_clear` refuses in three ways, and each is telling you something
+different about the layout.** They were all found by wiring this into every
+mission, and in every case the refusal was right:
+
+- **On the red side, the objective is often *on* the enemy field**, and then no
+  system fits: `eastern_shield`'s depot is the Kuweires apron, `idlib_gauntlet`'s
+  convoy off-loads 4 km from Taftanaz, `daryal_run`'s S-300 is 12 km from
+  Beslan, `kodori_strike`'s FOB 9 km from Sukhumi. Put the sanctuary on the field
+  the **fighters recover to** instead — that is the one it is for.
+  `ansariyah_works` is the same lesson one step further: the natural alert field
+  was Bassel Al-Assad, 21 km from the briefed coast crossing, so an S-125 there
+  would have reached the corridor and the check refused it. Moving the alert
+  commitment to Hama, 72 km behind the range, is better doctrine as well as legal
+  geometry — coastal fighters parked inside a raid's own axis are the first thing
+  that raid kills.
+- **The front line can be the binding constraint.** `idlib_gauntlet`'s Hatay is
+  52 km from the Syrian forward line — closer to the player's own field than to
+  his target — so a Hawk there stops 2.5 km short of it and is refused. It gets
+  NASAMS instead (15 km: cover for an approach rather than for a fight) and the
+  real recovery umbrella is a Hawk at Incirlik, 105 km back. An umbrella touching
+  the front would shoot into the ground battle the mission spends 90 km of
+  frontage setting up, and the seam would stop mattering.
+- **Airfields are on coasts.** Sochi-Adler's threat axis runs out over the Black
+  Sea, so the doctrinal 4.5 km offset put the whole battery in the water and
+  `snap_units_clear` could not save it — every cell inside its 250 m search
+  radius was water too. `_emplace` walks the offset back *along the same bearing*
+  (4.5 -> 3 -> 1.5 -> 0 km) rather than sideways, because sideways would silently
+  take the battery off the axis it exists to cover. Batumi and Sochi both needed
+  it.
+
+**A sanctuary can be a piece of the briefing rather than a backstop**, and
+`ansariyah_works` is the case worth reading. Its AO is 279 km away, so a
+Patriot's 100 km cannot reach anything the enemy needs left standing and
+`keep_clear` passes trivially. What it buys instead is that *every* friendly
+station fits inside one envelope — AWACS at 95 km, tanker at 78, CAP at 88,
+Paphos at 48 — while the red S-200's briefed ring reaches to within about 90 km
+of the field. The sixteen kilometres between those two circles is the only sky in
+the mission that is inside our missiles and outside theirs; it is where the
+tanker and the escort hold, and it is the whole answer to "why can the CAP not
+come with me". A sanctuary sized to make a *band* rather than a refuge, and the
+player can read both rings off the F10 map.
+
 Design rule, as everywhere else in `core/`: absolute world `Point` / pydcs
 `Airport` and `Country` in, built groups out. No faction abstraction, no
 policy — which field, which system and what the briefing says about it are the

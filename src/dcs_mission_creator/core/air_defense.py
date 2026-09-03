@@ -27,6 +27,34 @@ that nudges units off canopy/water on rough terrain. Absolute `Point` in, a
 built `VehicleGroup` out. There is no faction abstraction anywhere in the
 project, so the caller passes the raw pydcs `Country` (red or blue) exactly as
 it does for `mission.vehicle_group(...)`.
+
+**Dispersion is two families of distance, not one number.** A prepared, fixed
+site is genuinely compact — an S-75 or S-125 fires from built revetments 60-100 m
+from its fire-control radar, and spreading those would be less realistic, not
+more — so what disperses there is the **search radar and command post**, pushed
+250-400 m off the position. A self-propelled system has no revetments at all: its
+TELARs deploy across 300-400 m, and that dispersion is what keeps them alive.
+Every placement is wobbled (`_JITTER_DEG` / `_JITTER_FRAC`) because a perfectly
+even ring at a constant radius reads as generated through a targeting pod, and
+because a site with a real gap in its fan means the axis a stick of bombs is laid
+down actually matters. The launcher ring is offset half a step so no launcher
+shares a bearing with a radar.
+
+`disperse_site` exists because pydcs's own `VehicleTemplate` sites are the worst
+heap here: `sa6_site` parks both launchers **30 m** from the radar, and
+`sa10_site` / `sa11_site` put everything inside 100 m, so one CBU or a stick of
+two Mk-82s takes the battery and the player never has to find the individual
+vehicles.
+
+Two bounds hold all of it honest. The footprint stays well inside the 2 km offset
+`PlanOverlay.threat` already applies to an estimated ring at `trained`, so
+dispersing a site cannot make the drawn ring or the HSD cartridge wrong. And
+`snap_units_clear` refuses to place two units of a group within
+`MIN_UNIT_SEPARATION_M`, or to move one further than its search radius: at 65 m
+neither mattered, but at 300 m several units land in the same treeline and
+`find_placement` *samples* cells rather than sorting them, so they were handed the
+same one — a wooded coastal ridge turned `abkhaz_sweep`'s SA-6 into a 1.3 km smear
+with two vehicles inside each other. A unit left in the canopy is the smaller lie.
 """
 
 from __future__ import annotations

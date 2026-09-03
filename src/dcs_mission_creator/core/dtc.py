@@ -54,6 +54,35 @@ The F/A-18C is deliberately absent: it has a data cartridge too, but its
 threats live on the SA page as `MEZ_THRTS` with a different descriptor and
 different section names — a second table, not a parameter. The AH-64D and A-10C
 have no pre-planned threat ring at all.
+
+**Draw order is a total order, and it had to be made one.** `plan_steerpoints`
+listed all the marks and then all the orbits, which made the documented "a
+mission that cares which point survives draws it first" contract *false for
+anything that was a line*: `daryal_run` flies twenty-one waypoints and has four
+of twenty-five slots left, and its marshal leg — drawn before every other point
+on the plan — was dropped behind a vague CAP area drawn twenty lines later.
+`PlanLine.seq` and `PlanMark.seq` number both lists from one counter and the
+tab interleaves by it.
+
+**The zulu offset is the other thing that is silently wrong if you skip it.**
+The editor's own DTC manager builds every time it computes from
+`start_time - SummerTimeDelta * 3600`, because the jet reads zulu, and pydcs
+carries that offset as `Terrain.utc_offset` (Caucasus +4, Syria +3). Reading the
+mission's local `start_time` straight through puts every steerpoint time three
+or four hours out and still looks like a plausible time — which is why the
+kneeboard route card prints the take-off in both (`08:40L / 05:40Z`) and labels
+its own column `ETA L`.
+
+**`GEO_LINES` is the scarce tab**: twenty-five vertices shared between four
+polylines. A **front line** is what it is really for — the one piece of enemy
+geometry with a shape, drawn precisely at every difficulty and carried nowhere
+else in the cockpit — so it can never be the line that loses. An orbit takes a
+line only because in most missions there is one going spare, and it adds what its
+steerpoint cannot: which way the pattern runs and how long it is. Line index is a
+colour (the editor's own: L1 white, L2 black, L3 red, L4 green), so enemy
+geometry asks for red and the friendly plan for green. A line over its share is
+thinned with both ends kept — losing the end of a front line would move it, and
+losing a bend only coarsens it.
 """
 
 from __future__ import annotations

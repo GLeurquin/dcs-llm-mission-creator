@@ -30,6 +30,27 @@ Only client-flown routes want a deck-level target waypoint: an AI flight flies
 the altitudes on its route, so grounding one of its turning points flies it
 into the terrain. `snap_base_waypoints` is safe for every group — take-off and
 landing points are ground events already.
+
+**The en-route altitudes are the ones that bite, and `daryal_run` is the case.**
+Every pydcs altitude is metres AMSL, so "800 m through the gorge" is eight
+hundred metres above the *sea*; that mission shipped a route with two of its
+three valley waypoints inside a mountainside, one by 2.7 km, under a briefing
+that described flying up the Daryal Gorge. Nothing catches it by eye, because the
+coordinates were raw map metres and there is no way to read
+`Point(-200000, 863000)` and see a mountain. Two consequences for any low route:
+
+- **Write the corridor in degrees**, not DCS metres, when its points are real
+  places. A `(name, lat, lng, height above the ground)` table can be checked
+  against a chart — which is also how that mission's "fly the Georgian Military
+  Road" stopped being a claim the route did not honour. `Leg` and `agl_profile`
+  below are that shape.
+- **Per-waypoint is only half of it.** DCS ramps linearly between waypoints, so
+  two points that each clear their own valley floor still draw a chord through
+  the spur the river bends around — which is what the Terek does four times
+  between Kobi and Balta. `clear_terrain` samples every leg as well as every
+  point and lifts the **cheaper end** of any that would hit: cheaper, because
+  lifting the lower end of every offending leg flattens a descent into a cruise
+  at ridge height, and on a route like that the descent *is* the terrain masking.
 """
 
 from __future__ import annotations

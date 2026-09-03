@@ -184,6 +184,30 @@ _LOADED = "_dcsmc_iads_prelude"
 # offsets an estimated ring by 2 km at `trained` and `core/dtc.py` builds the
 # cockpit ring from that same return, so a displacement well inside it leaves
 # the map, the cartridge and the ground truth saying one thing.
+#
+# Where the numbers came from. Two real HARM flight times out of a sortie's
+# `dcs.log` — 19.75 km in 27.5 s, ~45 km in 56.5 s — measured against the SA-6's
+# recognition band, which is what found two things wrong with the band itself:
+#
+#   - `delay_s` was flat, so a crew got the same half-minute to notice a launch
+#     twelve kilometres overhead as one sixty kilometres away, and a shot from
+#     inside the missile engagement zone came out unanswerable — at 20 km the
+#     crew reacted 54 % of the time and moved nothing. That is not how the
+#     historical crews worked: a launch close in is a rocket motor and a smoke
+#     trail, and in the Gulf a *bogus* "Magnum" call was often enough to make
+#     operators power down, so the trigger was suspicion rather than
+#     observation. The band now tightens toward 45 % of the stated one as the
+#     launch closes, floored at six seconds — somebody has to look up, decide
+#     and reach the switch — and a launch the site could not see itself keeps
+#     the slower reading (x 1.3), because being told takes longer than looking.
+#     At 20 km that is 9-25 s instead of 14-40, and the duel becomes a duel:
+#     100 % react, 87 % get clear of the aimpoint, median 67 m. Inside 12 km it
+#     is still a knife fight, which is right.
+#   - `JOCKEY_SPEED_MS` (in `core/lua/iads.lua`) was 5.5 m/s, at which a crew
+#     reacting at the MEZ edge moved twelve metres — the feature invisible
+#     exactly where a player looks for it. It is 9.0 m/s (~32 km/h) now: a hasty
+#     dash off an aimpoint rather than a road march, and a Kub TELAR is good for
+#     40 km/h cross-country.
 _JOCKEY_M_DEFAULT = 250.0
 _JOCKEY_M_MAX = 500.0
 

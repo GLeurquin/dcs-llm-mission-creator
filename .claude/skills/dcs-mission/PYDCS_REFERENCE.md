@@ -160,8 +160,9 @@ hand (§4.3).
 > whole sortie in afterburner: at those speeds a fighter is far below
 > best-climb speed and deep on the back side of the drag curve, and the AI
 > holds the commanded altitude on the throttle. Sanity bound:
-> `FlyingType.max_speed` is km/h as well (F-15C 2650, F-16C 2120, A-10C
-> **720**, E-3A 860, KC-135 980, MQ-9 400), so a cruise or orbit speed sits
+> `FlyingType.max_speed` is km/h as well (F-15C 2650, F-16C 2120,
+> F/A-18C 1950, MiG-29S 2450, Su-27 2500, A-10C **720**, E-3A 860,
+> KC-135 980, MQ-9 400), so a cruise or orbit speed sits
 > around 0.3–0.4 of it and anything under ~0.2 is the unit error. Note the
 > A-10C bound especially — 400 kt is 740 km/h, *above* its never-exceed — so
 > the correction is per-airframe km/h values, never a blanket ×1.852.
@@ -733,69 +734,20 @@ are **offsets relative to that anchor** — the first is usually
 
 ---
 
-## 12. Project-owned helpers
+## 12. The project's own wrappers
 
-Two project helpers wrap the raw pydcs API above — **prefer them** over
-calling §11 / triggers directly. Their contracts live in
-[CLAUDE.md](../../../CLAUDE.md) (they are project convention, not pydcs):
+Several project helpers wrap the APIs above, and a mission should call those
+rather than these. Which ones exist and what they promise is **CLAUDE.md's**;
+this file describes only what pydcs does. The rule for reading the two together:
+where a paragraph says "pydcs does X wrong, the project does Y instead", the
+defect is here and the remedy is there, and neither restates the other.
 
-- **`PlanOverlay`** ([core/map_draw.py](../../../src/dcs_mission_creator/core/map_draw.py))
-  — wraps §11 with blue-layer placement + difficulty-scaled enemy reveal.
-- **`VoiceSynth`** ([core/tts/synth.py](../../../src/dcs_mission_creator/core/tts/synth.py))
-  — TTS → cached WAV → `SoundTo*` action on a trigger rule.
-- **air-defense builders** ([core/air_defense.py](../../../src/dcs_mission_creator/core/air_defense.py))
-  — `build_sa2/sa3/sa5/sa8/sa13/sa15/sa19_site`,
-  `build_nasams/irist/roland/rapier/hq7_site` `(m, country, position, heading,
-  *, launchers=…, skill=…, overlay=…, terrain=…)`. Fills the SAM sites pydcs's
-  `VehicleTemplate` lacks (§5). Absolute `Point` in, `VehicleGroup` out.
-- **AI-tasking wrappers** ([core/tasking.py](../../../src/dcs_mission_creator/core/tasking.py))
-  — `apply_ai_difficulty(group, difficulty)` (§6.2 dial),
-  `fac_attack_group(fac, target, …)` (§6.1), `scramble_on_trigger(m, group,
-  *conditions)` (§6.3). Only the ones with real project policy — carrier/nav
-  beacons stay raw pydcs (§6.5).
+Four items from the old gotcha checklist that are not stated in the body above,
+kept because there is nowhere else for them:
 
----
-- **laser codes** ([core/laser.py](../../../src/dcs_mission_creator/core/laser.py))
-  — `DEFAULT_CODE` / `AI_JTAC_CODE` (1688), `set_code(flight, code)`,
-  `laser_guided_stores(flight)`. Owns which airframes can hold a code at all
-  (§6.1) so a briefing cannot quote one nothing is on.
-- **Recon stills** — `core/recon` (`sensor_still`, `Frame`, `Mark`,
-  `Chrome`, `road_column`) renders a wide-area radar product from the overlay
-  and attaches it as a briefing slide. Positions come only from
-  `PlanOverlay.detections`; never read spawn positions directly.
-
-## 13. Gotcha checklist
-
-- `cap_flight` does **not** exist → `patrol_flight(patrol_type=…)`.
-- Airports dict-indexed, display names: `m.terrain.airports["Batumi"]`.
-- `m.country("USA")` takes a **string**.
-- `StartType` has no `Hot`; `Warm` is hot-ramp.
-- `group_size` caps at 4 for fighters; ≥5 AI desyncs formation output.
-- Loadouts come from the DCS install `$DCS_INSTALL_DIR` points at; unset, the
-  jets fly empty. Spelling a loadout out means clearing `u.pylons` first —
-  group creation already applied a task default (§4.5).
-- A JTAC's laser code is **not** a task parameter — the AI lases 1688, and the
-  F-16C/F/A-18C/A-10C carry no laser-code property either (§6.1). Brief that
-  number or brief nothing; `laser.set_code` refuses the alternative.
-- `Point` is world meters, not lat/lon; third ctor arg is the terrain.
-- `m.save(path)` does **not** mkdir the parent.
-- Resources reach the `.miz` via `zipf.write`, which records the source file's
-  **mtime** (and, through `ZipInfo.from_file`, its mode) into the archive — so a
-  re-rendered or re-downloaded asset changes the package even when its bytes are
-  identical. `core/recon` pins both with `os.utime` / `os.chmod`; there is no
-  `ZipInfo` hook on the `MapResource` path.
-- `Mission.save` writes its own five entries with `zipfile.writestr`, which
-  stamps each with the **current time**. Two builds more than two seconds apart
-  therefore produce different archive bytes with identical entry contents —
-  compare entries, not file hashes, when checking reproducibility.
-- `m.save(path)` writes a fixed set of zip entries (`mission`, `options`,
-  `warehouses`, `l10n/DEFAULT/*`, `KNEEBOARD/…`) with no hook for another file,
-  so anything else the `.miz` must contain — an F-16C data cartridge,
-  `DTC/<name>.dtc` (`core/dtc.py`) — is appended to the archive after the save.
-- `Unit.dict()` emits a fixed field list, so a mission-file unit key pydcs does
-  not model (`datalinks`, `DTC`) needs `core/unit_extras.py`.
-- No `mission.duration` — end via triggers or bingo fuel.
 - `Coalition` is in `dcs.action`, not `dcs.coalition`.
 - `TriggerContinious` and `Preceptions` are spelled that way in the source.
-- Never commit `.miz` (binary, gitignored).
-- Run `ruff check`, `ruff format --check`, `ty check` on `src/` after edits.
+- `group_size` caps at 4 for fighters; five or more desyncs the formation
+  output. `mission_kit.player_flight` splits sections for that reason.
+- There is no `mission.duration` — a mission ends through triggers or bingo
+  fuel.

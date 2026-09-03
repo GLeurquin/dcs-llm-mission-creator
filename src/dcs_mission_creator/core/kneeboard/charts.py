@@ -30,6 +30,12 @@ way. Two rules, and the second is what makes Beirut work: a field is covered if
 it do (`Beirut-Rafic Hariri` against `Rafic_Hariri_Intl`). The all-words rule
 alone is what keeps `Krasnodar-Center` from being declared covered by
 `Krasnodar-Pashkovsky`'s chart.
+
+**What ED ships is not "all fields".** Caucasus has 21, with a ground diagram
+*and* an approach chart for each; Syria has **three** — Akrotiri, Incirlik and
+Beirut — and Marianas has one theatre map and no field at all. So
+`idlib_gauntlet`'s player, who starts at Hatay, had no page about their own
+field.
 """
 
 from __future__ import annotations

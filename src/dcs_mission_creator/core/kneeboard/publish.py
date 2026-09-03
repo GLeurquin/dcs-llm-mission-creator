@@ -30,6 +30,25 @@ no shipped chart of: on Caucasus that is none, and on Syria it is Hatay, where
 
 The PNGs also land in `<output>/kneeboard/`, next to the README, because a card
 that cannot be read outside the game is hard to check and impossible to review.
+
+**A remark's wrap is a floor, not a licence.** Wrapping guarantees nothing is
+silently truncated — which it was, until `coastal_cover` put two long remarks on
+the card and lost the halves that mattered: the laser code survived and "where to
+find the readout" ran off the right edge. The *ceiling* is one line of
+`page.COLUMNS`, because a mission with a primary field, a divert and a JTAC
+carries five remarks and one that runs over costs two lines of the block. Both
+halves matter because they fail differently: without the floor a remark loses its
+back half and nobody can tell, and without the ceiling every remark is two lines
+and the block is prose.
+
+The test for a line that will not fit is not "shorten it" but **"which half of
+this is a fact the page cannot derive, and which half is *explaining* the
+fact"** — the first stays on the card, the second is briefing prose and is
+probably already in the README. `coastal_cover`'s readout line was 109
+characters, of which 35 explained that DCS's own nine-line is a grid; the README
+had said so all along, so the card lost that clause and kept the menu path.
+Verify on the rendered page rather than by counting characters: the width is a
+function of the font, so the card is what knows.
 """
 
 from __future__ import annotations

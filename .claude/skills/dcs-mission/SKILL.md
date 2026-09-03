@@ -1,3 +1,16 @@
+- **Count the magazine before you set the bandit count.** Numeric balance is the
+  one dial with an arithmetic ceiling. Two numbers do it: **six** air-to-air
+  stations on an F-16C with two wing tanks (4 and 6 take no missile at all), and
+  **two shots per kill** against `Skill.Excellent` crews. So a clean jet is worth
+  three kills and one carrying a HARM or a bomb on 3/7 is worth two. Sum it with
+  `MissionBuilder.air_to_air_shots(_FITS)`, never by multiplying a constant by
+  the slot count, and scale the opposition off the answer. Over it the mission is
+  not ace, it is arithmetically unwinnable. Three legitimate fixes — derive the
+  enemy count from the magazine, add friendly AI (but "no escort, no tanker" may
+  *be* the composition), or **task less than the airspace**: make the objective
+  the element that gates the campaign effect and let the rest be a threat to
+  survive rather than a required kill. The arithmetic and the trigger
+  consequences are in CLAUDE.md, *Force balance*.
 ---
 name: dcs-mission
 description: >
@@ -53,7 +66,7 @@ Briefings and in-game text name **factions** (USA, USAF, Russia, Ukrainian,
 …), never `red` / `blue`. The words `blue` / `red` exist only in pydcs API
 calls (`airport.set_blue()`, `Coalition.Blue`, `bluetask_text`) and code
 comments — never in `readme()`, `set_description_text`, side-task bodies, or
-trigger messages. Full mapping in CLAUDE.md.
+trigger messages.
 
 ## Briefing craft — intel, not implementation
 
@@ -588,11 +601,11 @@ Mechanically (helpers in CLAUDE.md, API in PYDCS_REFERENCE.md §4.3):
 ```python
 waypoints.add_ground_waypoint(player, scene.route_mid, overlay=ov,
                               speed=750, name="CONVOY AO")
-waypoints.snap_base_waypoints(m, ov)   # once, last step before m.save(...)
 ```
 
-`snap_base_waypoints` walks every flight in the mission, so a flight added
-later cannot miss it — call it in `build_miz` right after `_add_briefing`.
+Base waypoints need no call at all: the base class snaps every flight's take-off
+and landing to field elevation after `_assemble` returns, so a flight added
+later cannot miss it.
 
 **Client routes only** for ground-target steerpoints. An AI flight actually
 flies the altitudes on its route, so a deck-level turning point flies it into
@@ -603,6 +616,45 @@ ground events already.
 While you are checking altitudes, check the *en-route* ones against the
 terrain too: a "valley run" waypoint at 800 m over ground that is 2600 m high
 is inside the mountain. `overlay.elevation_at(point)` is the check.
+
+## Altitude is a threat parameter, and the numbers are in the game
+
+A mission that says "fly low" is making a claim about what the enemy can do, and
+DCS will settle it either way. Three facts decide whether the claim survives
+contact, and all three are checkable before anything is built.
+
+**Every SAM's floor, ceiling and minimum range are in the install.** The missile
+tables under `<DCS>/CoreMods/tech/TechWeaponPack/Database/Weapons/*.lua` carry
+`H_min`, `H_max`, `D_min` and `D_max` per round, and they are the honest source
+for a briefing line. The S-200's `H_min = 300.0`, `D_min = 17e3`,
+`D_max = 240e3` is what `ansariyah_works` is built on: it reaches most of the way
+from Syria to Cyprus and it cannot bring a missile below three hundred metres, so
+that mission's hard deck is a number out of the game rather than a number that
+sounded right. Grep the table before promising the player anything about an
+envelope.
+
+**DCS has no earth curvature, so there is no radar horizon over water.** A
+wave-top run across 250 km of open sea is *not* hidden from a coastal radar the
+way it would be in life — line of sight is terrain only, and there is no terrain
+out there. So a mission may promise a **floor** ("they cannot shoot you below
+three hundred metres") and may promise **terrain masking** (measurable against
+the elevation raster), and may not promise concealment over water. The useful
+move is to spend the detection rather than deny it: in `ansariyah_works` the
+coastal EWR *does* call the crossing, and that call is what rolls the target
+convoy and scrambles the alert pair, so the whole second half of the mission is
+caused by the player being exactly where he was briefed to be.
+
+**A transition waypoint carries the altitude it starts at, not the one it ends
+at.** DCS ramps linearly between waypoints, so a 6,500 m point followed by a 60 m
+point 200 km later puts the jet above the floor for nine tenths of the leg — and
+the route card then contradicts the ROE printed two inches under it. A descent or
+a climb needs a point at each end: `LETDOWN` at cruise and `DECK` at the deck,
+and on the way home `CLIMB` at the **deck**, with the climb on the leg after it.
+The same arithmetic decides whether the descent is flyable at all — a 6.8 % idle
+descent from 6,500 m needs about 95 km of run, which is what fixes where `DECK`
+goes. Where the geometry leaves no room, because the threat ring is wider than
+the distance available, say so in the briefing and price it rather than drawing a
+profile nobody can fly.
 
 ## Waypoint speeds are a flight profile
 
@@ -654,43 +706,27 @@ genuinely buys nothing — a bombed-up strike pair — set
 CAP or interceptor, which needs it in a merge, and only on a flight whose route
 already avoids the live rings.
 
-Sanity-check every leg against `FlyingType.max_speed` (km/h). On a supersonic
-fighter a cruise or orbit speed is **0.30–0.40** of it; above ~0.40 the jet is
-holding the profile in afterburner. Subsonic types are exempt — an E-3A cruises
-at 0.86 of its `max_speed` and has no afterburner to reach for.
-
-**Check the ratio per airframe, not the number.** The fast jets are not
-interchangeable: 800 km/h is 0.38 on an F-16C (2120) and 0.41 on an F/A-18C
+**Check the ratio per airframe, not the number.** On a supersonic fighter a
+cruise or orbit speed is **0.30–0.40** of `FlyingType.max_speed`; above ~0.40 it
+is holding the profile in afterburner, and subsonic types are exempt (an E-3A
+cruises at 0.86 of its own and has nothing to reach for). But the fast jets are
+not interchangeable: 800 km/h is 0.38 on an F-16C (2120) and 0.41 on an F/A-18C
 (1950), so a package that gives the whole flight "800" puts only the Hornet in
 burner. Weigh the loadout too — a jet with two bags and four LGBs belongs at the
-bottom of the band, a clean CAP at the top.
+bottom of the band, a clean CAP at the top. The per-airframe figures are in
+PYDCS_REFERENCE.md §4.2; `dcs-mission-creator audit` checks both bounds.
 
 ## Laser codes: one number, and the briefing says it
 
 A mission that puts a laser-guided weapon on the jet is making two claims — the
-controller's spot is on code N, and the bombs will track it. **Both are 1688,
-and neither is negotiable in the mission file:**
-
-- **A DCS AI JTAC or FAC(A) lases on 1688.** The ME's own `FAC - Attack Group`
-  action takes `groupId` and `weaponType` and nothing else
-  (`MissionEditor/modules/me_action_db.lua`), and pydcs's `FACAttackGroup` adds
-  only designation, frequency, callsign and datalink. There is no code field, so
-  whatever the briefing says, the spot is on the game's default.
-- **The F-16C, F/A-18C and A-10C carry no laser-code property**, so their
-  seekers come up on that same default and the pilot retunes in the cockpit.
-  Only four families in pydcs expose the code as a mission-file field
-  (`AddPropAircraft`): the AV-8B, the JF-17, the F-4E and the F-15E — and every
-  one of them also defaults to 1688.
-
-So use `laser.DEFAULT_CODE` for the mission's one code, and call
+controller's spot is on code N, and the bombs will track it. **Both are 1688**,
+and neither is negotiable in the mission file: a DCS AI JTAC lases on that and
+nothing else, and the F-16C, F/A-18C and A-10C carry no laser-code property, so
+their seekers come up on it too. Use `laser.DEFAULT_CODE`, and call
 `laser.set_code(flight, code)` on **every** flight carrying a laser-guided
-weapon, the AI strike pair included. On an airframe with no property it writes
-nothing and refuses a code the jet would never come up on, which is the failure
-it exists to catch: `kuban_forge` briefed `Ferret` on 1511 in the README, the
-in-game briefing, a radio call and a kneeboard remark, while the controller
-lased 1688 and the player's four GBU-12s came up on 1688. Nothing in the game
-says so — from the cockpit a bomb that tracks nothing looks exactly like a bomb
-that failed to guide.
+weapon, the AI strike pair included — it refuses a code nothing in the package
+would be on. (Why, and which four airframes are the exception: CLAUDE.md
+*Laser codes*.)
 
 **Then say the number out loud, on the bombs' side as well as the spot's.**
 "`Pinpoint 1-1` lases on 1688" tells the player half of what he needs; the other
@@ -709,28 +745,14 @@ deliberately draw back exactly as much as the briefing claims.
 
 ### Hide the enemy everywhere
 
-Every red group — aircraft, vehicles, ships, statics, EWR, SAM sites,
-reserves — gets all three map channels turned off. Do it in one
-`_conceal_red` step near the end of `build_miz` (after the spawns, before
-`_draw_plan`), using the project helper so nothing is missed as the mission
-grows:
+Every enemy group — aircraft, vehicles, ships, statics, EWR, SAM sites,
+reserves — has all three map channels turned off, and **the base class does it
+for the whole enemy coalition**, so there is nothing to remember and no
+late-activated reserve to forget. What matters design-side:
 
-```python
-from dcs_mission_creator.core.visibility import conceal_country
-
-def _conceal_red(self, russia: Country) -> None:
-    """Keep every Russian group off the F10 map, the planner and the datalink."""
-    conceal_country(russia)          # or conceal_country(russia, syria)
-```
-
-- `conceal_country(*countries)` sweeps every group the country owns;
-  `conceal(*groups)` does the same for a hand-picked list (and skips `None`).
-  Both set `hidden` / `hidden_on_planner` / `hidden_on_mfd` — see CLAUDE.md
-  for the helper, PYDCS_REFERENCE.md §5 for the raw attributes.
 - Hiding is cosmetic. The group still spawns, radiates, moves and shoots.
-- It covers **late-activated and scrambled groups too** — an unhidden reserve
-  sits on the planner map spoiling the reaction before it ever launches.
-  That's the reason to sweep by country rather than by hand.
+- It covers late-activated and scrambled groups too — an unhidden reserve sits
+  on the planner map spoiling its own reaction before it ever launches.
 - Friendly groups stay visible — a flight really does see its own package.
   On veteran / ace you may also pull friendly AI off the planner so the
   player flies the briefed plan rather than reading it off the map.
@@ -971,6 +993,22 @@ Rules:
 - Two-seat modules (F-14B, AH-64D): pydcs still spawns one unit per
   `group_size`. The second seat is occupied via a separate MP slot in-game,
   not via pydcs.
+
+## Buildings as objectives, and the spacing that makes them one
+
+A factory, a depot, a hardened shed is `m.static_group(...)` rather than
+vehicles, and two things follow that a vehicle objective never raises.
+
+**Spacing is the design.** Aimpoints closer together than one weapon's effect
+are not separate objectives, they are one objective with extra steps.
+`ansariyah_works` puts its three buildings 400–430 m apart precisely so two
+2,000 lb bombs cannot take all three, which turns the second bomb into a briefed
+decision — this month's production, or next year's — instead of a lucky pattern.
+
+**Surround them with compound that is in no trigger** (tanks, a crane,
+containers), so finding the right roof through the pod is a task rather than a
+formality. The mechanics — which condition resolves a static, and why the
+compound must be concealed — are in CLAUDE.md.
 
 ## The flight splits its loadout
 

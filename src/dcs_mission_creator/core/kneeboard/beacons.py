@@ -30,6 +30,22 @@ Two details that decide whether the numbers are right:
 This is a reader, not a redistributor: nothing from the install is copied into
 the generated mission, only frequencies and bearings computed from it and
 printed on a page.
+
+An ILS installation is **grouped by callsign** (`IVI` and `IVZ` are the two ends
+of Vaziani) rather than through `RunwayApproach.beacons`, which is empty at
+several fields — Vaziani and Hatay both come through with none. That pairing is
+also the only **surveyed runway geometry** available offline: the glideslope sits
+a few hundred metres in from its threshold and the localizer beyond the far end,
+so the bearing between them is the landing course and the segment between them
+brackets the strip.
+
+Runway *length* is nobody's — DCS keeps it in the terrain binary and the F10
+panel reads it through the game's own API. So the airfield card's plan view draws
+a field with a full ILS solid between the two antennas, and a field without one
+as a **dashed centreline** on the designator heading through the reference point,
+with the legend saying which of the two the reader is looking at. Drawing an
+invented rectangle would look more authoritative than the data behind it, which
+is the one thing a kneeboard must never do.
 """
 
 from __future__ import annotations

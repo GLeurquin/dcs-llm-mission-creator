@@ -24,6 +24,36 @@ speed that looks like afterburner, a magazine that looks short — and a mission
 is allowed to be deliberate about any of them. What the audit is for is that
 the deliberate cases should be the only ones left, and at the moment nobody can
 tell which is which without reading the whole file.
+
+**The speed check is here because the repo shipped every one of these.** Every
+pydcs speed argument is km/h true airspeed, stored as `speed / 3.6` m/s; none
+says so in its signature and none validates the number, so a knots-shaped value
+is accepted in silence and commands about 54 % of what was meant. Every mission
+shipped that way — the `patrol_flight` / `awacs_flight` / `refuel_flight` /
+`intercept_flight` calls held knots-shaped numbers (380-490) while the
+hand-built `add_waypoint` routes in the same files held km/h-shaped ones
+(750-850), so the repo disagreed with itself and the whole friendly package was
+ordered to hold 137-167 KIAS at FL210-FL295:
+
+    flight                       was    commanded            should be
+    E-3A orbit @9000 m           410    221 kt TAS/137 KIAS  740
+    KC-135 track @6500 m         407    220 kt TAS/157 KIAS  750
+    F-15C CAP @8000 m            430    232 kt TAS/152 KIAS  800
+    MiG-29S intercept @7500 m    440    238 kt TAS/160 KIAS  900
+    A-10C ingress @4600 m        400    216 kt TAS/171 KIAS  520
+
+The symptom is the package flying its whole sortie in afterburner: at those
+speeds a fighter is far below best-climb speed and deep on the back side of the
+drag curve, and the AI holds the commanded altitude on the throttle.
+
+The floor and the ceiling below therefore catch two different mistakes. Under
+`SLOW_RATIO` is the unit error. Over `FAST_RATIO` is a number that is a sane
+cruise for a *different* jet — `idlib_gauntlet`'s Hornet kept the 800/850 km/h
+that reads as 0.38/0.40 on the F-16C beside it and is 0.41/0.44 on an F/A-18C,
+the slowest fast jet in the fleet. Include the sub-300 km/h waypoints in any
+manual audit too: the first pass filtered them out as noise and walked straight
+past pydcs's hard-coded 200 km/h departure gate on all thirty flights, which was
+a worse bug than the cruise numbers it was looking for.
 """
 
 from __future__ import annotations
