@@ -67,7 +67,7 @@ if TYPE_CHECKING:
     from dcs.mapping import Point
     from dcs.mission import Mission
     from dcs.point import MovingPoint
-    from dcs.unitgroup import FlyingGroup
+    from dcs.unitgroup import FlyingGroup, StaticGroup
 
     from dcs_mission_creator.map_overlay.query import MapOverlay
 
@@ -138,6 +138,44 @@ def add_ground_waypoint(
     """
     return group.add_waypoint(
         position, altitude=ground_elevation_m(overlay, position), speed=speed, name=name
+    )
+
+
+def add_target_waypoint(
+    group: FlyingGroup,
+    target: StaticGroup,
+    *,
+    overlay: MapOverlay,
+    speed: float = 600,
+    name: str | None = None,
+) -> MovingPoint:
+    """A steerpoint on a building objective, read off the building itself.
+
+    **A building is not approximated, and this is the call that says so.** The
+    reveal policy in `core/map_draw.py` coarsens what an enemy *system* is
+    assessed to reach — further off truth the harder the mission — and a
+    structure reaches nothing. It was on the sheet before the war, it will be at
+    the same coordinate tomorrow, and the whole apparatus for modelling
+    ignorance about a radar's envelope is a fiction when applied to a roof.
+
+    With a satellite-aided weapon it is a fiction that misses. A JDAM flies to
+    the number it is handed, so a target point drawn 2 km off truth is not a
+    thinner picture of the target, it is a guaranteed miss — and a flight
+    carrying no laser has nothing to correct it with.
+
+    The signature is the enforcement: it takes the built `StaticGroup` rather
+    than a `Point`, so there is no way to hand it a `PlanOverlay` estimate, and
+    it reads the position back off the unit rather than off whatever the mission
+    asked for — a plot-plan constant may have been nudged onto buildable ground
+    after the layout was written. `core/audit.py` checks the other end, that
+    every building the triggers treat as an objective actually got one of these.
+
+    One waypoint per building, never one over the compound: two aimpoints at
+    the same steerpoint is one aimpoint, and which building is which is exactly
+    the decision a two-bomb sortie is spending its second bomb on.
+    """
+    return add_ground_waypoint(
+        group, target.units[0].position, overlay=overlay, speed=speed, name=name
     )
 
 

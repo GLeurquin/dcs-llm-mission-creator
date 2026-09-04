@@ -14,6 +14,7 @@ and then ignored.
 
 from __future__ import annotations
 
+from dcs import condition, statics, triggers
 from dcs.mapping import Point
 from dcs.mission import Mission
 from dcs.planes import E_3A, F_16C_50
@@ -314,3 +315,86 @@ def test_radio_altitudes_are_read_as_above_the_ground():
     gate.alt, gate.alt_type = 300, "RADIO"
     assert audit_mod._amsl(gate, _Overlay(2_000.0)) == 2_300.0
     assert audit_mod._amsl(baro, _Overlay(2_000.0)) == float(baro.alt)
+
+
+# -- target waypoints --------------------------------------------------------
+
+#: Well away from the origin, where `flight()` spawns: the spawn point is a
+#: steerpoint like any other, and a building sited on it would be "found" by a
+#: route that never planned for it.
+_AO = Point(50_000.0, 0.0, TERRAIN)
+
+
+def _objective_building(m: Mission, name: str, north_m: float):
+    """A static the triggers score, `north_m` up the AO from `_AO`.
+
+    The mission does not declare which building is the objective; the audit
+    reads that out of the trigger, the way a mission really writes one — a
+    static is not a group in the scripting sense, so "destroy it" is
+    `UnitDead` on `group.units[0].id`.
+    """
+    hall = m.static_group(
+        m.country("Russia"),
+        name,
+        statics.Fortification.Workshop_A,
+        position=Point(_AO.x + north_m, _AO.y, TERRAIN),
+    )
+    rule = triggers.TriggerOnce(comment=f"{name} down")
+    rule.add_condition(condition.UnitDead(hall.units[0].id))
+    m.triggerrules.triggers.append(rule)
+    return hall
+
+
+def _bomber(m: Mission, aim_north_m: float):
+    """A client flight with one steerpoint, `aim_north_m` up the AO."""
+    colt = flight(m, "Colt", client=True)
+    colt.add_waypoint(
+        Point(_AO.x + aim_north_m, _AO.y, TERRAIN),
+        altitude=5_000,
+        speed=800,
+        name="TGT",
+    )
+    return colt
+
+
+def test_a_building_objective_the_route_only_approximates_is_a_warning():
+    """`ansariyah_works` briefed a surveyed aimpoint and flew a 2 km estimate."""
+    m = mission()
+    _bomber(m, aim_north_m=2_000.0)
+    _objective_building(m, "casting hall", north_m=0.0)
+    findings = only(audit_mission(m, _Overlay()), "target waypoint")
+    assert findings and findings[0].severity == "warn"
+    assert "2,000 m from this building" in findings[0].message
+
+
+def test_a_steerpoint_on_the_building_is_silent():
+    m = mission()
+    _bomber(m, aim_north_m=0.0)
+    _objective_building(m, "casting hall", north_m=0.0)
+    assert not only(audit_mission(m, _Overlay()), "target waypoint")
+
+
+def test_one_steerpoint_cannot_answer_for_two_aimpoints():
+    """`kuban_forge`'s halls are 220 m apart; a point between them hits neither."""
+    m = mission()
+    _bomber(m, aim_north_m=110.0)
+    _objective_building(m, "casting hall A", north_m=0.0)
+    _objective_building(m, "casting hall B", north_m=220.0)
+    findings = only(audit_mission(m, _Overlay()), "target waypoint")
+    assert len(findings) == 2
+    assert {"Colt \u2192 casting hall A", "Colt \u2192 casting hall B"} == {
+        finding.where for finding in findings
+    }
+
+
+def test_a_building_in_no_trigger_is_not_an_objective():
+    """The compound around the frag — tanks, a crane, a garage — is scenery."""
+    m = mission()
+    _bomber(m, aim_north_m=0.0)
+    m.static_group(
+        m.country("Russia"),
+        "oxidiser tank",
+        statics.Fortification.Chemical_tank_A,
+        position=Point(_AO.x + 9_000.0, _AO.y, TERRAIN),
+    )
+    assert not only(audit_mission(m, _Overlay()), "target waypoint")

@@ -75,7 +75,7 @@ Composition (difficulty: veteran):
     TARCAP, F/A-18C `Chevy` on the load-out, and a Patriot battery (`BULWARK`)
     over Akrotiri whose envelope is the sixteen kilometres of sky the tanker
     track lives in — inside our missiles and outside theirs.
-  - Weather: spring first light, broken layer at 1,500 m, haze, light NW wind.
+  - Weather: spring sunrise, broken layer at 1,500 m, haze, light NW wind.
 """
 
 from __future__ import annotations
@@ -398,7 +398,7 @@ class AnsariyahWorks(MissionBuilder):
     difficulty = Difficulty.VETERAN
     terrain = Syria
 
-    #: 06:10 map-local on 3 April 2026 — the wall clock DCS shows in-game.
+    #: 06:35 map-local on 3 April 2026 — the wall clock DCS shows in-game.
     #:
     #: The two coalition task panels. Plain strings: nothing here needs
     #: to compute one, and `blue_task_text` / `red_task_text` are there
@@ -420,13 +420,14 @@ class AnsariyahWorks(MissionBuilder):
         "beach."
     )
 
-    #: Sunrise on this coast is about 06:25, which puts the deck run in the
-    #: last of the half-light and the run-in into a rising sun.
-    start_time = datetime(2026, 4, 3, 6, 10, 0, tzinfo=timezone.utc)
+    #: Sunrise at Akrotiri is 06:33 and the flight starts with it; the Syrian
+    #: coast is a quarter of an hour ahead of it, so the deck run is flown in
+    #: early light and the run-in eastbound into a sun already up.
+    start_time = datetime(2026, 4, 3, 6, 35, 0, tzinfo=timezone.utc)
 
-    #: Spring first light: broken layer at 1,500 m, haze, light NW wind.
+    #: Spring sunrise: broken layer at 1,500 m, haze, light NW wind.
     weather = Weather(
-        name="Spring first light",
+        name="Spring sunrise",
         season_temperature=14.0,
         clouds_base=1500,
         clouds_thickness=700,
@@ -441,7 +442,7 @@ class AnsariyahWorks(MissionBuilder):
 
     def _in_game_briefing(self) -> str:
         bx, by = self._terrain.bullseye_blue["x"], self._terrain.bullseye_blue["y"]
-        return f"""ANSARIYAH WORKS — Syria, 3 April 2026, 06:10 local
+        return f"""ANSARIYAH WORKS — Syria, 3 April 2026, 06:35 local
 ====================================================
 SITUATION
   A Syrian solid-rocket-motor plant is running in a
@@ -507,8 +508,11 @@ INTELLIGENCE
   next one is tomorrow. What we have is three weeks of
   emitter work and partner-force reporting on the plant
   itself, so every ring on your map is drawn wide,
-  dashed and marked approximate. Your steerpoints are
-  the same assessment, not a survey.
+  dashed and marked approximate. The THREE AIMPOINTS
+  are the exception and they are surveyed: HALL,
+  STORE and OXIDISER are steerpoints on the buildings
+  themselves. Reporting on the ground is what we do
+  have, and a satellite-aided bomb has to have it.
   SAM : S-200 behind Jableh. Assess 160 km against a
         fighter. Floor 300 m — that is the number this
         sortie is built on. It is NOT your target.
@@ -569,7 +573,10 @@ NAV
   ALQIN     : first turn inland, behind the hills.
   TANITA    : south leg, masked from the EWR.
   IP        : south of the basin. Run in north.
-  TARGET    : the works. Assessed, not surveyed.
+  HALL      : the casting hall. THE FRAG.
+  STORE     : the motor store, 400 m out.
+  OXIDISER  : the oxidiser plant, 430 m out.
+              All three surveyed. Two bombs.
   EGRESS    : straight out west.
   FEET WET  : water. Still on the deck.
   CLIMB     : the ring edge westbound. Climb FROM here,
@@ -583,11 +590,12 @@ FREQUENCIES
   Akrotiri tower : per kneeboard
 
 NOTES
-  Sunrise about 06:25 — you cross the beach in the last
-  of the half-light with the sun coming up behind the
-  target. Broken layer at 1,500 m, haze underneath. The
+  Sunrise 06:33 and you start with it — the beach is
+  crossed in early light with the sun already up behind
+  the target. Broken layer at 1,500 m, haze under it. The
   layer costs you nothing: the bombs are satellite-aided
-  and the aimpoints are surveyed onto the cartridge.
+  and all three aimpoints are on the cartridge as
+  steerpoints.
   Expect roughly 80 minutes. Take the gas.
 """
 
@@ -596,7 +604,7 @@ NOTES
         return f"""# Ansariyah Works
 
 **Theater:** Syria
-**Date / time:** 3 April 2026, 06:10 local (first light)
+**Date / time:** 3 April 2026, 06:35 local (sunrise)
 **Player aircraft:** F-16C-50 (`Colt`), Akrotiri, hot ramp
 **Players:** {self.slot_summary("Colt")}
 **Difficulty:** veteran
@@ -685,15 +693,27 @@ flight puts a second bomber up and can take all three aimpoints; a pair chooses.
 
 No laser anywhere in the flight. There is no altitude over this basin from which
 a jet could hold a spot and live, which is why the bombs are satellite-aided and
-why the aimpoints have to be surveyed onto the cartridge before start.
+why the aimpoints have to be surveyed onto the cartridge before start — `HALL`,
+`STORE` and `OXIDISER`, one steerpoint on each building. A weapon that flies to
+a number has to be given the right number, and you have nothing aboard to
+correct it with.
 
 ## Intelligence
 
 No overhead of the basin — the pass was cloud and the next one is tomorrow. What
 we have is three weeks of emitter work and partner-force reporting on the plant,
 so **every ring on your map is drawn wide, dashed and marked approximate**, and
-so is the pre-planned pair on your HSD. Your `TARGET` steerpoint is that same
-assessment rather than a survey: it puts you over the basin, not over the hall.
+so is the pre-planned pair on your HSD.
+
+**The three aimpoints are the exception, and they are surveyed.** `HALL`,
+`STORE` and `OXIDISER` are steerpoints on the buildings themselves, not on the
+compound they stand in. The two kinds of claim are different in kind rather than
+in confidence: an assessment is what emitter work gives you about what a *system
+reaches*, and a building reaches nothing — it was put up before the war, it is
+what the partner-force reporting is *about*, and it will be at the same
+coordinate tomorrow. It is also the only way this sortie works. A GBU-31 flies
+to the coordinate it is handed and there is no laser in the flight to correct
+it, so an approximate aimpoint is not a thinner picture, it is a miss.
 
 - **S-200 'Gammon' (the premise):** on the plain behind Jableh. Assess 160 km
   against a fighter-sized target at altitude, and a **300 m floor** it cannot
@@ -769,7 +789,10 @@ DED, for a jet waiting on the pattern.
 - `ALQIN` — first turn inland, behind the coastal hills
 - `TANITA` — the south leg; masked from the Baniyas radar from here
 - `IP` — south of the basin. Run in to the north
-- `TARGET` — the works. Assessed, not surveyed
+- `HALL` — the casting hall. **The frag**
+- `STORE` — the motor store, 400 m from the hall
+- `OXIDISER` — the oxidiser plant, 430 m from the hall. All three are surveyed
+  steerpoints on the buildings; two of them get bombs and which two is yours
 - `EGRESS` — straight out west off the target
 - `FEET WET` — water, still on the deck
 - `CLIMB` — the ring edge westbound. Climb **from** here and not before: the
@@ -790,10 +813,11 @@ card.
 
 ## Weather
 
-Spring first light. Broken layer base 1,500 m, 700 m thick, density 6.
+Spring sunrise. Broken layer base 1,500 m, 700 m thick, density 6.
 Visibility 20 km in haze. 14 °C. Light NW wind — 5 m/s ground, 9 m/s at 2,000 m,
-16 m/s at 8,000 m. Sunrise about 06:25: you cross the beach in the last of the
-half-light with the sun coming up behind the target.
+16 m/s at 8,000 m. Sunrise at Akrotiri is 06:33 and you start with it; the coast
+is a quarter of an hour ahead of it, so the beach is crossed in early light with
+the sun already up behind the target.
 
 The layer costs you nothing. The bombs are satellite-aided and the aimpoints are
 on the cartridge — which is *why* you are carrying JDAM on a target you could
@@ -806,8 +830,9 @@ and live.
 ingress, two coastal S-125 batteries defining the only crossing, an Osa and guns
 on the objective, an unlocated Gadfly aimed at the climb, MiG-29A alert scaled
 off the player count, a hard fuel case that makes the tanker structural, escort
-that cannot cross the ring, first light and a broken layer. Enemy positions are
-drawn as assessments, several kilometres off truth.
+that cannot cross the ring, an eastbound run-in into a low sun and a broken
+layer. Enemy *positions* are drawn as assessments, several kilometres off
+truth; the three aimpoints are buildings and are drawn and flown exactly.
 
 ## Win / loss conditions
 
@@ -827,11 +852,13 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
     def _assemble(self, m: Mission, plan: PlanOverlay) -> Assembled:
         """Assemble the mission by calling each step in package order."""
-        # The overlay is built before anything flies, because the *flight plan*
-        # is derived from it: the letdown and climb points are where the briefed
-        # Gammon ring begins, and the target steerpoint is where the plant is
-        # assessed to be. Both are claims this object owns, and building it here
-        # is what stops the route carrying a better position than the briefing.
+        # The overlay is built before anything flies, because half the *flight
+        # plan* is derived from it: the letdown and climb points are where the
+        # briefed Gammon ring begins, and that is a claim this object owns, so
+        # building it here is what stops the route carrying a better position
+        # than the briefing. The other half is not the overlay's business at
+        # all — the three aimpoints are buildings and are flown to exactly
+        # (`_spawn_player`).
         scene = self._setup_airports(m)
         usa, syria, russia = m.country("USA"), m.country("Syria"), m.country("Russia")
 
@@ -843,7 +870,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         tanker_track = self._spawn_tanker(m, usa, scene)
         tarcap_track = self._spawn_tarcap(m, usa, scene)
         chevy = self._spawn_strike(m, usa, scene, column=red.column, threats=belts)
-        colt, route = self._spawn_player(m, usa, scene, plan=plan)
+        colt, route = self._spawn_player(m, usa, scene, plan=plan, plant=red.plant)
 
         home, hama_ad = self._spawn_sanctuaries(m, usa, syria, scene, route=route)
         sanc.remark_all(m, home, hama_ad)
@@ -868,6 +895,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             scene,
             plan=plan,
             route=route,
+            targets=self._aimpoint_positions(red.plant),
             awacs_track=awacs_track,
             tanker_track=tanker_track,
             tarcap_track=tarcap_track,
@@ -1719,7 +1747,13 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         )
 
     def _spawn_player(
-        self, m: Mission, usa: Country, scene: _Scene, *, plan: PlanOverlay
+        self,
+        m: Mission,
+        usa: Country,
+        scene: _Scene,
+        *,
+        plan: PlanOverlay,
+        plant: _Plant,
     ) -> tuple[list[FlyingGroup], list[Point]]:
         """Colt: F-16C-50 out of Akrotiri, two JDAM, the deck, and 279 km.
 
@@ -1766,11 +1800,19 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         climb = self._ring_edge(
             scene.akrotiri.position, scene.egress[-1].position, gammon, gammon_ring
         )
-        # And the target steerpoint is where the works are *assessed* to be. The
-        # plant is a set of buildings the player has to find in the pod; a
-        # steerpoint on the hall would hand him a survey the briefing spent three
-        # paragraphs saying nobody has.
-        target, _ = plan.estimate(scene.plant, radius=_SA8_RING_M)
+        # The aimpoints, on the other hand, are flown to *exactly*, and the two
+        # halves of that sentence do not contradict each other: an assessment is
+        # what you have about a system's reach, and a building has none. These
+        # three were put up before the war, they are the subject of three weeks
+        # of partner-force reporting on the ground, and they will be at the same
+        # coordinate tomorrow — there is no ignorance here to model. Nor could
+        # there be one and still have a mission: a GBU-31 flies to the number it
+        # is given, so an assessed target point is not a thinner picture, it is
+        # a guaranteed miss, and this flight carries no laser to correct with.
+        # Read off the built statics rather than off `_PLANT_LAYOUT`, because
+        # `_structure` may have nudged a building onto buildable ground.
+        targets = self._aimpoints(plant)
+        aimpoints = self._aimpoint_positions(plant)
         ingress = waypoints.agl_profile(
             scene.ingress,
             scene.overlay.overlay,
@@ -1791,7 +1833,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                 egress,
                 letdown=letdown,
                 climb=climb,
-                target=target,
+                targets=targets,
             )
         route = [
             scene.akrotiri.position,
@@ -1799,13 +1841,37 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             letdown,
             letdown.midpoint(scene.feet_dry),
             *(leg.position for leg, _ in ingress),
-            target,
+            *aimpoints,
             *(leg.position for leg, _ in egress),
             climb,
             self._descent_point(scene),
             scene.akrotiri.position,
         ]
         return sections, route
+
+    @staticmethod
+    def _aimpoints(plant: _Plant) -> tuple[StaticGroup, StaticGroup, StaticGroup]:
+        """The three buildings, in the order the briefing names them.
+
+        Priority order rather than geographic: the hall is the campaign
+        objective and the other two are the second bomb's decision, so the hall
+        is the steerpoint a pilot reaches first on the DED. They stand inside
+        430 m of each other, which is close enough that no ordering of them is a
+        detour. The groups rather than their positions, because
+        `waypoints.add_target_waypoint` takes the built static — which is what
+        stops an aimpoint being derived from anything but the building.
+        """
+        return (plant.hall, plant.store, plant.oxidiser)
+
+    @classmethod
+    def _aimpoint_positions(cls, plant: _Plant) -> tuple[Point, Point, Point]:
+        """Where those three buildings actually stand."""
+        hall, store, oxidiser = cls._aimpoints(plant)
+        return (
+            hall.units[0].position,
+            store.units[0].position,
+            oxidiser.units[0].position,
+        )
 
     def _route_colt(
         self,
@@ -1816,14 +1882,28 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         *,
         letdown: Point,
         climb: Point,
-        target: Point,
+        targets: tuple[StaticGroup, StaticGroup, StaticGroup],
     ) -> None:
         """Akrotiri → tanker → the deck → the basin → the water → Akrotiri.
 
-        The altitudes, the ring edges and the assessed target are worked out once
+        The altitudes, the ring edges and the three aimpoints are worked out once
         in `_spawn_player` and handed in: each is a read against the elevation
-        raster or against the plan's estimate, and two sections deriving them
-        separately could fly two different plans under one briefing.
+        raster, against the plan's estimate or off a built static, and two
+        sections deriving them separately could fly two different plans under one
+        briefing.
+
+        **Three aimpoints get three steerpoints, each on its own building.** The
+        estimate that everything else here is drawn from is a statement about
+        what a *system* is assessed to reach, and a casting hall reaches
+        nothing: it is fixed geography, three weeks of ground reporting old, and
+        the sortie's whole premise is that it is serviced by a satellite-aided
+        bomb from the deck because no jet can hold a spot over this basin and
+        live. A weapon that flies to a number cannot be handed an approximate
+        one — the briefing already said the aimpoints are surveyed onto the
+        cartridge before start, and until this route carried them it was the one
+        claim in the mission that was not true. Two of the three get bombs and
+        which two is the player's decision; all three get a coordinate, or the
+        decision is a guess.
         """
         player.add_runway_waypoint(scene.akrotiri)
         player.add_waypoint(
@@ -1858,15 +1938,16 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                 else _LAND_SPEED_KPH,
                 name=leg.name,
             )
-        # The run-in altitude is flown off the IP leg above; this steerpoint
-        # marks the ground, so it carries the ground's elevation.
-        waypoints.add_ground_waypoint(
-            player,
-            target,
-            overlay=scene.overlay.overlay,
-            speed=_LAND_SPEED_KPH,
-            name="TARGET",
-        )
+        # The run-in altitude is flown off the IP leg above; these steerpoints
+        # mark the ground, so each carries its own building's elevation.
+        for name, aimpoint in zip(("HALL", "STORE", "OXIDISER"), targets):
+            waypoints.add_target_waypoint(
+                player,
+                aimpoint,
+                overlay=scene.overlay.overlay,
+                speed=_LAND_SPEED_KPH,
+                name=name,
+            )
         for leg, altitude in egress:
             player.add_waypoint(
                 leg.position, altitude=altitude, speed=_EGRESS_SPEED_KPH, name=leg.name
@@ -2004,6 +2085,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         *,
         plan: PlanOverlay,
         route: list[Point],
+        targets: tuple[Point, Point, Point],
         awacs_track: tuple[Point, Point],
         tanker_track: tuple[Point, Point],
         tarcap_track: tuple[Point, Point],
@@ -2031,9 +2113,27 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         covers the route from a hundred kilometres east of Akrotiri all the way
         to the beach, so the deck run stops looking like an eccentric choice and
         starts looking like the only line there is.
+
+        **The three aimpoints are labelled where they stand, and not drawn as an
+        objective ring.** `PlanOverlay.objective` loosens with difficulty like
+        `.threat` does, which is right for a place somebody assessed and wrong
+        for three buildings that partner forces have been reporting on from the
+        ground for three weeks — and it would then contradict the steerpoints,
+        which have to be exact or the JDAM has nothing to fly to. Naming each
+        building separately is the other half: the frag is one of the three and
+        the second bomb is a choice between the other two, and a single marker
+        over the compound puts that decision in the pod at 60 m rather than on
+        the map before start. The labels carry the steerpoint names, so the map,
+        the card and the DED call the same roof the same thing. This costs the
+        cartridge nothing — `core/dtc.py` drops a mark standing on a steerpoint
+        the route already writes.
         """
         home.draw(plan)
-        plan.objective(scene.plant, "ANSARIYAH WORKS", radius=5_000.0)
+        for label, aimpoint in zip(
+            ("HALL — casting hall (frag)", "STORE — motor store", "OXIDISER plant"),
+            targets,
+        ):
+            plan.waypoint_label(aimpoint, label)
         plan.waypoint_label(scene.feet_dry, "FEET DRY — cross here, on the deck")
         plan.waypoint_label(scene.portal, "Tunnel portal — do not follow past")
         plan.route(route, "Colt ingress")

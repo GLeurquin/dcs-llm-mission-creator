@@ -144,6 +144,16 @@ _LINE_PREFERENCE = {True: (3, 1, 2, 4), False: (4, 1, 2, 3)}
 #: joins the steerpoints.
 _TRACED_M = 1_000.0
 
+#: A plan *mark* this close to a steerpoint the route already writes is the same
+#: place named twice, and is dropped. Tighter than `_TRACED_M` by an order of
+#: magnitude, because the two tests are asking different questions: a route line
+#: is traced when it runs *along* the flight plan, whereas a mark is redundant
+#: only when it is standing *on* a point already in the DED. Both positions come
+#: from the same mission variable in that case, so the real distance is zero and
+#: this is only a guard against arithmetic — while a mission that deliberately
+#: labels two aimpoints a couple of hundred metres apart has to keep both.
+_COINCIDENT_M = 100.0
+
 #: The first of them. Public because the player reads it in the cockpit and the
 #: kneeboard's threat block prints it beside each site, so a ring on the HSD and
 #: a line on the card can be matched up by number.
@@ -442,7 +452,9 @@ def route_steerpoints(
     return points
 
 
-def plan_steerpoints(plan: "PlanOverlay") -> list[NavPoint]:
+def plan_steerpoints(
+    plan: "PlanOverlay", *, traced_by: Sequence[NavPoint] = ()
+) -> list[NavPoint]:
     """The F10 plan's *points*, as steerpoints to append after the route.
 
         What qualifies is everything the map marks that the cockpit has nowhere else
@@ -472,6 +484,15 @@ def plan_steerpoints(plan: "PlanOverlay") -> list[NavPoint]:
         stays estimated in the DED. That is the whole reason this reads back off the
         overlay rather than off the mission's own variables.
 
+        **A mark standing on a steerpoint the route already writes is dropped**, the
+        same rule `plan_geo_lines` applies to a corridor the flight itself flies and
+        for the same reason: the point is already in the DED, and a second copy of it
+        costs a slot that something else needed. This is not hypothetical tidying —
+        `kuban_forge` labels each of its two casting halls on the F10 map *and* flies
+        a surveyed steerpoint to each, which is correct on both channels and cost the
+        cartridge the recon post and the column's escort until the duplicates stopped
+        being written.
+
         Each keeps the editor's own defaults for planned altitude and speed. Nothing
         planned a leg to a seam or to a tanker station, and inheriting the cruise
         numbers off the route would put a figure on the DTE page that no part of the
@@ -481,7 +502,7 @@ def plan_steerpoints(plan: "PlanOverlay") -> list[NavPoint]:
     drawn: list[tuple[int, NavPoint]] = [
         (mark.seq, NavPoint(mark.position, note=mark.label, kind=kinds[mark.kind]))
         for mark in plan.marks()
-        if mark.kind in kinds
+        if mark.kind in kinds and not _coincident(mark.position, traced_by)
     ]
     drawn += [
         (
@@ -491,7 +512,9 @@ def plan_steerpoints(plan: "PlanOverlay") -> list[NavPoint]:
             ),
         )
         for line in plan.lines()
-        if line.kind == "orbit" and len(line.points) >= 2
+        if line.kind == "orbit"
+        and len(line.points) >= 2
+        and not _coincident(line.points[0].midpoint(line.points[-1]), traced_by)
     ]
     return [point for _, point in sorted(drawn, key=lambda pair: pair[0])]
 
@@ -730,7 +753,7 @@ def arm_plan(
             "their own; give each its own cartridge instead"
         )
     route = route_steerpoints(groups[0], takeoff_s=takeoff_zulu_s(m, groups[0]))
-    extra = plan_steerpoints(plan)
+    extra = plan_steerpoints(plan, traced_by=route)
     room = nav_headroom(len(route))
     if len(extra) > max(room, 0):
         log.warning(
@@ -831,6 +854,13 @@ def _attach(m: "Mission", name: str, slots: Sequence["FlyingUnit"]) -> None:
             "AutoLoad": True,
             "Cartridges": [{"name": name, "default": True}],
         }
+
+
+def _coincident(point: "Point", traced_by: Sequence[NavPoint]) -> bool:
+    """True when `point` is standing on a steerpoint that is already written."""
+    return any(
+        point.distance_to_point(nav.position) <= _COINCIDENT_M for nav in traced_by
+    )
 
 
 def _already_traced(points: Sequence["Point"], traced_by: Sequence[NavPoint]) -> bool:

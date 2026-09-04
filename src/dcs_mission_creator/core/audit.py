@@ -76,6 +76,7 @@ from dcs_mission_creator.core import (
 )
 
 if TYPE_CHECKING:
+    from dcs.mapping import Point
     from dcs.unitgroup import FlyingGroup
 
     from dcs_mission_creator.core.mission_builder import MissionBuilder
@@ -110,6 +111,15 @@ ROUTE_FLOOR_M = 30.0
 #: `ansariyah_works` — a mission that crosses 250 km of it at sixty metres —
 #: reads as flying underground.
 SEA_LEVEL_M = 0.0
+
+#: How close a client steerpoint has to be to a building objective to count as
+#: standing on it. Tighter than it looks, and the number is set by the tightest
+#: aimpoint spacing in the project rather than by the size of a building:
+#: `kuban_forge` puts its two casting halls 220 m apart, so anything looser
+#: would let one steerpoint over the middle of the plot answer for both — which
+#: is the exact defect this check exists to catch, since a bomb aimed at the
+#: midpoint of two buildings hits neither.
+TARGET_WAYPOINT_M = 100.0
 
 
 @dataclass(frozen=True)
@@ -146,6 +156,7 @@ def audit_mission(m: Mission, overlay: MapOverlay) -> list[Finding]:
         _check_laser_code,
         _check_stations,
         _check_magazine,
+        _check_target_waypoints,
     ):
         findings += list(check(m, overlay))
     return findings
@@ -384,6 +395,81 @@ def _check_concealment(m: Mission, overlay: MapOverlay) -> Iterable[Finding]:
                         "visible on the F10 map — conceal_country missed it",
                         f"{country.name} {group.name}",
                     )
+
+
+def _objective_statics(m: Mission) -> list[tuple[str, "Point"]]:
+    """The buildings the mission's own triggers treat as objectives.
+
+    Derived rather than declared, for the reason `_check_concealment` derives
+    which coalition is the enemy: a mission that has to *tell* the audit what
+    its targets are is a mission that can forget to. What makes the derivation
+    possible is an idiom this project already had — a static group is not a
+    group in the scripting sense, so "destroy the building" is written as
+    `condition.UnitDead` on `group.units[0].id`, and a static that appears in a
+    trigger condition at all is one the mission scored, gated or announced
+    something on.
+
+    A `UnitAlive` counts too: a failure call gated on "the hall is still
+    standing" names the same building as the success call, and a mission that
+    only ever tested for the negative would otherwise be invisible here.
+    """
+    statics = {
+        group.units[0].id: (group.name, group.units[0].position)
+        for coalition in m.coalition.values()
+        for country in coalition.countries.values()
+        for group in country.static_group
+        if group.units
+    }
+    named: dict[int, tuple[str, "Point"]] = {}
+    for rule in m.triggerrules.triggers:
+        for condition in rule.rules:
+            unit = getattr(condition, "unit", None)
+            if unit in statics:
+                named[unit] = statics[unit]
+    return list(named.values())
+
+
+def _check_target_waypoints(m: Mission, overlay: MapOverlay) -> Iterable[Finding]:
+    """A building objective with no client steerpoint on it.
+
+    **A building is not approximated.** The difficulty reveal coarsens what an
+    enemy *system* is assessed to reach; a structure reaches nothing and has
+    been at the same coordinate for forty years, so a target point derived from
+    `PlanOverlay.estimate` models an ignorance nobody has. With a
+    satellite-aided weapon it also misses, because a JDAM flies to the number it
+    is given and a flight carrying no laser has nothing to correct with.
+
+    Both missions that got this wrong said the opposite in their own briefings —
+    `ansariyah_works` spent a paragraph on the aimpoints being "surveyed onto
+    the cartridge before start" while flying a steerpoint two kilometres off
+    truth, and `kuban_forge` briefed two casting halls 220 m apart and flew one
+    point over the middle of them. Neither is visible in a diff; both are one
+    distance measurement.
+
+    `warn` rather than `error`, because a mission is allowed to decide the
+    player should find the roof in the pod — but it then has to say so, the way
+    every other deliberate deviation in this project answers its finding in
+    prose. Use `waypoints.add_target_waypoint`, which takes the built static and
+    therefore cannot be handed an estimate.
+    """
+    targets = _objective_statics(m)
+    if not targets:
+        return
+    for group in mission_kit.player_groups(m):
+        flown = [point.position for point in group.points]
+        if not flown:
+            continue
+        for name, position in targets:
+            gap = min(position.distance_to_point(point) for point in flown)
+            if gap > TARGET_WAYPOINT_M:
+                yield Finding(
+                    "target waypoint",
+                    "warn",
+                    f"nearest steerpoint is {gap:,.0f} m from this building "
+                    "— a building objective is flown to exactly "
+                    "(waypoints.add_target_waypoint)",
+                    f"{group.name} → {name}",
+                )
 
 
 def _check_armament(m: Mission, overlay: MapOverlay) -> Iterable[Finding]:

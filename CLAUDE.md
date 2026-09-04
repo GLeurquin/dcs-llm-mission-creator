@@ -321,6 +321,20 @@ What is convention rather than design, and therefore stays:
   statics, which matters more here than for vehicles: an unhidden compound shows
   every building as an icon and hands the player the whole aimpoint choice
   before he starts engines.
+- **A building is flown to exactly, one steerpoint per building, and the call is
+  `waypoints.add_target_waypoint(flight, static_group, ...)`.** It takes the
+  built `StaticGroup` rather than a `Point`, so a `PlanOverlay` estimate cannot
+  reach it, and it reads the position off the unit rather than off the plot-plan
+  constant the layout may have been nudged away from. The reveal policy in
+  `core/map_draw.py` coarsens what an enemy *system* is assessed to **reach**,
+  and a building reaches nothing; with a satellite-aided weapon an assessed
+  aimpoint is not a thinner picture but a miss. Label it on the F10 map with
+  `plan.waypoint_label` at the same position and under the same name — never
+  `plan.objective`, which loosens with difficulty — and never one point over the
+  compound, because two aimpoints at one steerpoint is one aimpoint.
+  `core/audit.py`'s `target waypoint` check enforces the other end: every static
+  a trigger condition names has to have a client steerpoint within
+  `audit.TARGET_WAYPOINT_M`.
 
 # Helpers, in the order you call them
 
@@ -1789,8 +1803,11 @@ knots-for-km/h mistake below the floor, afterburner above it), the departure gat
 sitting on the field, **client** routes against the terrain at every waypoint and
 along every leg, the cartridge's navigation headroom, enemy groups left visible
 on the F10 map, flights with empty pylons, stores on stations the game itself
-does not use, and the player flight's air-to-air magazine against the number of
-enemy aircraft.
+does not use, the player flight's air-to-air magazine against the number of
+enemy aircraft, and every building objective for a client steerpoint standing on
+it. That last one needs no declaration from the mission: a static named by a
+trigger condition *is* an objective, so the check derives its own target list
+the way the concealment check derives which coalition is the enemy.
 
 **Findings, not failures.** Several are heuristics about design and a mission is
 allowed to be deliberate about any of them — an unarmed MQ-9 is what a spotter

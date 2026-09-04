@@ -19,8 +19,8 @@ south-west over the range and feet wet past the Abkhaz coast.
 
 Three objectives, priced separately (`_add_end_triggers`):
 
-  1. the two casting halls at the works — the frag, and what four GBU-12s are
-     aboard for;
+  1. the two casting halls at the works — the frag, and what the two GBU-38s
+     are aboard for, off a surveyed steerpoint each;
   2. the night's shipment, which leaves the loading yard the moment the field
      hears the raid coming and drives north up the Kuban. `Ferret`, a recon
      team on the ridge, calls it and lases it; catching it costs bombs the
@@ -51,7 +51,7 @@ Composition (difficulty: ace):
   - USA support: E-3A `Magic` (251.000 AM) and KC-135 `Texaco` (253.000 AM,
     TACAN 12X), both south of the watershed. No escort and no SEAD element —
     the flight covers itself, which is what its second fit is for.
-  - Weather: October first light, broken layer based at 4500 m — six hundred
+  - Weather: October sunrise, broken layer based at 4500 m — six hundred
     metres over the Klukhori crossing, and the egress climbs through it.
 """
 
@@ -134,9 +134,9 @@ _SA19_RING_M = 8_000.0
 #: F-16C-50 (`max_speed` 2120 km/h) a cruise sits at 0.30-0.40 of that: 780 on
 #: the lowland transit and the climb home (0.37), 680 in the valleys (0.32,
 #: which is also what a 500 m run between three-kilometre walls is worth), and
-#: the run-in below. This jet belongs at the bottom of the band — four GBU-12
-#: on two TERs, two bags, a pod and a jammer is the heaviest air-to-ground fit
-#: in the project after `idlib_gauntlet`'s Hornet.
+#: the run-in below. This jet belongs at the bottom of the band — two GBU-38 on
+#: a BRU-57, two GBU-12 on a TER, two bags, a pod and a jammer is the heaviest
+#: air-to-ground fit in the project after `idlib_gauntlet`'s Hornet.
 _ATTACK_SPEED_KPH = 640.0
 
 #: How far above the ground the whole flown route has to stay, at a waypoint and
@@ -150,8 +150,9 @@ _TANKER_TACAN = "12X"
 _FREQ_RECON = 133
 #: The mission's one laser code. It was 1511, which nothing in the package was
 #: ever on: the ME's FAC task carries no code field, so `Ferret` lases DCS's own
-#: 1688 whatever a briefing says, and the Viper's four GBU-12s come up on 1688
-#: too. `core/laser.py` owns that and refuses anything else.
+#: 1688 whatever a briefing says, and the Viper's two GBU-12s come up on 1688
+#: too. `core/laser.py` owns that and refuses anything else. The other two
+#: bombs are JDAM and ride no spot at all — see `_FITS`.
 _LASER_CODE = laser.DEFAULT_CODE
 
 #: Mission-clock moments. `Ferret` has been on that ridge for six days, so a
@@ -226,7 +227,7 @@ _EWR_WEST_ANCHOR = (43.93, 41.58)
 _NO_BUILD = (Vegetation.WATER, Vegetation.DENSE_FOREST)
 
 #: The works, as a plot plan in metres east/north of the site centre. A compact
-#: complex on purpose — about 400 m across — because four GBU-12s against a
+#: complex on purpose — about 400 m across — because four bombs against a
 #: two-kilometre industrial sprawl is not a strike, it is a survey.
 _PLANT_LAYOUT = {
     "hall_a": (0.0, 0.0),
@@ -335,27 +336,51 @@ class _Scene:
 #: launching off the halls going up, and the briefing has always said there is
 #: no escort coming.
 #:
+#: **Two weapons, because there are two kinds of target, and the difference is
+#: whether the thing moves.** The halls are buildings. They were on the
+#: 1:100,000 sheet before the war, they will be at the same coordinate
+#: tomorrow, and `Ferret` has been looking at them for six days — so each one
+#: is its own surveyed steerpoint (`_route_colt`) and each is serviced with a
+#: satellite-aided bomb off that coordinate, with nobody holding a spot over a
+#: valley an S-125 and two Tunguskas are sitting in. The shipment is the
+#: opposite case: it is doing 40 km/h up the Kuban by the time anybody reaches
+#: it, a JDAM cannot be given a coordinate for that, and it is exactly what a
+#: controller on the ground with a designator is for. GPS for what does not
+#: move, laser for what does; the fit is that sentence and nothing else.
+#:
+#: **A GBU-12 on a casting hall was the earlier answer and it was the wrong
+#: one.** Not because it would not level the building — because a 500 lb laser
+#: bomb is a vehicle weapon that happens to be legal against a structure, and
+#: choosing it made the hall inherit the column's delivery: a spot, a talk-on,
+#: and a target point drawn where the works were *assessed* to be. What goes
+#: aboard instead is the smallest JDAM rather than the 2,000 lb penetrator
+#: `ansariyah_works` carries, and that is a counting constraint rather than a
+#: judgement about the target: two halls need two bombs, the BRU-57 is what
+#: fits two on one station, and the other station is owed to the column.
+#:
 #: A four-slot flight puts a second bomber up and the decision softens; a pair
 #: flies the sortie as written, with somebody covering the egress.
 #:
-#: Both are ED payloads station for station, off
+#: The air-to-air fit is an ED payload station for station, off
 #: `<DCS>/CoreMods/aircraft/F-16C/UnitPayloads/F-16C_50.lua`
-#: (`AIM-120C*2, AIM-9X*2, GBU-12*4, FUEL*2, ECM, TGP` and
-#: `AIM-120C*4, AIM-9X*2, FUEL*2, ECM, TGP`) with one deliberate substitution:
-#: the pod is the AN/AAQ-33 rather than the LITENING, on both jets, because the
-#: talk-on with `Ferret` happens at 600 m over a valley floor and this mission
-#: picked the better sensor for it.
+#: (`AIM-120C*4, AIM-9X*2, FUEL*2, ECM, TGP`). The strike fit is two halves of
+#: two of them: ED hangs the BRU-57 on 3 and the TER on 7 in its own loads, and
+#: `core/loadout_check.py` reports nothing against either station. Both jets
+#: keep this mission's one deliberate substitution — the pod is the AN/AAQ-33
+#: rather than the LITENING, because the talk-on with `Ferret` happens at 600 m
+#: over a valley floor and this mission picked the better sensor for it.
 _FITS = (
     loadout.Loadout(
-        role="GBU-12*4",
+        role="JDAM+LGB",
         carries=(
-            f"four GBU-12 on TERs coded {_LASER_CODE}, AN/AAQ-33 pod, "
+            "two GBU-38 JDAM on a BRU-57 for the halls, two GBU-12 on a TER "
+            f"coded {_LASER_CODE} for the column, AN/AAQ-33 pod, "
             "two AIM-120C, two AIM-9X, ALQ-184, two 370 gal"
         ),
         stores=(
             (1, "AIM_120C_AMRAAM___Active_Radar_AAM"),
             (2, "AIM_9X_Sidewinder_IR_AAM"),
-            (3, "TER_9A_with_2_x_GBU_12___500lb_Laser_Guided_Bomb"),
+            (3, "BRU_57_with_2_x_GBU_38___JDAM__500lb_GPS_Guided_Bomb"),
             (4, "Fuel_tank_370_gal"),
             (5, "ALQ_184_Long"),
             (6, "Fuel_tank_370_gal"),
@@ -393,7 +418,7 @@ class KubanForge(MissionBuilder):
     difficulty = Difficulty.ACE
     terrain = Caucasus
 
-    #: 06:50 map-local on 18 October 2026 — twilight at the saddle.
+    #: 07:30 map-local on 18 October 2026 — sunrise over the saddle.
     #:
     #: The two coalition task panels. Plain strings: nothing here needs
     #: to compute one, and `blue_task_text` / `red_task_text` are there
@@ -412,15 +437,15 @@ class KubanForge(MissionBuilder):
         "Mineralnye Vody launches if the works are hit."
     )
 
-    #: Sunrise is about 07:05 there in the third week of October, and the
-    #: sortie is fifty minutes to the target — so the crossing is flown in
-    #: first light and the run-in in daylight, which is what a targeting pod
-    #: and a laser actually want.
-    start_time = datetime(2026, 10, 18, 6, 50, 0, tzinfo=timezone.utc)
+    #: Sunrise at Senaki is 07:28 in the third week of October and the flight
+    #: starts with it; the sortie is fifty minutes to the target, so the
+    #: crossing is flown in early light and the run-in with the sun well up,
+    #: which is what a targeting pod and a laser actually want.
+    start_time = datetime(2026, 10, 18, 7, 30, 0, tzinfo=timezone.utc)
 
-    #: October first light: broken layer at 4500 m, light N wind, 6 C, 25 km.
+    #: October sunrise: broken layer at 4500 m, light N wind, 6 C, 25 km.
     weather = Weather(
-        name="October first light",
+        name="October sunrise",
         season_temperature=6.0,
         clouds_base=4500,
         clouds_thickness=1200,
@@ -435,7 +460,7 @@ class KubanForge(MissionBuilder):
 
     def _in_game_briefing(self) -> str:
         bx, by = self._terrain.bullseye_blue["x"], self._terrain.bullseye_blue["y"]
-        return f"""KUBAN FORGE — Caucasus, 18 Oct 2026, 06:50 local
+        return f"""KUBAN FORGE — Caucasus, 18 Oct 2026, 07:30 local
 ==================================================
 SITUATION
   The chemical works on the Kuban north of
@@ -478,13 +503,18 @@ MISSION (Colt — F-16C-50, Senaki, hot ramp)
     you are detected, not after.
   - Pop at IP. Kill BOTH casting halls. Two long
     sheds in line, north-south, in the middle of
-    the yard and west of the tank farm. Ferret
+    the yard and west of the tank farm. You have
+    a steerpoint on each of them, HALL A then
+    HALL B, surveyed and 220 m apart — the JDAM
+    fly to those numbers and need no spot. Ferret
     talks you on.
   - The night's shipment is loaded and will roll
     the moment they hear you coming. If you have
     bombs left, it is worth more than the tank
     farm is. Ferret lases it, code {_LASER_CODE} — the
-    same code your four GBU-12s are on.
+    same code your two GBU-12s are on. The JDAM
+    cannot chase it; the laser bombs are what it
+    is there for.
   - Egress is a CLIMB, south-west, hard. You will
     be inside the Gadfly's ring for about two and
     a half minutes and there is no low way out of
@@ -493,7 +523,7 @@ MISSION (Colt — F-16C-50, Senaki, hot ramp)
   - Do NOT go north past the Kuban bend.
   - RTB Senaki. Divert: Kutaisi.
 
-LOADOUT (four bombs stay four bombs)
+LOADOUT (four bombs: two JDAM, two laser)
 {self.loadout_brief("Colt", _FITS)}
   No HARM anywhere — there is no Weasel answer to this
   one. Slot 2 carries no bomb either: it is the cover for
@@ -580,8 +610,10 @@ NAV
   AZGEK / TEBERDA     : into the Teberda valley.
   NIZHNYAYA / KARACHAY: the masking runs out here.
   IP                  : the Teberda mouth. Pop.
-  TARGET              : the works. Surveyed, not
-                        assessed — this one is real.
+  HALL A / HALL B     : one steerpoint on each
+                        casting hall, 220 m apart.
+                        Surveyed, not assessed —
+                        these two are real.
   EGRESS_SW           : the climb out of the Kuban.
   RANGE               : over the watershed, high.
   FEET_WET            : past the Abkhaz coast.
@@ -591,13 +623,13 @@ FREQUENCIES
   Magic AWACS   : {_FREQ_AWACS}.000 AM
   Texaco tanker : {_FREQ_TANKER}.000 AM, TACAN {_TANKER_TACAN}
   Ferret        : {_FREQ_RECON}.000, laser {_LASER_CODE}
-                  (your GBU-12s are on the same code)
+                  (your two GBU-12s are on that code)
   Senaki tower  : per kneeboard
 
 NOTES
-  Sunrise 07:05 local — you cross the saddle in
-  twilight and you are over the target in early
-  light. Broken layer based 4500 m. That is six
+  Sunrise 07:28 local and you start with it — the
+  saddle is crossed in early light, the target in
+  full daylight. Broken layer 4500 m. That is six
   hundred metres over the Klukhori, so the pass
   is flown under a ceiling; on the way out you
   climb straight through it. Fly the card.
@@ -608,7 +640,7 @@ NOTES
         return f"""# Kuban Forge
 
 **Theater:** Caucasus
-**Date / time:** 18 October 2026, 06:50 local (first light)
+**Date / time:** 18 October 2026, 07:30 local (sunrise)
 **Player aircraft:** F-16C-50 (`Colt`), Senaki-Kolkhi, hot ramp
 **Players:** {self.slot_summary("Colt")}
 **Difficulty:** ace
@@ -666,9 +698,12 @@ valley floor, which is always a smaller number. Fly the card.
 
 No escort and no SEAD element. **And no HARM** — that is the shape of this
 sortie rather than an oversight. The belts here cannot be shot; they can only be
-avoided, so the terrain is the SEAD and the GBU-12s are all for the target. They
-are coded `{_LASER_CODE}`, which is where the pod comes up and where `Ferret`
-lases, so his spot and the seekers need no arranging.
+avoided, so the terrain is the SEAD and every station that could have carried a
+Weasel load carries a bomb instead. Two of those are GBU-38 JDAM for the halls,
+which fly to the surveyed coordinates on `HALL A` and `HALL B` and ride no spot
+at all. The other two are GBU-12 coded `{_LASER_CODE}`, which is where the pod
+comes up and where `Ferret` lases, so his spot and those two seekers need no
+arranging.
 
 ### `Colt` loadout
 
@@ -683,12 +718,21 @@ Teberda inside the Buk's ring with an alert section launching off the halls
 going up, and nothing else is coming. Four slots put a second bomber up and the
 decision softens.
 
+**They are not four of the same bomb, and the difference is whether the target
+moves.** The halls are buildings on a coordinate that has not changed in forty
+years, so they get the two GBU-38 and a steerpoint each; you fly to a number
+rather than hunt a roof. The column will be eight or ten kilometres up the road
+by the time you are done at the works, and nothing satellite-aided can be given
+a coordinate for that — so the two GBU-12 on the other station are the
+column's, on `Ferret`'s spot. Spending a laser bomb on a hall is legal and
+wastes the only weapon you have that can chase anything.
+
 ## Objectives
 
 Three, and they are priced separately.
 
-- **The casting halls.** The frag. Two aimpoints, four bombs, and no second
-  pass worth taking.
+- **The casting halls.** The frag. Two aimpoints, one JDAM each off its own
+  surveyed steerpoint, and no second pass worth taking.
 - **The shipment.** The night's load is on transporters in the yard and will
   roll the moment the field hears the raid coming, north up the Kuban.
   `Ferret` calls it and lases it on code {_LASER_CODE}, which is your bombs' own
@@ -702,9 +746,11 @@ Three, and they are priced separately.
 ## Intelligence
 
 `Ferret` has been on that ridge since the 12th, so the works themselves are not
-in question — that is a survey rather than an assessment, and it is why the
-`TARGET` steerpoint is where the target is. A chemical plant has been on the
-1:100,000 sheet for forty years; nobody needs an overhead pass to find it.
+in question — that is a survey rather than an assessment, and it is why `HALL A`
+and `HALL B` are steerpoints on the two buildings rather than one assessed point
+over the middle of the plot. A chemical plant has been on the 1:100,000 sheet
+for forty years; nobody needs an overhead pass to find it, and a satellite-aided
+bomb is never better than the coordinate it is handed.
 
 **The air defence is the part we are guessing at.** Overhead has been thin for a
 week and what we have is an ELINT cut, so every red ring on the F10 map and on
@@ -773,7 +819,8 @@ ring is what ends the sortie.
 - `AZGEK`, `TEBERDA` — into the Teberda valley
 - `NIZHNYAYA`, `KARACHAY` — down the Teberda. The masking runs out here
 - `IP` — the Teberda mouth. Pop here
-- `TARGET` — the works. Surveyed, not assessed
+- `HALL A`, `HALL B` — a steerpoint on each casting hall, 220 m apart.
+  Surveyed, not assessed
 - `EGRESS_SW` — the climb out of the Kuban
 - `RANGE` — over the watershed, high and fast
 - `FEET_WET` — past the Abkhaz coast
@@ -789,11 +836,12 @@ ring is what ends the sortie.
 
 ## Weather
 
-October first light. Broken layer based 4500 m, 1200 m thick, density 6. It
+October sunrise. Broken layer based 4500 m, 1200 m thick, density 6. It
 clears the Klukhori crossing by six hundred metres, and the egress climbs
 straight through it — climbing out of trouble on this sortie means going IMC
 over five-thousand-metre rock. Light north wind, 4 m/s ground, 9 m/s at
-8000 m. 6 °C, visibility 25 km in autumn haze. Sunrise about 07:05 local.
+8000 m. 6 °C, visibility 25 km in autumn haze. Sunrise 07:28 local, which is
+when you start.
 
 ## Difficulty composition
 
@@ -838,7 +886,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         magic, awacs_track = self._spawn_awacs(m, usa, scene)
         tanker_track = self._spawn_tanker(m, usa, scene)
         ferret = self._spawn_recon_team(m, usa, scene, shipment=shipment)
-        colt, route = self._spawn_player(m, usa, scene)
+        colt, route = self._spawn_player(m, usa, scene, plant=plant)
         migs = self._spawn_red_alert_fighters(m, russia, scene)
 
         home, minvody_ad = self._spawn_sanctuaries(
@@ -879,6 +927,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             scene,
             plan=plan,
             route=route,
+            halls=self._hall_points(plant),
             shipment=shipment,
             awacs_track=awacs_track,
             tanker_track=tanker_track,
@@ -1043,7 +1092,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
 
         The plot plan is deliberately compact, about 500 m across, and the
         halls' own spacing is the number that matters: 220 m is inside one
-        run-in and well outside one GBU-12's effect. Closer and the two
+        run-in and well outside one 500 lb bomb's effect. Closer and the two
         aimpoints collapse into one lucky pattern; further and the sortie needs
         two passes over a site with a Tunguska in the wire. The whole ordnance
         argument this mission is built on — two bombs for the halls, two for
@@ -1468,10 +1517,12 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         twenty-one kilometres the column has to cover.
 
         That visible stretch **is** the window on the second objective, and the
-        team is what makes four bombs enough for two jobs: a moving column on a
-        road is a hard laser problem for a single jet with nobody to buddy-lase,
-        and the honest answer is a controller on the ground rather than a bigger
-        magazine.
+        team is what makes a two-bomb laser pair enough for it: a moving column
+        on a road is a hard laser problem for a single jet with nobody to
+        buddy-lase, and the honest answer is a controller on the ground rather
+        than a bigger magazine. The halls are the other two bombs and need none
+        of this — they are JDAM off a surveyed coordinate, which is what frees
+        `Ferret` to spend the whole sortie on the one target that moves.
 
         `FacCallsign.AXEMAN` is left alone deliberately — DCS answers a FAC by
         its index in the game's own callname table, and this team is called
@@ -1506,29 +1557,34 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         return ferret
 
     def _spawn_player(
-        self, m: Mission, usa: Country, scene: _Scene
+        self, m: Mission, usa: Country, scene: _Scene, *, plant: _Plant
     ) -> tuple[list[FlyingGroup], list[Point]]:
         """Colt F-16C-50 out of Senaki, hot ramp: low up the valleys, high home.
 
-        The ED-shipped strike fit for this tasking on slot 1, station for
-                station: AMRAAM on the wingtips (1/9, which is where an F-16C carries
-                them — the AIM-9X goes outboard to 2/8 when 3/7 are the weapon
-                stations), four GBU-12 on two TERs, two 370 gal bags, the ALQ-184 on the
-                centreline that every two-tank ED payload carries, and the pod on 11.
-                Slot 2 flies the air-to-air fit (`_FITS`), which is what keeps the
-                magazine at four bombs however many people show up: the decision this
-                mission is built on is spending four across two halls and a shipment.
+        Slot 1 carries the split fit (`_FITS`): AMRAAM on the wingtips (1/9,
+        which is where an F-16C carries them — the AIM-9X goes outboard to 2/8
+        when 3/7 are the weapon stations), a BRU-57 with two GBU-38 on 3 for the
+        halls, a TER with two GBU-12 on 7 for the column, two 370 gal bags, the
+        ALQ-184 on the centreline that every two-tank ED payload carries, and
+        the pod on 11. Slot 2 flies the air-to-air fit, which is what keeps the
+        magazine at four bombs however many people show up: the decision this
+        mission is built on is spending four across two halls and a shipment.
 
-                **No HARM and no HTS**, and that is the mission rather than an omission.
-                There is no anti-radiation answer to the layout here — the belts are
-                avoided or they are not dealt with — so every station that could have
-                carried a Weasel load carries a bomb instead, and the terrain does the
-                job the pod would have done.
+        **No HARM and no HTS**, and that is the mission rather than an omission.
+        There is no anti-radiation answer to the layout here — the belts are
+        avoided or they are not dealt with — so every station that could have
+        carried a Weasel load carries a bomb instead, and the terrain does the
+        job the pod would have done.
 
-                The gross weight is about three quarters of max, which is where a jet
-                with this radius should sit: an F-16 launched at eighty-plus per cent
-                rotates steeply and climbs in afterburner because the weight demands it,
-                and no waypoint speed fixes that.
+        The halls' own positions are read back off the built statics rather than
+        off `scene.works`, because `_plot` may have nudged a building off water
+        or canopy: the coordinate the bomb is given has to be the coordinate the
+        building ended up on, not the one the plot plan asked for.
+
+        The gross weight is about three quarters of max, which is where a jet
+        with this radius should sit: an F-16 launched at eighty-plus per cent
+        rotates steeply and climbs in afterburner because the weight demands it,
+        and no waypoint speed fixes that.
         """
         sections = player_flight(
             m,
@@ -1541,12 +1597,13 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             slots=self.players,
             loadouts=_FITS,
         )
-        # Four GBU-12s and `Ferret`'s spot on one code. The Viper carries no
+        # The two GBU-12s and `Ferret`'s spot on one code. The Viper carries no
         # laser-code field, so this writes nothing into the .miz and instead
         # refuses a code the jet would not come up on — which is what the
         # briefed 1511 was, on a mission whose only guidance is that laser.
         for section in sections:
             laser.set_code(section, _LASER_CODE)
+        halls = self._halls(plant)
         overlay = scene.overlay.overlay
         ingress = waypoints.agl_profile(
             scene.ingress, overlay, clearance_m=_LEG_CLEARANCE_M
@@ -1555,13 +1612,31 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             scene.egress, overlay, clearance_m=_LEG_CLEARANCE_M
         )
         for player in sections:
-            self._route_colt(player, scene, ingress, egress)
+            self._route_colt(player, scene, ingress, egress, halls=halls)
         route = [
             *(leg.position for leg, _ in ingress),
-            scene.works,
+            *self._hall_points(plant),
             *(leg.position for leg, _ in egress),
         ]
         return sections, route
+
+    @staticmethod
+    def _halls(plant: _Plant) -> tuple[StaticGroup, StaticGroup]:
+        """The frag, in run-in order, as the groups the steerpoints are read off.
+
+        The run-in comes up the Teberda from the south, and `_PLANT_LAYOUT`
+        puts hall B 220 m north of hall A, so this order is also the order they
+        pass under the nose — which is what makes two aimpoints one pass. One
+        ordering, used by the route and by the map, so the two cannot disagree
+        about which hall is A.
+        """
+        return (plant.hall_a, plant.hall_b)
+
+    @classmethod
+    def _hall_points(cls, plant: _Plant) -> tuple[Point, Point]:
+        """Where those two halls actually stand."""
+        first, second = cls._halls(plant)
+        return (first.units[0].position, second.units[0].position)
 
     def _route_colt(
         self,
@@ -1569,18 +1644,36 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         scene: _Scene,
         ingress: Sequence[tuple[Leg, float]],
         egress: Sequence[tuple[Leg, float]],
+        *,
+        halls: tuple[StaticGroup, StaticGroup],
     ) -> None:
-        """Senaki → the Kodori → Klukhori → TARGET → over the range → Senaki.
+        """Senaki → the Kodori → Klukhori → the two halls → the range → Senaki.
 
-        The altitudes are worked out once in `_spawn_player` and handed in: they
-        are reads against the elevation raster, and two sections deriving them
-        separately could fly two different profiles under one briefing.
+        The altitudes and the hall positions are worked out once in
+        `_spawn_player` and handed in: each is a read against the elevation
+        raster or off a built static, and two sections deriving them separately
+        could fly two different profiles under one briefing.
 
-        `TARGET` is a ground waypoint, so it carries the works' own elevation
+        **Two aimpoints get two steerpoints, and both sit on the buildings
+        themselves.** The reveal policy in `core/map_draw.py` coarsens what an
+        enemy *system* is assessed to reach, and a casting hall is not a system:
+        it is fixed geography that was on the 1:100,000 sheet before the war and
+        that a team on the ridge has been watching for six days. There is no
+        ignorance here to model, so modelling one would be a fiction — and with
+        a satellite-aided bomb it would be a fiction that misses, because a JDAM
+        is never better than the coordinate it is handed. That is the whole
+        reason this route stopped carrying one `TARGET` point over the site
+        centre: 110 m from that point to either hall is nothing to a briefing
+        and everything to a weapon that flies to a number.
+
+        `waypoints.add_target_waypoint` takes the built statics rather than
+        their positions, which is what makes the paragraph above enforceable
+        instead of merely intended: there is no estimate that can be passed to
+        it. Each is a ground waypoint, so it carries its own hall's elevation
         rather than the altitude the flight happens to cross it at — that number
         is the steerpoint elevation the CCRP solution, the HUD and the DED all
-        read. The pop is flown off the `IP` leg above it, which is a point in the
-        air and stays there.
+        read. The pop is flown off the `IP` leg above them, which is a point in
+        the air and stays there.
         """
         player.add_runway_waypoint(scene.senaki)
         for leg, altitude in ingress:
@@ -1590,13 +1683,14 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
                 speed=leg.speed_kph,
                 name=leg.name,
             )
-        waypoints.add_ground_waypoint(
-            player,
-            scene.works,
-            overlay=scene.overlay.overlay,
-            speed=_ATTACK_SPEED_KPH,
-            name="TARGET",
-        )
+        for name, hall in zip(("HALL A", "HALL B"), halls):
+            waypoints.add_target_waypoint(
+                player,
+                hall,
+                overlay=scene.overlay.overlay,
+                speed=_ATTACK_SPEED_KPH,
+                name=name,
+            )
         for leg, altitude in egress:
             player.add_waypoint(
                 leg.position,
@@ -1878,7 +1972,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         # in the radio menu.
         kneeboard.remark(
             m,
-            f"Ferret 1-1 lases on {_LASER_CODE}; your four GBU-12s are coded the same.",
+            f"Ferret 1-1 lases on {_LASER_CODE}; your two GBU-12s are coded the "
+            "same. The two JDAM ride no spot.",
         )
         kneeboard.remark(m, "Shipment coordinates: F10 -> Other -> Ferret 1-1.")
 
@@ -2105,6 +2200,7 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         *,
         plan: PlanOverlay,
         route: list[Point],
+        halls: tuple[Point, Point],
         shipment: VehicleGroup,
         awacs_track: tuple[Point, Point],
         tanker_track: tuple[Point, Point],
@@ -2124,10 +2220,17 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         for forty years, it does not move, and a team has been looking at it for
         six days. Drawing it as a twelve-kilometre dashed "vicinity" would model
         an ignorance nobody has, and it would then contradict the two channels
-        that cannot be coarsened anyway — the `TARGET` steerpoint has to be *on*
-        the works or the run-in is a search, and Ferret's readout answers off a
-        live position. This is the same argument `PlanOverlay.frontline` makes
-        about a front line, applied to the other kind of fixed geography.
+        that cannot be coarsened anyway — `HALL A` and `HALL B` have to be *on*
+        the halls or the run-in is a search and the JDAM is a miss, and Ferret's
+        readout answers off a live position. This is the same argument
+        `PlanOverlay.frontline` makes about a front line, applied to the other
+        kind of fixed geography.
+
+        Each hall is labelled where it stands rather than the site carrying one
+        label, because the frag is two of the seven buildings on that plot and a
+        single marker over the middle of it names none of them. The labels are
+        the same two names the steerpoints carry, so the map, the card and the
+        DED call the same building the same thing.
 
         Draw order is a total order in the cartridge's navigation tab and this
         route uses twenty of its twenty-five slots, so the sequence below is a
@@ -2145,7 +2248,8 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
         and the fifteen pre-planned slots are better spent on things that shoot.
         """
         home.draw(plan)
-        plan.waypoint_label(scene.works, "TARGET — Kuban Forge (works)")
+        plan.waypoint_label(halls[0], "HALL A — casting hall (frag)")
+        plan.waypoint_label(halls[1], "HALL B — casting hall (frag)")
         plan.waypoint_label(scene.recon_post, "Ferret 1-1 — recon post")
         plan.route(route, "Colt — valley ingress, high egress")
         briefed = [

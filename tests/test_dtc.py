@@ -23,6 +23,7 @@ from dcs.task import CAP
 from dcs.terrain import Caucasus
 
 from dcs_mission_creator.core import dtc, mission_kit, waypoints
+from dcs_mission_creator.core.difficulty import Difficulty
 from dcs_mission_creator.core.kneeboard.flightplan import flight_plan
 from dcs_mission_creator.core.loadout import Loadout
 from dcs_mission_creator.core.map_draw import PlanOverlay
@@ -601,3 +602,27 @@ def test_two_sections_of_one_flight_do_not_raise(mission: Mission, tmp_path: Pat
 
     dtc.arm_plan(mission, _drawn_plan(mission), overlay=_Overlay())
     assert _nav_tab(mission, tmp_path)["NAV_PTS"]
+
+
+def test_a_mark_on_a_route_steerpoint_does_not_take_a_second_slot(
+    mission: Mission,
+) -> None:
+    """A labelled aimpoint the flight also flies to is one place, not two.
+
+    `kuban_forge` names each casting hall on the F10 map and flies a surveyed
+    steerpoint to each — both correct, and both derived from the same position,
+    so writing the label as well would spend a navigation slot on a point
+    already in the DED. The mark drawn somewhere else is untouched.
+    """
+    plan = PlanOverlay(mission, Difficulty.TRAINED)
+    batumi = mission.terrain.airports["Batumi"]
+    flown = batumi.position.point_from_heading(45.0, 20_000.0)
+    elsewhere = batumi.position.point_from_heading(225.0, 20_000.0)
+    plan.waypoint_label(flown, "HALL A")
+    plan.waypoint_label(elsewhere, "somewhere else")
+
+    route = [dtc.NavPoint(batumi.position), dtc.NavPoint(flown)]
+    notes = [point.note for point in dtc.plan_steerpoints(plan, traced_by=route)]
+    assert notes == ["somewhere else"]
+    # Without the route to compare against, both marks are still written.
+    assert len(dtc.plan_steerpoints(plan)) == 2

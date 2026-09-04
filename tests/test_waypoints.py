@@ -17,7 +17,10 @@ import math
 from collections.abc import Callable
 
 import pytest
+from dcs import statics
 from dcs.mapping import Point
+from dcs.mission import Mission
+from dcs.planes import F_16C_50
 from dcs.terrain.caucasus.caucasus import Caucasus
 
 from dcs_mission_creator.core import waypoints
@@ -171,3 +174,35 @@ def _min_clearance(
             here = a.new_in_same_map(a.x + (b.x - a.x) * f, a.y + (b.y - a.y) * f)
             worst = min(worst, alt_a * (1 - f) + alt_b * f - overlay.elevation_at(here))
     return worst
+
+
+# -- add_target_waypoint -----------------------------------------------------
+
+
+def test_a_target_waypoint_is_read_off_the_building_not_off_the_plan() -> None:
+    """The signature is the enforcement: a `StaticGroup`, never a `Point`.
+
+    Both missions that got this wrong derived the aimpoint from something the
+    mission *asked for* — a `PlanOverlay` estimate in one, the plot-plan centre
+    in the other — and neither is where the building ended up. Reading it back
+    off the built unit is what makes "surveyed" true rather than briefed.
+    """
+    m = Mission(terrain=TERRAIN)
+    hall = m.static_group(
+        m.country("Russia"),
+        "casting hall",
+        statics.Fortification.Workshop_A,
+        position=_at(20_000.0),
+    )
+    # The layout asked for one place; `_plot`-style nudging put it 180 m away.
+    hall.units[0].position = _at(20_180.0)
+    colt = m.flight_group_inflight(
+        m.country("USA"), "Colt", F_16C_50, position=_at(0.0), altitude=5_000, speed=800
+    )
+
+    point = waypoints.add_target_waypoint(
+        colt, hall, overlay=_flat(742.0), speed=640, name="HALL"
+    )
+    assert point.position == hall.units[0].position
+    assert point.alt == 742.0  # the building's own ground, not the run-in altitude
+    assert str(point.name) == "HALL"
