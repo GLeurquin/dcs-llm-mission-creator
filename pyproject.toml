@@ -1,5 +1,6 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+# >=77 for PEP 639: an SPDX `license` string plus `license-files`.
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,6 +8,11 @@ name = "dcs-mission-creator"
 version = "0.1.0"
 description = "Create DCS missions with pydcs"
 readme = "README.md"
+# Copyleft by inheritance rather than by preference: the default TTS backend
+# imports piper1-gpl, which is GPL-3.0-or-later, so this cannot ship under
+# weaker terms. Vendored Skynet-IADS keeps its own Apache-2.0.
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
   "pydcs @ git+https://github.com/pydcs/dcs.git",
