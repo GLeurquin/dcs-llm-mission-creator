@@ -57,6 +57,22 @@ testpaths = ["tests"]
 markers = [
   "slow: needs the built map overlay and/or a DCS install; skipped in CI",
 ]
+# pydcs' unit and weapon tables are generated from the game's own data files,
+# so the noise they make is upstream's and not actionable here: `weapons_data`
+# alone raises eleven `SyntaxWarning`s for `"\*"` inside weapon display names.
+# They surface only on a cold compile, which is exactly what CI has and a warm
+# `__pycache__` hides -- so the warning summary is eleven lines long on the one
+# machine nobody is reading it on.
+#
+# A compile-time warning carries no importable module name: `warnings` derives
+# the filter's module string from the *file path* with `.py` trimmed, which is
+# why this matches a path segment rather than `dcs.weapons_data`. Runtime
+# warnings from the same package do carry the dotted name, hence the second
+# rule. Both are scoped to pydcs; nothing this repo writes is silenced.
+filterwarnings = [
+  'ignore::SyntaxWarning:.*[\\/]dcs[\\/].*',
+  'ignore::DeprecationWarning:dcs\..*',
+]
 
 [tool.ruff.lint]
 extend-select = ["I"]

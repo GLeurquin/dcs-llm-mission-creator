@@ -27,9 +27,11 @@ from pathlib import Path
 import pytest
 
 from dcs_mission_creator.core import mission_builder
+from dcs_mission_creator.map_overlay import query
 
 ROOT = Path(__file__).resolve().parents[1]
 SKILL_DIR = ROOT / ".claude" / "skills" / "dcs-mission"
+RESOURCES = ROOT / "src" / "dcs_mission_creator" / "resources"
 
 #: The four documents, in the order a reader meets them. `README.md` is here
 #: because it went stale by itself, on the same fact as `CLAUDE.md` did.
@@ -55,11 +57,45 @@ def _text(name: str) -> str:
 _PATH_RE = re.compile(r"(?<![\w/.])((?:src/dcs_mission_creator|tests)/[\w./-]*[\w/])")
 
 
+def _build_outputs() -> frozenset[str]:
+    """The two directories the overlay pipeline *writes*, as the docs spell them.
+
+    A build output is absent from a fresh clone -- which is what CI is -- and
+    present on every machine that has ever run `map-overlay build`, so a
+    document naming one passed here for as long as nobody checked out the repo
+    twice. `README.md` names both, correctly: telling a reader where the overlay
+    lands is the point of the sentence.
+
+    The names come from `map_overlay/query.py`, which is where the pipeline
+    decides them, rather than from two literals here. Move the directory and the
+    excuse moves with it: the old path in a stale `README.md` stops being
+    excused and fails again, which is the drift this file exists to catch.
+    """
+    theater = "any-theater"  # both take one; an empty string would collapse away
+    names = (
+        query.overlay_root(theater).parent.name,
+        query.build_cache_root(theater).parent.name,
+    )
+    return frozenset(f"{RESOURCES.relative_to(ROOT).as_posix()}/{n}/" for n in names)
+
+
+BUILD_OUTPUTS = _build_outputs()
+
+
+def test_resources_package_is_where_the_docs_say() -> None:
+    """The anchor `_build_outputs` hangs its two paths off is a real directory."""
+    assert RESOURCES.is_dir()
+
+
 @pytest.mark.parametrize("doc", DOC_IDS)
 def test_referenced_paths_exist(doc: str) -> None:
-    """Every `src/` or `tests/` path a document names is on disk."""
+    """Every `src/` or `tests/` path a document names is on disk, or is built."""
     missing = sorted(
-        {p for p in _PATH_RE.findall(_text(doc)) if not (ROOT / p).exists()}
+        {
+            p
+            for p in _PATH_RE.findall(_text(doc))
+            if p not in BUILD_OUTPUTS and not (ROOT / p).exists()
+        }
     )
     assert not missing, f"{doc} names paths that do not exist: {missing}"
 
