@@ -1,0 +1,35 @@
+{
+  // Keep heavy generated trees out of the Explorer, quick-open, search and —
+  // the reason this file exists — the file set an AI agent can pull into its
+  // context window. Everything here is already gitignored; `files.exclude`
+  // does not read .gitignore, so it has to be restated.
+  //
+  // `src/.../resources` is the big one: 42 GB across ~51k files (map overlay
+  // rasters plus the Overpass tile cache). `.venv` holds multi-megabyte
+  // generated pydcs modules — dcs/planes.py alone would fill a 128k context
+  // window several times over.
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/.pytest_cache": true,
+    "**/.ruff_cache": true,
+    ".venv": true,
+    "src/dcs_mission_creator/resources/_build_cache": true,
+    "src/dcs_mission_creator/resources/overlays": true,
+    "src/dcs_mission_creator/cache": true,
+    "cache": true,
+    "out": true,
+    "**/*.miz": true
+  },
+
+  // Same list again: without it the file watcher tries to watch ~58k files.
+  "files.watcherExclude": {
+    "**/__pycache__/**": true,
+    "**/.pytest_cache/**": true,
+    "**/.ruff_cache/**": true,
+    "**/.venv/**": true,
+    "src/dcs_mission_creator/resources/**": true,
+    "src/dcs_mission_creator/cache/**": true,
+    "cache/**": true,
+    "out/**": true
+  }
+}
