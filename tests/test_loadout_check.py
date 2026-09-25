@@ -40,6 +40,20 @@ local unitPayloads = {
 return unitPayloads
 """
 
+SYMBOLIC_PAYLOAD_LUA = """
+local pylon_1A,pylon_1B,pylon_2,pylon_3 = 1,2,3,4
+local unitPayloads = {
+    ["payloads"] = {
+        [1] = { ["pylons"] = {
+            [1] = { ["CLSID"] = "{SIDEWINDER}", ["num"] = pylon_1A },
+            [2] = { ["CLSID"] = "{SPARROW}", ["num"] = pylon_1B },
+            [3] = { ["CLSID"] = "{PHOENIX}", ["num"] = pylon_3 },
+        }},
+    },
+}
+return unitPayloads
+"""
+
 
 @pytest.fixture(autouse=True)
 def _clear_cache():
@@ -71,6 +85,19 @@ def test_payloads_accumulate_across_blocks_rather_than_overwriting(table):
     """Two loadouts in one file are two sources of evidence, not the later one."""
     assert 11 in table["{LITENING}"]
     assert 1 in table["{AMRAAM}"]
+
+
+def test_symbolic_pylon_numbers_are_resolved(tmp_path):
+    """Heatblur payload tables name their logical pylons instead of using digits."""
+    path = tmp_path / "F-14B.lua"
+    path.write_text(SYMBOLIC_PAYLOAD_LUA)
+    found: dict[str, set[int]] = {}
+    loadout_check._read_payloads(path, found)
+    assert found == {
+        "{SIDEWINDER}": {1},
+        "{SPARROW}": {2},
+        "{PHOENIX}": {4},
+    }
 
 
 def test_no_install_means_no_opinion(monkeypatch):

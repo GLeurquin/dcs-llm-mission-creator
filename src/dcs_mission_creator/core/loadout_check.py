@@ -63,7 +63,17 @@ _PAYLOAD_DIRS = (
 #: (store, station) pairs without parsing Lua properly. The tables are generated
 #: and uniform, so this holds; anything it mis-reads shows up as a store with no
 #: stations at all rather than as a wrong answer.
-_ENTRY = re.compile(r'\["CLSID"\]\s*=\s*"([^"]*)"|\["num"\]\s*=\s*(\d+)')
+_ENTRY = re.compile(r'\["CLSID"\]\s*=\s*"([^"]*)"|\["num"\]\s*=\s*([A-Za-z_]\w*|\d+)')
+
+# Heatblur's Tomcat tables name the ten logical stations first, then use those
+# symbols in every payload: ``local pylon_1A,... = 1,...`` and
+# ``["num"] = pylon_8A``. Treating only literal digits as a station made the
+# checker silently pair each Tomcat CLSID with some later unrelated ``num`` and
+# report valid stock fits as unusual.
+_SYMBOL_ROW = re.compile(
+    r"\blocal\s+([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)+)\s*=\s*"
+    r"(\d+(?:\s*,\s*\d+)+)"
+)
 
 
 @dataclass(frozen=True)
@@ -100,13 +110,20 @@ def ed_stations(aircraft_id: str) -> dict[str, frozenset[int]]:
 def _read_payloads(path: Path, into: dict[str, set[int]]) -> None:
     """Fold one payload file's (CLSID, station) pairs into `into`."""
     text = path.read_text(encoding="utf-8", errors="replace")
+    symbols: dict[str, int] = {}
+    for match in _SYMBOL_ROW.finditer(text):
+        names = [part.strip() for part in match.group(1).split(",")]
+        values = [int(part.strip()) for part in match.group(2).split(",")]
+        symbols.update(zip(names, values))
     pending: str | None = None
     for match in _ENTRY.finditer(text):
         clsid, num = match.groups()
         if clsid is not None:
             pending = clsid
         elif pending is not None:
-            into.setdefault(pending, set()).add(int(num))
+            station = int(num) if num.isdigit() else symbols.get(num)
+            if station is not None:
+                into.setdefault(pending, set()).add(station)
             pending = None
 
 
