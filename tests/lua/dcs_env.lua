@@ -1,6 +1,7 @@
 -- A stand-in for the DCS mission-scripting environment, used by
 -- `tests/test_iads_runtime.py` to actually *run* the MIST shim, the vendored
--- Skynet-IADS build and a generated setup script under an embedded Lua.
+-- Skynet-IADS build and a generated setup script under an embedded Lua, and by
+-- the autolase and intercept runtime tests for their own scripts.
 --
 -- This exists because "the Lua compiles" is a much weaker claim than it sounds:
 -- the interesting failures in an IADS integration are all runtime ones — a
@@ -11,13 +12,15 @@
 -- Test-facing entry points:
 --   TESTGROUP{name=, x=, z=, side=, category=, unitCategory=, units={...}}
 --       Places a group. Each unit takes {type=, dx=, dz=, y=, attrs=, ammo=,
---       radar_m=, missile_m=, ceiling_m=}. `radar_m` is head-on air detection
---       range, `missile_m` the launcher's reach, `ceiling_m` its altitude limit.
+--       radar_m=, missile_m=, ceiling_m=, player=}. `radar_m` is head-on air detection
+--       range, `missile_m` the launcher's reach, `ceiling_m` its altitude limit,
+--       `player` puts a human in it for coalition.getPlayers.
 --   TESTADVANCE(to, step)   run the clock forward, firing scheduled tasks
 --   TESTFIRE(event)         deliver a world event to every handler
 --   TESTMASK = f(a, b)      override terrain line of sight (nil = everything visible)
 --   TESTSURFACE = f(vec2)   override land.getSurfaceType (nil = drivable land)
 --   TESTLOG                 list of noted lines; assign a fresh table to clear
+--   TESTFLAGS               user flags the script has set, by number
 do
   -- Appends to the *current* _G.TESTLOG, so a test can clear it between phases
   -- by assigning a fresh table. Capturing the table in a local instead silently
@@ -28,6 +31,7 @@ do
     t[#t + 1] = s
   end
   _G.TESTNOTE = note
+  _G.TESTFLAGS = {}
 
   env = {
     info = function(s) note("INFO " .. tostring(s)) end,
@@ -114,13 +118,16 @@ do
       Ground = {id = {ROE = 0, ALARM_STATE = 9},
                 val = {ROE = {OPEN_FIRE = 2, WEAPON_HOLD = 4},
                        ALARM_STATE = {AUTO = 0, GREEN = 1, RED = 2}}},
-      Air = {id = {ROE = 0}, val = {ROE = {WEAPON_FREE = 0}}},
+      Air = {id = {ROE = 0, REACTION_ON_THREAT = 1},
+             val = {ROE = {WEAPON_FREE = 0, OPEN_FIRE = 2, WEAPON_HOLD = 4},
+                    REACTION_ON_THREAT = {EVADE_FIRE = 2}}},
     },
   }
   trigger = {action = {
     outTextForCoalition = function(_, text) note("TEXT " .. tostring(text)) end,
     outSoundForCoalition = function(_, snd) note("SOUND " .. tostring(snd)) end,
     outText = function(text) note("DEBUG " .. tostring(text)) end,
+    setUserFlag = function(flag, value) TESTFLAGS[flag] = value end,
     outSound = function(snd) note("SOUND " .. tostring(snd)) end,
   }}
   missionCommands = {
@@ -139,7 +146,7 @@ do
   -- keeps answering.
   local handlers = {}
   world = {
-    event = {S_EVENT_SHOT = 1, S_EVENT_DEAD = 8, S_EVENT_BIRTH = 15},
+    event = {S_EVENT_SHOT = 1, S_EVENT_HIT = 2, S_EVENT_DEAD = 8, S_EVENT_BIRTH = 15},
     addEventHandler = function(h) handlers[#handlers + 1] = h end,
     removeEventHandler = function(h)
       for i, existing in ipairs(handlers) do
@@ -244,6 +251,11 @@ do
         if id == AI.Option.Ground.id.ROE then owner.roe = val end
       end,
       setOnOff = function(_, on) owner.onoff = on end,
+      -- What the intercept script commits a defender with; recorded, not flown.
+      pushTask = function(_, task)
+        owner.pushed = owner.pushed or {}
+        owner.pushed[#owner.pushed + 1] = task
+      end,
       -- Only the shape the jockey builds: a Mission task carrying a ground
       -- route. `y` on a route point is the world z, which is exactly the
       -- confusion this stub exists to catch. A route has to start where the
@@ -315,7 +327,7 @@ do
         name = spec.name .. " Unit #" .. i, type = u.type, alive = true,
         x = spec.x + (u.dx or 0), z = spec.z + (u.dz or 0), y = u.y or 0,
         attrs = u.attrs, ammo = u.ammo, radar_m = u.radar_m,
-        missile_m = u.missile_m, ceiling_m = u.ceiling_m, group = g,
+        missile_m = u.missile_m, ceiling_m = u.ceiling_m, group = g, player = u.player,
         category = spec.unitCategory or Unit.Category.GROUND_UNIT,
       }, UnitMT)
       units[unit.name] = unit
@@ -326,6 +338,14 @@ do
   end
 
   Group.getByName = function(n) return groups[n] end
+  -- Units a human is sitting in: TESTGROUP units with `player = true`.
+  coalition.getPlayers = function(side)
+    local out = {}
+    for _, u in pairs(units) do
+      if u.player and u.alive and u.group.side == side then out[#out + 1] = u end
+    end
+    return out
+  end
   Unit.getByName = function(n) return units[n] end
   StaticObject = {getByName = function() return nil end}
 

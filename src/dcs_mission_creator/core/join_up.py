@@ -88,7 +88,12 @@ if TYPE_CHECKING:
 
 log = structlog.get_logger(__name__)
 
-__all__ = ["hold_package_for_player", "launch_immediately", "PLAYER_AIRBORNE_AGL_M"]
+__all__ = [
+    "hold_package_for_player",
+    "launch_immediately",
+    "player_airborne",
+    "PLAYER_AIRBORNE_AGL_M",
+]
 
 
 #: Height above the runway that counts as "airborne". A parked jet sits a metre
@@ -167,6 +172,25 @@ def hold_package_for_player(
         held += 1
     log.debug("package held for player join-up", flights=held, fallback_s=fallback_s)
     return held
+
+
+def player_airborne(
+    m: Mission,
+    *,
+    coalition: str = "blue",
+    agl_m: float = PLAYER_AIRBORNE_AGL_M,
+    fallback_s: int = FALLBACK_S,
+) -> list[Condition]:
+    """The hold's own release condition, for a mission clock that starts there.
+
+    A mission whose opposition should not be airborne before the player is —
+    `roki_shepherd`'s intruders — keys its activation off the same moment the
+    package is released, rather than a guess at how long a start takes. Call it
+    after the player flight exists: it reads the client slots off `m`.
+    """
+    return _player_airborne(
+        _client_units(m), coalition, agl_m=agl_m, fallback_s=fallback_s
+    )
 
 
 def _player_airborne(

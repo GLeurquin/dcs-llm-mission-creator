@@ -619,6 +619,50 @@ Four exclusions:
 rather than all of them, with a `TimeAfter(FALLBACK_S)` OR'd in so a server with
 nobody slotted launches after fifteen minutes.
 
+`player_airborne(m)` hands back that same release condition list for a mission
+that keys something else off it (`roki_shepherd` activates its intruders on
+it). Call it after the player flight exists.
+
+## Air-policing helper (project-owned)
+
+[`intercept`](src/dcs_mission_creator/core/intercept.py) is for an enemy
+aircraft nobody is cleared to fire on yet: intercept it, shadow it, escort it out
+of a zone, and let it maybe turn hostile. It runs as
+`core/lua/intercept.lua`:
+
+```python
+from dcs_mission_creator.core.intercept import Calls, Track, arm_intercepts
+
+flags = arm_intercepts(
+    m,
+    [Track(group=zombie, label="Zombie 1", orbit=gori, exit=north_of_roki,
+           home=beslan_airport, altitude_m=7500, speed_kph=800,
+           hostile_probability=0.35, hostile_after_s=(45, 240),
+           deadline_s=1500, calls=Calls(intercepted="Magic: {label} ...", ...))],
+    zone=zone_points,          # absolute Points, >= 3, the police zone
+    defenders=[eagle],         # friendly AI committed on a hostile, and only on it
+    controller=magic,          # whose radio the calls go out on; dead = silent
+    voice=self._voice,
+)
+# flags.done / flags.foul / flags.unchallenged -> condition.FlagIsTrue(...)
+```
+
+- **Call it after every group it names exists.** It appends weapons hold to each
+  track's and defender's spawn waypoint and **strips the defenders' own engage
+  tasks** (`CAPTaskAction`, `EngageTargets`, …) — a defender committed on
+  `OPEN_FIRE` with its own CAP task would still shoot a compliant track.
+- **`orbit` inside the zone, `exit` outside it** — it raises otherwise, since a
+  track whose way home starts inside the zone never resolves.
+- **Keep every track's route and orbit out of friendly SAM reach.** A hit on a
+  track that has not turned — by anyone on the players' side — sets `foul`.
+  `build_sanctuary(keep_clear=...)` is where to enforce it.
+- **The per-track calls are Lua-side** (`Calls`, `{label}` templates, spoken
+  and printed with one string). The mission's outcome calls go on the three
+  flags through `core/triggers.py`. Flags are numbered from `flag_base`
+  (default 900).
+- The hostile roll happens **in the air**, at each intercept, not at build time.
+  `trace=True` (default) logs each decision under `INTERCEPT/<label>`.
+
 ## Integrated air-defence helper (project-owned)
 
 [`iads`](src/dcs_mission_creator/core/iads.py) gives radar sites the two
@@ -837,6 +881,7 @@ plan.threat(sa13_pos, radius=8_000.0, label="SA-13", icon=StandardIcon.AirDefens
 plan.mobile_threat(convoy_pos, "Convoy SHORAD", icon=StandardIcon.Mechanized)
 plan.threat_area(center, 28_000.0, "SA-6 + bandit CAP — vicinity")
 plan.frontline(front.trace, "FRONT LINE — guns and MANPADS below 10,000")
+plan.boundary(zone_points, "Police zone")  # our own declared airspace, closed
 ```
 
 Pass **absolute** world `Point`s — `PlanOverlay` does the layer selection, colour
@@ -849,8 +894,8 @@ presence**: full icon + true ring on `recruit`, coarse + offset + "(est.)" on
 `veteran`/`ace`. `.objective()` tightens and loosens the same way. **Every
 difficulty draws a ring** and hands the estimate back.
 
-Friendly-plan calls (`route`, `orbit`, `waypoint_label`, `umbrella`) always draw
-precisely. Two of those precisions are load-bearing: `umbrella` is our own SAMs
+Friendly-plan calls (`route`, `orbit`, `waypoint_label`, `umbrella`, `boundary`)
+always draw precisely; a `boundary` becomes a GEO line ranked with a front line. Two of those precisions are load-bearing: `umbrella` is our own SAMs
 and a pilot who is hit and low on fuel cannot use a refuge drawn 6 km off truth;
 `.frontline()` is the one *enemy* call drawn precisely at every difficulty. The
 air defence sitting on it still goes through `.threat()` / `.mobile_threat()`.

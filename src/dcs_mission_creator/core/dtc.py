@@ -528,7 +528,8 @@ def plan_geo_lines(
     geometry with a shape and nothing else in the cockpit carries it — the
     briefing's "cross at the seam" needs something on the HSD to point at, the
     same argument that makes `PlanOverlay.frontline` the one red drawing painted
-    precisely at every difficulty.
+    precisely at every difficulty. A declared airspace boundary ranks with it
+    for the same reason: it is a shape, and nothing else carries it.
 
     Then a corridor the flight does **not** fly. A `route` line is dropped when
     every one of its vertices is within `_TRACED_M` of a steerpoint in
@@ -541,7 +542,7 @@ def plan_geo_lines(
     steerpoint that carries its range and bearing, so a line here adds the shape
     the point cannot — which way the pattern runs, and how long it is.
     """
-    ranking = {"frontline": 0, "route": 1, "orbit": 2}
+    ranking = {"frontline": 0, "boundary": 0, "route": 1, "orbit": 2}
     candidates = [
         line for line in plan.lines() if line.kind in ranking and len(line.points) >= 2
     ]

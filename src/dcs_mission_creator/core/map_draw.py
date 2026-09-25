@@ -107,7 +107,7 @@ class PlanLine:
 
     points: tuple[Point, ...]
     label: Optional[str]
-    #: `"route"` | `"orbit"` | `"frontline"`.
+    #: `"route"` | `"orbit"` | `"frontline"` | `"boundary"`.
     kind: str
     enemy: bool
     #: Where this fell in the mission's `_draw_plan`, counted across lines *and*
@@ -181,6 +181,31 @@ class PlanOverlay:
             self._label(pts[0], label, _FRIENDLY)
         self._lines.append(
             PlanLine(tuple(pts), label, "route", enemy=False, seq=self._next_seq())
+        )
+
+    def boundary(self, points: Sequence[Point], label: Optional[str] = None) -> None:
+        """Draw an airspace the player's side declared, closed, as a cyan outline.
+
+        Precise at every difficulty for the reason `umbrella` is: the edge of
+        our own zone is not intelligence, and a mission whose frag is "see them
+        out of it" has to show the pilot where "out" is. Recorded as a
+        `"boundary"` line, which `core/dtc.py` ranks with a front line for the
+        GEO budget — it is the one shape the steerpoints cannot trace.
+        """
+        pts = list(points)
+        if len(pts) < 3:
+            return
+        closed = [*pts, pts[0]]
+        anchor = closed[0]
+        self._layer.add_line_segments(
+            anchor, [p - anchor for p in closed], color=_FRIENDLY, line_thickness=5
+        )
+        if label:
+            self._label(pts[0], label, _FRIENDLY)
+        self._lines.append(
+            PlanLine(
+                tuple(closed), label, "boundary", enemy=False, seq=self._next_seq()
+            )
         )
 
     def orbit(self, p1: Point, p2: Point, label: Optional[str] = None) -> None:
