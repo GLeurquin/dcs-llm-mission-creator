@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from dcs_mission_creator.core.tts.backend import VoiceBackend
+from dcs_mission_creator.core.tts.piper import _piper_pronunciation
 from dcs_mission_creator.core.tts.synth import VoiceSynth
 
 
@@ -94,3 +95,20 @@ def test_cache_path_deterministic_for_same_inputs(tmp_path: Path):
     p2 = synth._cache_path("hello")
     assert p1 == p2
     assert p1.parent == tmp_path.resolve()
+
+
+@pytest.mark.parametrize(
+    ("written", "spoken"),
+    [
+        ("two MiG-29S", "two mig twenty-nine S"),
+        ("MiG-23s inbound", "mig twenty-three fighters inbound"),
+        ("a MiG-21bis", "a mig twenty-one bis"),
+        ("the MiG pair", "the mig pair"),
+        ("two MiGs", "two migs"),
+        ("three TELs and a TEL", "three T E L launchers and a T E L"),
+        ("Batumi TELEPHONE", "Batumi TELEPHONE"),
+    ],
+)
+def test_piper_is_handed_what_eSpeak_says_right(written: str, spoken: str):
+    """Only the audio changes; the on-screen text is the mission's own."""
+    assert _piper_pronunciation(written) == spoken

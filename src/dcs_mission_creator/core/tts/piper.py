@@ -12,6 +12,8 @@ https://huggingface.co/rhasspy/piper-voices (e.g. `en_GB-alan-medium`,
 
 from __future__ import annotations
 
+import hashlib
+import re
 import wave
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,6 +24,97 @@ log = structlog.get_logger(__name__)
 
 DEFAULT_VOICE = "en_US-danny-low"
 _DEFAULT_MODEL_DIR = Path("cache") / "voice" / "models"
+
+# Recognize any numbered MiG model instead of maintaining a separate rule for
+# each variant. Lowercase MiG to keep Piper from spelling the acronym, convert
+# its number to words, and spell any model suffix letter by letter.
+_MIG_MODEL_PATTERN = re.compile(r"\bMiG[\s-]?(\d+)([A-Za-z]*)\b", re.IGNORECASE)
+_SMALL_NUMBERS = (
+    "zero",
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+    "ten",
+    "eleven",
+    "twelve",
+    "thirteen",
+    "fourteen",
+    "fifteen",
+    "sixteen",
+    "seventeen",
+    "eighteen",
+    "nineteen",
+)
+_TENS = {
+    20: "twenty",
+    30: "thirty",
+    40: "forty",
+    50: "fifty",
+    60: "sixty",
+    70: "seventy",
+    80: "eighty",
+    90: "ninety",
+}
+
+# Piper's eSpeak phonemizer can spell some military names and proper nouns as
+# initials. Add explicit aliases here; pronunciations vary too much for a safe
+# general acronym rule. Word boundaries keep short names from changing inside
+# longer words.
+_PRONUNCIATION_ALIASES = (
+    ("MiGs", "migs"),
+    ("MiG", "mig"),
+    ("TELs", "T E L launchers"),
+    ("TEL", "T E L"),
+)
+
+
+def _number_words(value: int) -> str:
+    if value < 20:
+        return _SMALL_NUMBERS[value]
+    if value < 100:
+        tens, ones = divmod(value, 10)
+        return _TENS[tens * 10] + (f"-{_SMALL_NUMBERS[ones]}" if ones else "")
+    if value < 1_000:
+        hundreds, remainder = divmod(value, 100)
+        result = f"{_SMALL_NUMBERS[hundreds]} hundred"
+        return f"{result} {_number_words(remainder)}" if remainder else result
+    for scale, name in ((1_000_000, "million"), (1_000, "thousand")):
+        if value >= scale:
+            whole, remainder = divmod(value, scale)
+            result = f"{_number_words(whole)} {name}"
+            return f"{result} {_number_words(remainder)}" if remainder else result
+    return str(value)
+
+
+def _speak_mig_model(match: re.Match[str]) -> str:
+    model_number = _number_words(int(match.group(1)))
+    suffix = match.group(2)
+    if suffix == "s":
+        suffix = "fighters"
+    elif suffix.lower() == "bis":
+        suffix = "bis"
+    elif suffix:
+        suffix = " ".join(suffix.upper())
+    result = f"mig {model_number}"
+    return f"{result} {suffix}" if suffix else result
+
+
+def _piper_pronunciation(text: str) -> str:
+    text = _MIG_MODEL_PATTERN.sub(_speak_mig_model, text)
+    for written, spoken in _PRONUNCIATION_ALIASES:
+        text = re.sub(
+            rf"\b{re.escape(written)}\b",
+            spoken,
+            text,
+            flags=re.IGNORECASE,
+        )
+    return text
 
 
 @dataclass
@@ -50,7 +143,10 @@ class PiperBackend:
         ls = f"{self.length_scale:.2f}" if self.length_scale is not None else "def"
         ns = f"{self.noise_scale:.2f}" if self.noise_scale is not None else "def"
         nw = f"{self.noise_w:.2f}" if self.noise_w is not None else "def"
-        return f"piper|{self.voice}|{ls}|{ns}|{nw}"
+        pronunciation_rules = repr((_MIG_MODEL_PATTERN.pattern, _PRONUNCIATION_ALIASES))
+        aliases = hashlib.sha256(pronunciation_rules.encode("utf-8"))
+        pronunciation_version = aliases.hexdigest()[:8]
+        return f"piper|{self.voice}|{ls}|{ns}|{nw}|pron:{pronunciation_version}"
 
     def _ensure_model(self) -> Path:
         """Download the voice model on demand, return path to the `.onnx`."""
@@ -88,4 +184,6 @@ class PiperBackend:
     def render_to_file(self, text: str, out_path: Path) -> None:
         voice = self._voice_lazy()
         with wave.open(str(out_path), "wb") as wf:
-            voice.synthesize_wav(text, wf, syn_config=self._syn_config())
+            voice.synthesize_wav(
+                _piper_pronunciation(text), wf, syn_config=self._syn_config()
+            )
