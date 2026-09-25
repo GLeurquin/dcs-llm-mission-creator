@@ -12,7 +12,7 @@ the opinionated core helpers, not here.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Iterator, Sequence
+from typing import TYPE_CHECKING, Callable, Iterator, Sequence
 
 from dcs.unit import Skill
 from dcs.unittype import UnitType
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from dcs.task import MainTask
     from dcs.terrain.terrain import Airport
     from dcs.unit import Unit
-    from dcs.unitgroup import FlyingGroup, Group
+    from dcs.unitgroup import FlyingGroup, Group, ShipGroup, StaticGroup
     from dcs.unittype import FlyingType
 
 __all__ = [
@@ -40,6 +40,7 @@ __all__ = [
     "MAX_FLIGHT_SIZE",
     "offset",
     "player_flight",
+    "player_flight_from_unit",
     "player_groups",
     "RaceTrack",
     "race_track",
@@ -252,6 +253,7 @@ def player_flight(
     start_type: StartType,
     slots: int,
     loadouts: Sequence[Loadout],
+    section_start_types: Sequence[StartType] | None = None,
 ) -> list[FlyingGroup]:
     """Build the player flight as however many DCS-legal sections it takes.
 
@@ -270,23 +272,92 @@ def player_flight(
     `FlyingGroup.load_pylon` writes to the whole group and could only ever
     produce a uniform flight.
 
+    `section_start_types` gives each section its own start — a hot four-ship
+    on alert beside a cold one — and must name every section when given.
+    Without it every section takes `start_type`.
+
     Returns the sections in slot order, lead first; a mission that needs "the
     player flight" for a trigger wants all of them (`sections_of`).
     """
-    sections: list[FlyingGroup] = []
-    sizes = section_sizes(slots)
-    assignment = loadout.assign(loadouts, slots)
-    slot = 0
-    for section_name, size in zip(section_names(name, len(sizes)), sizes):
-        group = m.flight_group_from_airport(
+
+    def spawn(section: str, size: int, start: StartType) -> FlyingGroup:
+        return m.flight_group_from_airport(
             country=country,
-            name=section_name,
+            name=section,
             aircraft_type=aircraft_type,
             airport=airport,
             maintask=maintask,
-            start_type=start_type,
+            start_type=start,
             group_size=size,
         )
+
+    return _build_flight(
+        m, name, aircraft_type, start_type, slots, loadouts, section_start_types, spawn
+    )
+
+
+def player_flight_from_unit(
+    m: Mission,
+    *,
+    country: Country,
+    name: str,
+    aircraft_type: type[FlyingType],
+    pad_group: ShipGroup | StaticGroup,
+    maintask: type[MainTask],
+    start_type: StartType,
+    slots: int,
+    loadouts: Sequence[Loadout],
+    section_start_types: Sequence[StartType] | None = None,
+) -> list[FlyingGroup]:
+    """`player_flight` off a carrier or a FARP rather than an airfield.
+
+    The same flight in every other respect — split, armed per slot and recorded
+    as one — because the pydcs call underneath is the only thing that differs
+    (`flight_group_from_unit`, named after it).
+    """
+
+    def spawn(section: str, size: int, start: StartType) -> FlyingGroup:
+        return m.flight_group_from_unit(
+            country=country,
+            name=section,
+            aircraft_type=aircraft_type,
+            pad_group=pad_group,
+            maintask=maintask,
+            start_type=start,
+            group_size=size,
+        )
+
+    return _build_flight(
+        m, name, aircraft_type, start_type, slots, loadouts, section_start_types, spawn
+    )
+
+
+def _build_flight(
+    m: Mission,
+    name: str,
+    aircraft_type: type[FlyingType],
+    start_type: StartType,
+    slots: int,
+    loadouts: Sequence[Loadout],
+    section_start_types: Sequence[StartType] | None,
+    spawn: Callable[[str, int, StartType], FlyingGroup],
+) -> list[FlyingGroup]:
+    """Split, spawn, mark, arm per slot and record — whatever the base is."""
+    sizes = section_sizes(slots)
+    starts = (
+        tuple(section_start_types)
+        if section_start_types is not None
+        else (start_type,) * len(sizes)
+    )
+    if len(starts) != len(sizes):
+        raise ValueError(
+            f"section_start_types has {len(starts)} entries for {len(sizes)} sections"
+        )
+    sections: list[FlyingGroup] = []
+    assignment = loadout.assign(loadouts, slots)
+    slot = 0
+    for section, size, start in zip(section_names(name, len(sizes)), sizes, starts):
+        group = spawn(section, size, start)
         mark_clients(group)
         for unit in group.units:
             loadout.arm_unit(unit, aircraft_type, assignment[slot].stores)

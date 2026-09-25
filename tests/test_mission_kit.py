@@ -9,7 +9,7 @@ recorded as one flight — never a mission's composition.
 from __future__ import annotations
 
 import pytest
-from dcs import planes
+from dcs import planes, ships
 from dcs.mission import Mission, StartType
 from dcs.task import CAP
 from dcs.terrain import Caucasus
@@ -19,6 +19,7 @@ from dcs_mission_creator.core.loadout import Loadout
 from dcs_mission_creator.core.mission_kit import (
     MAX_FLIGHT_SIZE,
     player_flight,
+    player_flight_from_unit,
     section_names,
     section_sizes,
     sections_of,
@@ -92,6 +93,68 @@ def test_six_slots_become_two_groups(mission: Mission):
 def test_every_slot_is_a_client(mission: Mission):
     for group in _build(mission, 6):
         assert all(u.skill == Skill.Client for u in group.units)
+
+
+def test_sections_can_mix_hot_and_cold_starts(mission: Mission):
+    sections = player_flight(
+        mission,
+        country=mission.country("USA"),
+        name="Dodge",
+        aircraft_type=planes.F_16C_50,
+        airport=mission.terrain.airports["Batumi"],
+        maintask=CAP,
+        start_type=StartType.Warm,
+        section_start_types=(StartType.Warm, StartType.Cold),
+        slots=6,
+        loadouts=_FITS,
+    )
+    assert [g.points[0].type for g in sections] == [
+        "TakeOffParkingHot",
+        "TakeOffParking",
+    ]
+
+
+def test_a_start_per_section_or_none(mission: Mission):
+    with pytest.raises(ValueError, match="2 sections"):
+        player_flight(
+            mission,
+            country=mission.country("USA"),
+            name="Dodge",
+            aircraft_type=planes.F_16C_50,
+            airport=mission.terrain.airports["Batumi"],
+            maintask=CAP,
+            start_type=StartType.Warm,
+            section_start_types=(StartType.Warm,),
+            slots=6,
+            loadouts=_FITS,
+        )
+
+
+def test_carrier_slots_are_recorded_as_one_flight(mission: Mission):
+    carrier = mission.ship_group(
+        mission.country("USA"),
+        "Carrier",
+        ships.Stennis,
+        mission.terrain.airports["Batumi"].position.new_in_same_map(-300_000, -300_000),
+    )
+    sections = player_flight_from_unit(
+        mission,
+        country=mission.country("USA"),
+        name="Hornet",
+        aircraft_type=planes.F_16C_50,
+        pad_group=carrier,
+        maintask=CAP,
+        start_type=StartType.Warm,
+        section_start_types=(StartType.Warm, StartType.Cold),
+        slots=6,
+        loadouts=_FITS,
+    )
+    assert [len(g.units) for g in sections] == [4, 2]
+    assert sections_of(mission, sections[0]) == tuple(sections)
+    assert [g.points[0].type for g in sections] == [
+        "TakeOffParkingHot",
+        "TakeOffParking",
+    ]
 
 
 def _clsids(group, index: int) -> tuple[str, ...]:

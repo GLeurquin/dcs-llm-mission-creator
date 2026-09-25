@@ -191,6 +191,12 @@ mission.
   mission then gives each section the same route — which is why every
   `_spawn_player` ends in a `_route_<callsign>` helper.
 
+  Off a carrier or a FARP the call is `mission_kit.player_flight_from_unit`,
+  with `pad_group=` (the `ShipGroup` / `StaticGroup`) in place of `airport=`.
+  Both take `section_start_types=` — one `StartType` per section, e.g.
+  `(StartType.Warm, StartType.Cold)` — and raise if it does not name every
+  section.
+
   Four things read that record rather than counting groups: `core/datalink.py`
   teams the sections together, `core/dtc.py`'s "two player Viper flights" guard,
   `MissionBuilder.slot_summary` writes the README's `**Players:**` line off
