@@ -57,11 +57,13 @@ promising a HARM to a jet that has bombs on 3 and 7.
 
 from __future__ import annotations
 
+import re
 import textwrap
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Sequence
 
 import structlog
+from dcs.weapons_data import Weapons
 
 if TYPE_CHECKING:
     from dcs.flyingunit import FlyingUnit
@@ -84,12 +86,25 @@ __all__ = [
     "table",
 ]
 
-#: How the pydcs pylon attributes spell an air-to-air missile. Every one of the
-#: F-16C's — the AIM-9 family and both AMRAAM — ends in `_AAM`, which is ED's
-#: own naming (`AIM_9X_Sidewinder_IR_AAM`,
-#: `AIM_120C_AMRAAM___Active_Radar_AAM`), so the count comes off the store names
-#: the mission wrote rather than off a per-mission constant that can drift.
-_AAM_SUFFIX = "_AAM"
+#: What makes a store an air-to-air missile, read off ED's display name
+#: (`Weapons.<store>["name"]`) rather than off the attribute spelling. Two
+#: spellings broke the attribute-suffix rule this replaces: a trailing `_` on
+#: every rack name (`LAU_115_with_1_x_LAU_127_AIM_120C_..._AAM_`) and none at
+#: all on Heatblur's (`AIM_54A_Mk47`, `LAU_138_AIM_9M`). So it goes by the
+#: designation systems instead — ED's `AAM`, US `AIM-n`, NATO's `AA-n` for a
+#: Soviet missile — plus the families whose names carry none of the three.
+_AAM_NAME = re.compile(
+    r"\bAAM\b|\bAIM-\d|\(AA-\d"
+    r"|\bMICA\b|\bMagic II\b|530[DF]\b|\bPL-\d|\bK-13|\bMistral\b|\bStinger\b|\bIgla\b"
+)
+
+#: A captive round is a seeker on a rail with no motor: it is carried, and
+#: shot at nothing.
+_CAPTIVE = re.compile(r"\bCaptive\b")
+
+#: How many rounds one station holds — `LAU-115 with 2 x LAU-127 AIM-120C`,
+#: `2x AIM-9M`, or the Chinese tables' `PL-12 AAM x 2`. Absent means one.
+_ROUNDS = re.compile(r"\b(\d+)\s*x\s|\bx\s*(\d+)\s*$")
 
 
 @dataclass(frozen=True)
@@ -169,10 +184,24 @@ def arm_group(
 def air_to_air_shots(fit: Loadout) -> int:
     """How many air-to-air missiles this fit leaves the ramp with.
 
-    Counted off the store names, so the number the force-balance arithmetic
-    divides by two is the number actually on the rails.
+    Counted off the stores' own names, rounds per rack included, so the number
+    the force-balance arithmetic divides by two is the number actually on the
+    rails — a Hornet's dual-AMRAAM station is two shots, not zero.
     """
-    return sum(1 for _, weapon in fit.stores if weapon.endswith(_AAM_SUFFIX))
+    return sum(_rounds(store) for _, store in fit.stores)
+
+
+def _rounds(store: str) -> int:
+    """Air-to-air missiles on one station holding `store`; 0 for anything else.
+
+    `Weapons` is keyed by the same attribute names as every `PylonN`, with the
+    same record, so no airframe is needed to read the name.
+    """
+    name = getattr(Weapons, store)["name"]
+    if not _AAM_NAME.search(name) or _CAPTIVE.search(name):
+        return 0
+    match = _ROUNDS.search(name)
+    return int(match.group(1) or match.group(2)) if match else 1
 
 
 def shots(assignment: Sequence[Loadout]) -> int:
