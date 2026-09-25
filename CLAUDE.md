@@ -55,9 +55,13 @@ parts you still want. What the base guarantees is that nothing is *forgotten*.
 
 Mission scripts go in
 [src/dcs_mission_creator/missions/](src/dcs_mission_creator/missions/) as
-`<scenario_slug>.py`, one concrete subclass of `MissionBuilder`
+`<map>/<scenario_slug>.py`, one concrete subclass of `MissionBuilder`
 ([core/mission_builder.py](src/dcs_mission_creator/core/mission_builder.py))
-per module.
+per module. `<map>` is the theater slug the overlay tools take (`caucasus`,
+`syria`, `persiangulf` — the keys in
+[map_overlay/terrains.py](src/dcs_mission_creator/map_overlay/terrains.py)), and
+it has to be the map the class's `terrain` names; a new map is a new package
+with an `__init__.py`.
 
 **What a mission declares:**
 
@@ -118,17 +122,19 @@ if __name__ == "__main__":
 ```
 
 [`__main__.py`](src/dcs_mission_creator/__main__.py) auto-discovers every public
-submodule of `missions/` and exposes it as a `generate <name>` subcommand (plus
+module under `missions/`, at any depth, and exposes it as a `generate <name>` subcommand (plus
 `list`, `audit`, `survey`, `route`, `map-overlay`). The slug is optional:
-`generate` with no name builds **every** mission into its own `<slug>/` folder,
-logging past any that raise and exiting 1 if any failed. Default output is
-`$DCS_MISSIONS_FOLDER/IAGeneratedMissions/<slug>/`; the CLI errors out if that
-is unset and no `--output-dir` is given. `out/` and `*.miz` are gitignored.
+`generate` with no name builds **every** mission into its own `<map>/<slug>/`
+folder, logging past any that raise and exiting 1 if any failed. Default output
+is `$DCS_MISSIONS_FOLDER/IAGeneratedMissions/<map>/<slug>/`
+(`MissionBuilder.output_subdir()`); the CLI errors out if that is unset and no
+`--output-dir` is given. **Slugs are unique across maps** — discovery raises on
+a second module declaring the same `name`. `out/` and `*.miz` are gitignored.
 
 ## Script structure: small named functions
 
 `_assemble` is the orchestrator, not the implementation. Pattern (see
-[coastal_cover.py](src/dcs_mission_creator/missions/coastal_cover.py)):
+[coastal_cover.py](src/dcs_mission_creator/missions/caucasus/coastal_cover.py)):
 
 ```python
 def _assemble(self, m: Mission, plan: PlanOverlay) -> Assembled:
@@ -1596,7 +1602,7 @@ because CI has neither:
 available)
 
 ```bash
-uv run python -m dcs_mission_creator.missions.coastal_cover --players 2
+uv run python -m dcs_mission_creator.missions.caucasus.coastal_cover --players 2
 
 # or via the unified CLI (auto-discovers every mission module):
 uv run dcs-mission-creator list

@@ -133,6 +133,70 @@ def test_every_mission_declares_an_enum_difficulty():
         )
 
 
+def test_every_mission_sits_in_its_own_maps_package():
+    """`missions/<map>/` is the theater slug the overlay tools take, and it is
+    the map the mission is actually on — a module filed under the wrong map
+    would sort its generated folder under the wrong one too.
+    """
+    from dcs_mission_creator.__main__ import _discover
+    from dcs_mission_creator.map_overlay.terrains import terrain_for
+
+    for slug, cls in _discover().items():
+        package = cls.output_subdir().parts[0]
+        assert type(terrain_for(package)) is cls.terrain, (
+            f"{slug} is filed under {package!r} but flies on {cls.terrain.__name__}"
+        )
+
+
+def test_output_subdir_is_the_map_then_the_slug():
+    from dcs_mission_creator.__main__ import _discover
+
+    cls = _discover()["coastal_cover"]
+    assert cls.output_subdir() == Path("caucasus", "coastal_cover")
+
+
+def test_a_builder_outside_the_missions_package_has_no_output_subdir():
+    with pytest.raises(ValueError, match="outside"):
+        StubAssembler.output_subdir()
+
+
+def test_generate_all_writes_the_map_tree(tmp_path: Path, monkeypatch):
+    from dcs_mission_creator import __main__ as cli
+
+    written: list[Path] = []
+    monkeypatch.setattr(
+        cli, "_generate_one", lambda slug, cls, target, players: written.append(target)
+    )
+    missions = cli._discover()
+    assert cli._cmd_generate(missions, None, tmp_path, players=2) == 0
+    assert tmp_path / "syria" / "idlib_gauntlet" in written
+    assert len(written) == len(missions)
+
+
+def test_two_maps_may_not_share_a_slug(monkeypatch):
+    """Without the check, the second module would replace the first silently."""
+    import pkgutil
+    import types
+
+    from dcs_mission_creator import __main__ as cli
+
+    modules = {}
+    for theater in ("caucasus", "syria"):
+        name = f"dcs_mission_creator.missions.{theater}.twin"
+        module = types.ModuleType(name)
+        module.Twin = type("Twin", (StubAssembler,), {"__module__": name})
+        modules[name] = module
+
+    monkeypatch.setattr(
+        cli.pkgutil,
+        "walk_packages",
+        lambda path, prefix: [pkgutil.ModuleInfo(None, n, False) for n in modules],  # ty: ignore[invalid-argument-type]
+    )
+    monkeypatch.setattr(cli.importlib, "import_module", modules.__getitem__)
+    with pytest.raises(RuntimeError, match="'stub' is declared by both"):
+        cli._discover()
+
+
 # -------------------------------------------------------- the template method
 class StubAssembler(MissionBuilder):
     """Exercises the real `build_miz`, recording the order the base calls in."""

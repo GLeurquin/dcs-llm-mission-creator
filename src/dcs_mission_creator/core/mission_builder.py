@@ -17,6 +17,7 @@ from __future__ import annotations
 import functools
 import hashlib
 import random
+import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
@@ -67,6 +68,9 @@ MIN_PLAYERS = 2
 #: DCS plane group holds four aircraft — which is what `mission_kit.player_flight`
 #: is for, and why raising this number is not only a change to this line.
 MAX_PLAYERS = 6
+
+#: The package every concrete mission lives under, one subpackage per map.
+_MISSIONS_PACKAGE = "dcs_mission_creator.missions"
 
 
 @dataclass(frozen=True)
@@ -139,6 +143,23 @@ class MissionBuilder(ABC):
         dcs_install.configure()
         self._pin_runway_waypoint_distance()
         self._pin_onboard_numbers()
+
+    @classmethod
+    def output_subdir(cls) -> Path:
+        """Where under an output root this mission's folder goes: `<map>/<slug>`.
+
+        The map package the module sits in, so a generated library is sorted the
+        way `missions/` is, then the slug rather than the file name, so the
+        folder is the name the CLI takes whatever the module is called.
+        """
+        # Run as `python -m ...missions.<map>.<slug>` the module is `__main__`,
+        # and only its spec still carries the dotted name.
+        spec = getattr(sys.modules.get(cls.__module__), "__spec__", None)
+        module = spec.name if spec is not None else cls.__module__
+        package = module.removeprefix(f"{_MISSIONS_PACKAGE}.")
+        if package == module:
+            raise ValueError(f"{cls.__name__} is outside {_MISSIONS_PACKAGE}")
+        return Path(*package.split(".")[:-1], cls.name)
 
     @abstractmethod
     def _assemble(self, m: Mission, plan: PlanOverlay) -> Assembled:

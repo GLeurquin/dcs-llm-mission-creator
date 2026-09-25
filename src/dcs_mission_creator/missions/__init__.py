@@ -1,1 +1,1 @@
-"""Mission scripts. Each module exposes `build(output: Path) -> None`."""
+"""Mission scripts, one subpackage per map; each module is one `MissionBuilder`."""

@@ -1,4 +1,4 @@
-"""The `python -m dcs_mission_creator.missions.<slug>` entry point.
+"""The `python -m dcs_mission_creator.missions.<map>.<slug>` entry point.
 
 Every mission module stayed runnable on its own, which meant every one carried
 the same twenty-five lines of argparse. Worse, each spelled its own output
@@ -41,7 +41,7 @@ def run_cli(
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("out") / builder.name,
+        default=Path("out") / builder.output_subdir(),
         help="Output directory for the .miz and README.md (default: %(default)s)",
     )
     parser.add_argument(

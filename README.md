@@ -57,17 +57,17 @@ uv run dcs-mission-creator generate                # no slug → every mission
 
 Each generator writes the `.miz`, the markdown briefing and the kneeboard cards into one output folder — see [What a generated mission ships](#what-a-generated-mission-ships).
 
-- **Default output:** `$DCS_MISSIONS_FOLDER/IAGeneratedMissions/<slug>/`. Set the `DCS_MISSIONS_FOLDER` env var to your DCS `Missions` folder so the `.miz` drops straight where DCS can load it; `generate` errors out if the var is unset and no `--output-dir` is given.
+- **Default output:** `$DCS_MISSIONS_FOLDER/IAGeneratedMissions/<map>/<slug>/`. Set the `DCS_MISSIONS_FOLDER` env var to your DCS `Missions` folder so the `.miz` drops straight where DCS can load it; `generate` errors out if the var is unset and no `--output-dir` is given.
 - **Override:** `--output-dir DIR` writes everything to `DIR` instead.
-- **All at once:** omitting the mission slug generates every discovered mission, each into its own `<slug>/` folder; with `--output-dir DIR` that folder becomes `DIR/<slug>/`. A mission that fails is logged and the rest still run (exit code 1 at the end).
+- **All at once:** omitting the mission slug generates every discovered mission, each into its own `<map>/<slug>/` folder; with `--output-dir DIR` that folder becomes `DIR/<map>/<slug>/`. A mission that fails is logged and the rest still run (exit code 1 at the end).
 - **Loadouts:** set `DCS_INSTALL_DIR` to your DCS World folder. pydcs reads stock payloads from the installed game and otherwise finds it only via the Windows registry, so off Windows (WSL included) an unset var means the DCS task defaults come back empty. The same install is where the kneeboard's navaid frequencies and the theater's shipped charts are read from. Windows spellings are accepted and mapped to `/mnt/<drive>` under WSL.
 
 ```bash
 export DCS_MISSIONS_FOLDER="$HOME/Saved Games/DCS/Missions"
 export DCS_INSTALL_DIR="/mnt/e/Games/DCS World OpenBeta"   # WSL path to the game
 uv run dcs-mission-creator generate coastal_cover
-#   → $DCS_MISSIONS_FOLDER/IAGeneratedMissions/coastal_cover/coastal_cover.miz
-#   → $DCS_MISSIONS_FOLDER/IAGeneratedMissions/coastal_cover/README.md
+#   → $DCS_MISSIONS_FOLDER/IAGeneratedMissions/caucasus/coastal_cover/coastal_cover.miz
+#   → $DCS_MISSIONS_FOLDER/IAGeneratedMissions/caucasus/coastal_cover/README.md
 #   → .../coastal_cover/kneeboard/*.png
 
 uv run dcs-mission-creator generate coastal_cover --output-dir out/coastal_cover
@@ -113,15 +113,15 @@ Worked missions ship under [src/dcs_mission_creator/missions/](src/dcs_mission_c
 
 | Slug | Theater | Difficulty | Sortie |
 |------|---------|-----------|--------|
-| [`coastal_cover`](src/dcs_mission_creator/missions/coastal_cover.py) | Caucasus | trained | CAP + escort of an A-10C `Hawg` strike on a Russian armoured convoy north of Senaki; handle a 2-ship MiG-29S intercept from Sukhumi-Babushara. AWACS only, no tanker. Carries a recon still of the column on the valley road. |
-| [`kodori_strike`](src/dcs_mission_creator/missions/kodori_strike.py) | Caucasus | trained | Lead a mixed package (`Weasel` SEAD, `Eagle` F-15C CAP, `Magic` AWACS, `Texaco` tanker) onto a Russian FOB astride the coast road at the Kodori delta; SA-6 rollback inland, Su-27 CAP launches on intrusion. |
-| [`idlib_gauntlet`](src/dcs_mission_creator/missions/idlib_gauntlet.py) | Syria | trained | Interdict a Syrian resupply column out of Hatay through three overlapping SAM belts that sit dark, cue off the EWR chain and go quiet under HARM fire. A 90 km front line prices every flank and funnels the ingress into the SA-6's sector; a JTAC lases the column and reads coordinates in your own cockpit's format. The reference mission for SEAD, front lines, and recon stills. |
-| [`eastern_shield`](src/dcs_mission_creator/missions/eastern_shield.py) | Syria | trained | SEAD an SA-6 defending the Kuweires depot, escort A-10C `Hawg` onto it, then a MiG-29S scramble + armoured reserve push. Full support: `Magic` AWACS, `Texaco` tanker, `Eagle` F-15C TARCAP. |
-| [`roki_shepherd`](src/dcs_mission_creator/missions/roki_shepherd.py) | Caucasus | trained | Quick-reaction air policing out of Vaziani: intercept Russian aircraft probing Georgian airspace through the Roki, Daryal and Mamison passes, shadow each one and see it back across the border. Weapons tight — most crews comply, and one may turn on its escort. `Eagle` F-15C barrier CAP, `Magic` AWACS. |
-| [`ansariyah_works`](src/dcs_mission_creator/missions/ansariyah_works.py) | Syria | veteran | Deep strike out of Akrotiri on a Syrian rocket-motor plant behind the Jebel al-Ansariyah — 279 km east, 250 km of it water, flown at fifty metres under an S-200 that reaches most of the way to Cyprus and cannot shoot below three hundred. Three buildings, two bombs, one briefed choice. |
-| [`abkhaz_sweep`](src/dcs_mission_creator/missions/abkhaz_sweep.py) | Caucasus | ace | Air-superiority sweep off the Abkhaz coast vs. Su-27 + MiG-29S aggressors from Sochi-Adler / Gudauta, under an SA-6 that forces a high fight. No support. |
-| [`daryal_run`](src/dcs_mission_creator/missions/daryal_run.py) | Caucasus | ace | SEAD strike on an S-300PS (SA-10) south of Beslan; low-level ingress up the Daryal Gorge, terrain-masked HARM pop-up. AWACS only, no escort/tanker. |
-| [`kuban_forge`](src/dcs_mission_creator/missions/kuban_forge.py) | Caucasus | ace | Strike out of Senaki on a motor works on the Kuban, flown up the Abkhaz plain and the Kodori and over the Klukhori Pass. No anti-radiation weapon: the terrain is the SEAD, and the corridor is masked from the Buk until 34 km short. Low in, high out. |
+| [`coastal_cover`](src/dcs_mission_creator/missions/caucasus/coastal_cover.py) | Caucasus | trained | CAP + escort of an A-10C `Hawg` strike on a Russian armoured convoy north of Senaki; handle a 2-ship MiG-29S intercept from Sukhumi-Babushara. AWACS only, no tanker. Carries a recon still of the column on the valley road. |
+| [`kodori_strike`](src/dcs_mission_creator/missions/caucasus/kodori_strike.py) | Caucasus | trained | Lead a mixed package (`Weasel` SEAD, `Eagle` F-15C CAP, `Magic` AWACS, `Texaco` tanker) onto a Russian FOB astride the coast road at the Kodori delta; SA-6 rollback inland, Su-27 CAP launches on intrusion. |
+| [`idlib_gauntlet`](src/dcs_mission_creator/missions/syria/idlib_gauntlet.py) | Syria | trained | Interdict a Syrian resupply column out of Hatay through three overlapping SAM belts that sit dark, cue off the EWR chain and go quiet under HARM fire. A 90 km front line prices every flank and funnels the ingress into the SA-6's sector; a JTAC lases the column and reads coordinates in your own cockpit's format. The reference mission for SEAD, front lines, and recon stills. |
+| [`eastern_shield`](src/dcs_mission_creator/missions/syria/eastern_shield.py) | Syria | trained | SEAD an SA-6 defending the Kuweires depot, escort A-10C `Hawg` onto it, then a MiG-29S scramble + armoured reserve push. Full support: `Magic` AWACS, `Texaco` tanker, `Eagle` F-15C TARCAP. |
+| [`roki_shepherd`](src/dcs_mission_creator/missions/caucasus/roki_shepherd.py) | Caucasus | trained | Quick-reaction air policing out of Vaziani: intercept Russian aircraft probing Georgian airspace through the Roki, Daryal and Mamison passes, shadow each one and see it back across the border. Weapons tight — most crews comply, and one may turn on its escort. `Eagle` F-15C barrier CAP, `Magic` AWACS. |
+| [`ansariyah_works`](src/dcs_mission_creator/missions/syria/ansariyah_works.py) | Syria | veteran | Deep strike out of Akrotiri on a Syrian rocket-motor plant behind the Jebel al-Ansariyah — 279 km east, 250 km of it water, flown at fifty metres under an S-200 that reaches most of the way to Cyprus and cannot shoot below three hundred. Three buildings, two bombs, one briefed choice. |
+| [`abkhaz_sweep`](src/dcs_mission_creator/missions/caucasus/abkhaz_sweep.py) | Caucasus | ace | Air-superiority sweep off the Abkhaz coast vs. Su-27 + MiG-29S aggressors from Sochi-Adler / Gudauta, under an SA-6 that forces a high fight. No support. |
+| [`daryal_run`](src/dcs_mission_creator/missions/caucasus/daryal_run.py) | Caucasus | ace | SEAD strike on an S-300PS (SA-10) south of Beslan; low-level ingress up the Daryal Gorge, terrain-masked HARM pop-up. AWACS only, no escort/tanker. |
+| [`kuban_forge`](src/dcs_mission_creator/missions/caucasus/kuban_forge.py) | Caucasus | ace | Strike out of Senaki on a motor works on the Kuban, flown up the Abkhaz plain and the Kodori and over the Klukhori Pass. No anti-radiation weapon: the terrain is the SEAD, and the corridor is masked from the Buk until 34 km short. Low in, high out. |
 
 Difficulty is a reveal policy as much as a threat count: a `trained` mission draws its threat rings about 2 km off truth, `veteran` a quarter wider and 4 km off, `ace` wider again and 6 km off. Every mission loads its briefed rings into the F-16C's data cartridge and prints them on the kneeboard, so what changes with difficulty is how far the drawn ring sits from the launchers — never whether the player gets one.
 
@@ -323,7 +323,7 @@ ewr    = ewr_high_ground(scene, rear_anchor, min_elevation_m=300, min_prominence
 
 All of these return `dcs.mapping.Point` instances that the mission builder threads straight into `vehicle_group(..., position=p)`. DCS handles convoy routing between `PointAction.OnRoad` waypoints itself — the overlay's job is to pick *good* waypoints, not to route between them.
 
-A worked example lives in [missions/coastal_cover.py](src/dcs_mission_creator/missions/coastal_cover.py): a Russian convoy snapped onto a real road north of Senaki, a two-launcher SA-13 placed on a prominence west of the convoy with verified line-of-sight, and a 55G6 EWR on high ground inland from Sukhumi-Babushara.
+A worked example lives in [missions/caucasus/coastal_cover.py](src/dcs_mission_creator/missions/caucasus/coastal_cover.py): a Russian convoy snapped onto a real road north of Senaki, a two-launcher SA-13 placed on a prominence west of the convoy with verified line-of-sight, and a 55G6 EWR on high ground inland from Sukhumi-Babushara.
 
 # Voice lines (TTS)
 
@@ -360,14 +360,14 @@ tts = VoiceSynth(backend=PiperBackend(voice="en_GB-alan-medium", length_scale=1.
 
 # Adding a new mission
 
-1. Create `src/dcs_mission_creator/missions/<slug>.py` defining **one** concrete `MissionBuilder` subclass with:
+1. Create `src/dcs_mission_creator/missions/<map>/<slug>.py` (`<map>` is the theater slug, e.g. `caucasus`) defining **one** concrete `MissionBuilder` subclass with:
    - `name` (the filesystem slug, matching the filename), `title` (display name), and `difficulty` (the `Difficulty` enum — it drives both the F10 reveal and the enemy ROE);
    - `_assemble(self, m: Mission) -> MapOverlay` — build the whole mission into `m` and return the overlay its positions came from, so the base class can snap waypoints onto the terrain;
    - `readme(self) -> str` — the markdown briefing.
-2. Add a `main()` at the bottom (`run_cli(TheBuilder)` from [core/cli.py](src/dcs_mission_creator/core/cli.py)) so `python -m dcs_mission_creator.missions.<slug>` works.
+2. Add a `main()` at the bottom (`run_cli(TheBuilder)` from [core/cli.py](src/dcs_mission_creator/core/cli.py)) so `python -m dcs_mission_creator.missions.<map>.<slug>` works.
 3. The unified CLI auto-discovers the module — `uv run dcs-mission-creator list` will show the new mission immediately, and `generate <slug>` will run it.
 
-Keep `_assemble` an orchestrator: one small named method per block of the mission (one flight, one ground cluster, one trigger group), each with a docstring stating the design intent. [coastal_cover.py](src/dcs_mission_creator/missions/coastal_cover.py) is the shortest example of the shape; [idlib_gauntlet.py](src/dcs_mission_creator/missions/idlib_gauntlet.py) the fullest.
+Keep `_assemble` an orchestrator: one small named method per block of the mission (one flight, one ground cluster, one trigger group), each with a docstring stating the design intent. [coastal_cover.py](src/dcs_mission_creator/missions/caucasus/coastal_cover.py) is the shortest example of the shape; [idlib_gauntlet.py](src/dcs_mission_creator/missions/syria/idlib_gauntlet.py) the fullest.
 
 See [CLAUDE.md](CLAUDE.md) for the project conventions (the `MissionBuilder` contract, every `core/` helper, briefing style, faction naming) and [.claude/skills/dcs-mission/SKILL.md](.claude/skills/dcs-mission/SKILL.md) for the design playbook.
 

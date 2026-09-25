@@ -123,7 +123,7 @@ def test_module_paths_are_not_packages(doc: str) -> None:
 
 def _mission_slugs() -> set[str]:
     directory = ROOT / "src" / "dcs_mission_creator" / "missions"
-    return {p.stem for p in directory.glob("*.py") if not p.stem.startswith("_")}
+    return {p.stem for p in directory.rglob("*.py") if not p.stem.startswith("_")}
 
 
 def test_readme_catalogue_lists_every_mission() -> None:
@@ -134,7 +134,7 @@ def test_readme_catalogue_lists_every_mission() -> None:
     list nobody rereads. Having one is what makes this test possible; this test
     is what makes having one safe.
     """
-    listed = set(re.findall(r"missions/(\w+)\.py\)", _text("README.md")))
+    listed = set(re.findall(r"missions/\w+/(\w+)\.py\)", _text("README.md")))
     assert listed == _mission_slugs()
 
 
