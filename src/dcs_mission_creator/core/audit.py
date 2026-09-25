@@ -71,6 +71,7 @@ from dcs_mission_creator.core import (
     loadout,
     loadout_check,
     mission_kit,
+    runways,
     visibility,
     waypoints,
 )
@@ -157,6 +158,7 @@ def audit_mission(m: Mission, overlay: MapOverlay) -> list[Finding]:
         _check_stations,
         _check_magazine,
         _check_target_waypoints,
+        _check_runways,
     ):
         findings += list(check(m, overlay))
     return findings
@@ -394,6 +396,34 @@ def _check_concealment(m: Mission, overlay: MapOverlay) -> Iterable[Finding]:
                         "warn",
                         "visible on the F10 map — conceal_country missed it",
                         f"{country.name} {group.name}",
+                    )
+
+
+def _check_runways(m: Mission, overlay: MapOverlay) -> Iterable[Finding]:
+    """Ground units and statics standing on a runway strip, either side's.
+
+    An error, because it is never a design choice: a vehicle on a runway
+    wrecks the first jet that rolls into it, and the one that shipped was a Hawk
+    battery emplaced on the Vaziani runway midpoint by a fallback that took the
+    airfield reference point for safe ground. The strips are `core/runways.py`'s
+    keep-out — conservative where the geometry is not measured.
+    """
+    fields = list(m.terrain.airports.values())
+    for coalition in m.coalition.values():
+        for country in coalition.countries.values():
+            for group in [*country.vehicle_group, *country.static_group]:
+                for unit in group.units:
+                    strip = runways.fouled_strip(unit.position, fields, m.terrain)
+                    if strip is None:
+                        continue
+                    along, across = strip.offsets(unit.position)
+                    yield Finding(
+                        "runway",
+                        "error",
+                        f"on {strip.airport} runway {strip.name} "
+                        f"({along:+.0f} m along, {across:+.0f} m across the "
+                        "centreline) — runways.push_clear or place it elsewhere",
+                        f"{country.name} {unit.name}",
                     )
 
 

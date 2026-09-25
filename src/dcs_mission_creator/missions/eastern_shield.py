@@ -661,7 +661,9 @@ uv run dcs-mission-creator generate {self.name} --players {self.players}
             russia,
             "Depot AAA",
             vehicles.AirDefence.ZU_23_Emplacement,
-            position=Point(depot_pos.x - 350, depot_pos.y + 200, self._terrain),
+            # North-east of the trucks, away from the 10-28 runway: the old
+            # offset put both guns inside the runway strip.
+            position=Point(depot_pos.x + 150, depot_pos.y + 250, self._terrain),
             heading=315,
             group_size=2,
             formation=VehicleGroup.Formation.Scattered,

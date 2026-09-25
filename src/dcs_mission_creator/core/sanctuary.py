@@ -129,7 +129,7 @@ from dcs.unit import Skill
 from dcs.unitgroup import VehicleGroup
 from dcs.vehicles import AirDefence
 
-from dcs_mission_creator.core import air_defense as ad, dtc, mission_kit
+from dcs_mission_creator.core import air_defense as ad, dtc, mission_kit, runways
 from dcs_mission_creator.core.placement import NO_FOREST, snap_units_clear
 
 if TYPE_CHECKING:
@@ -165,11 +165,26 @@ _BATTERY_OFFSET_M = 4_500.0
 #: Walking the offset back toward the field is the honest correction: a battery
 #: on the field itself is a real siting, one in the sea is not, and moving it
 #: *sideways* to find land would silently take it off the axis it is there to
-#: cover. Zero is included, so the fallback of last resort is the airfield
-#: reference point, which is on land by construction.
-_BATTERY_OFFSET_STEPS_M = (_BATTERY_OFFSET_M, 3_000.0, 1_500.0, 0.0)
+#: cover.
+#:
+#: Zero used to be the last step, on the grounds that the airfield reference
+#: point is on land by construction. It is also the runway midpoint
+#: (`core/runways.py`), and at Vaziani and Sochi-Adler that is where the whole
+#: battery ended up. So the axis steps stop short of the field, and only when
+#: none of them is dry and clear of the runways does the search swing sideways —
+#: off the axis is a worse siting, and a battery on the runway is not a siting.
+_BATTERY_OFFSET_STEPS_M = (_BATTERY_OFFSET_M, 3_000.0, 1_500.0)
+#: Where the sideways search looks, relative to the threat axis, nearest first.
+_BATTERY_SWING_DEG = (45.0, -45.0, 90.0, -90.0, 135.0, -135.0, 180.0)
 #: Point-defence sections sit on the field, spread round the reference point.
 _POINT_DEFENCE_RING_M = 1_800.0
+#: A section whose ring position is on a runway is walked round in these steps.
+#: The ring radius is about a runway's half-length, so the naive 0/120/240
+#: spread put a section on the runway end at every field whose axis ran near
+#: one of those bearings.
+_POINT_DEFENCE_STEP_DEG = 15.0
+#: Room a one-vehicle section needs round its position for the terrain snap.
+_POINT_DEFENCE_MARGIN_M = 100.0
 #: How wide the area battery is spread. `VehicleTemplate` builds it inside 100 m.
 _AREA_SITE_FOOTPRINT_M = 400.0
 #: The marshal leg's hub sits this far off the field, away from the threat —
@@ -589,9 +604,14 @@ def build_sanctuary(
     straight-in are not free for a chasing fighter.
     """
     axis = airport.position.heading_between_point(facing)
+    strips = runways.field_strips(
+        m.terrain.airports.values(), m.terrain, airport.position
+    )
     # Emplace before checking: the position decides the clearance, and a coastal
     # field can move the battery kilometres closer to the runway.
-    center = _emplace(airport, axis, overlay, callsign)
+    center = _emplace(
+        airport, axis, overlay, callsign, strips=strips, footprint_m=battery.footprint_m
+    )
     radius = battery.radius_m
     _check_clearance(callsign, center, radius, keep_clear, clearance_m)
 
@@ -605,6 +625,7 @@ def build_sanctuary(
     ad.disperse_site(
         area, radius_m=battery.footprint_m, overlay=overlay, terrain=terrain
     )
+    runways.push_clear(area, strips)
     guns = _spawn_point_defence(
         m,
         country,
@@ -613,6 +634,7 @@ def build_sanctuary(
         battery=battery,
         count=point_defence,
         skill=skill,
+        strips=strips,
         overlay=overlay,
         terrain=terrain,
     )
@@ -663,21 +685,29 @@ def _emplace(
     axis: float,
     overlay: "MapOverlay | None",
     callsign: str,
+    *,
+    strips: Sequence[runways.Strip],
+    footprint_m: float,
 ) -> "Point":
-    """The furthest point up the threat axis that is actually dry, buildable land.
+    """The furthest point up the threat axis that is dry land and off the runways.
 
     Doctrine wants the battery between the field and the threat, so the search
     walks *in* along that bearing rather than around it — see
-    `_BATTERY_OFFSET_STEPS_M` for why sideways would be worse. With no overlay
-    there is nothing to test against and the doctrinal offset stands, which is
-    the same degradation as everywhere else in the project: the terrain checks
-    are an improvement on a build, never a requirement for one.
+    `_BATTERY_OFFSET_STEPS_M` for why sideways is the second choice, and why the
+    field itself is no choice at all. A candidate has to be clear of every runway
+    strip by the site's whole footprint, since the dispersal spreads it that far.
+    With no overlay there is nothing to test the ground against, and the
+    doctrinal offset stands unless the runways reach it.
     """
-    if overlay is None:
-        return airport.position.point_from_heading(axis, _BATTERY_OFFSET_M)
+
+    def usable(candidate: "Point") -> bool:
+        if not runways.clear_of_runways(candidate, strips, radius_m=footprint_m):
+            return False
+        return overlay is None or overlay.vegetation_at(candidate) not in NO_FOREST
+
     for distance in _BATTERY_OFFSET_STEPS_M:
         candidate = airport.position.point_from_heading(axis, distance)
-        if overlay.vegetation_at(candidate) not in NO_FOREST:
+        if usable(candidate):
             if distance < _BATTERY_OFFSET_M:
                 log.debug(
                     "sanctuary battery pulled back toward the field to find land",
@@ -687,12 +717,24 @@ def _emplace(
                     emplaced_m=distance,
                 )
             return candidate
+    for distance in _BATTERY_OFFSET_STEPS_M[1:]:
+        for swing in _BATTERY_SWING_DEG:
+            candidate = airport.position.point_from_heading(axis + swing, distance)
+            if usable(candidate):
+                log.warning(
+                    "no usable ground up the threat axis, battery sited off it",
+                    sanctuary=callsign,
+                    field=airport.name,
+                    swing_deg=swing,
+                    distance_m=distance,
+                )
+                return candidate
     log.warning(
-        "no dry ground up the threat axis, siting the battery on the field itself",
+        "no dry ground clear of the runways, battery left at the doctrinal offset",
         sanctuary=callsign,
         field=airport.name,
     )
-    return airport.position
+    return airport.position.point_from_heading(axis, _BATTERY_OFFSET_M)
 
 
 def _check_clearance(
@@ -733,10 +775,14 @@ def _spawn_point_defence(
     battery: Battery,
     count: int,
     skill: Skill,
+    strips: Sequence[runways.Strip],
     overlay: "MapOverlay | None",
     terrain: "Terrain | None",
 ) -> tuple[VehicleGroup, ...]:
     """Self-cueing SHORAD sections around the field's own reference point.
+
+    Each is walked round the ring until it is off every runway strip, and
+    pushed clear again after the terrain snap, which favours open ground.
 
     One group per section rather than one group of `count`: a DCS group holds
     fire and reacts as a unit, so three sections spread round a runway are three
@@ -746,6 +792,11 @@ def _spawn_point_defence(
     for i in range(count):
         bearing = i * 360.0 / max(count, 1)
         pos = airport.position.point_from_heading(bearing, _POINT_DEFENCE_RING_M)
+        for _ in range(int(360.0 / _POINT_DEFENCE_STEP_DEG)):
+            if runways.clear_of_runways(pos, strips, radius_m=_POINT_DEFENCE_MARGIN_M):
+                break
+            bearing += _POINT_DEFENCE_STEP_DEG
+            pos = airport.position.point_from_heading(bearing, _POINT_DEFENCE_RING_M)
         grp = m.vehicle_group(
             country,
             f"{callsign} {battery.point_defence_name}-{i + 1}",
@@ -759,6 +810,7 @@ def _spawn_point_defence(
             # skip the snap with it — and an airfield boundary is exactly where
             # a treeline is.
             snap_units_clear(overlay, terrain, grp)
+        runways.push_clear(grp, strips)
         groups.append(grp)
     return tuple(groups)
 

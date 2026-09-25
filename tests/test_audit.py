@@ -398,3 +398,27 @@ def test_a_building_in_no_trigger_is_not_an_objective():
         position=Point(_AO.x + 9_000.0, _AO.y, TERRAIN),
     )
     assert not only(audit_mission(m, _Overlay()), "target waypoint")
+
+
+# -- runways -----------------------------------------------------------------
+
+
+def test_a_vehicle_on_a_runway_is_an_error():
+    from dcs.vehicles import AirDefence
+
+    m = mission()
+    field = TERRAIN.airports["Vaziani"]
+    m.vehicle_group(m.country("USA"), "Guns", AirDefence.Vulcan, field.position)
+    found = only(audit_mission(m, _Overlay()), "runway")
+    assert [f.severity for f in found] == ["error"]
+    assert "Vaziani" in found[0].message
+
+
+def test_a_vehicle_off_the_field_is_silent():
+    from dcs.vehicles import AirDefence
+
+    m = mission()
+    field = TERRAIN.airports["Vaziani"]
+    away = field.position.point_from_heading(40.0, 3_000.0)
+    m.vehicle_group(m.country("USA"), "Guns", AirDefence.Vulcan, away)
+    assert only(audit_mission(m, _Overlay()), "runway") == []

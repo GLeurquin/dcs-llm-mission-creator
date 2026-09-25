@@ -401,7 +401,9 @@ Two consequences:
   point.
 
 Absolute world `Point` / pydcs `Airport` and `Country` in, built groups out.
-Every mission states its callsign and battery as module constants
+The battery and the field sections are kept off the runways (see *Runways*
+below); a mission does nothing for that. Every mission states its callsign
+and battery as module constants
 (`_SANCTUARY`, `_SANCTUARY_BATTERY`) and interpolates them into both briefing
 views.
 
@@ -409,6 +411,26 @@ The red half needs no scripting — DCS AI already RTBs on bingo
 (`tasking.apply_ai_difficulty` sets it). On a mission with an IADS net its
 battery belongs **in** the net (`idlib_gauntlet` adds Bassel as a `Site`), or
 the airfield belt is the one battery that stays up under a HARM.
+
+## Runways (project-owned)
+
+[`runways`](src/dcs_mission_creator/core/runways.py) is a keep-out for anything
+a mission places on or near an airfield. pydcs gives a runway's designators and
+nothing else, and **the airport reference point is the runway midpoint** — never
+a safe place to put a vehicle.
+
+```python
+from dcs_mission_creator.core import runways
+
+strips = runways.field_strips(m.terrain.airports.values(), m.terrain, near=pos)
+if runways.clear_of_runways(pos, strips, radius_m=footprint):  # pick a spot
+    ...
+runways.push_clear(group, strips)   # after any dispersal or terrain snap
+```
+
+Call `push_clear` **after** `snap_units_clear`, not before: the snap looks for
+open ground, and a runway is the most open ground there is. The audit's
+`runway` check is an `error`.
 
 ## Front-line helper (project-owned)
 
@@ -1505,9 +1527,10 @@ landing points sitting on the field, **client** routes against the terrain at
 every waypoint and along every leg, the cartridge's navigation headroom, enemy
 groups left visible on the F10 map, flights with empty pylons, stores on stations
 the game itself does not use, the player flight's air-to-air magazine against the
-number of enemy aircraft, and every building objective for a client steerpoint
-standing on it. That last one needs no declaration from the mission: a static
-named by a trigger condition *is* an objective.
+number of enemy aircraft, every building objective for a client steerpoint
+standing on it, and any ground unit or static on a runway strip (an `error`).
+The building check needs no declaration from the mission: a static named by a
+trigger condition *is* an objective.
 
 **Findings, not failures.** Several are heuristics about design and a mission is
 allowed to be deliberate about any of them — the check names the deviation, the
